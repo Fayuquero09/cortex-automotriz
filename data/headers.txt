@@ -1,0 +1,20 @@
+HTTP/2 200 
+date: Fri, 05 Sep 2025 14:39:42 GMT
+content-type: application/json; charset=utf-8
+content-range: 0-999/*
+cf-ray: 97a67a412c5da0a0-QRO
+cf-cache-status: DYNAMIC
+content-location: /versiones95?select=%2A
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+vary: Accept-Encoding
+content-profile: public
+sb-gateway-version: 1
+sb-project-ref: trfyakvrdkkrjjpmyufd
+sb-request-id: 01991a51-a4c1-7a7e-81a4-e59c9b96d582
+x-content-type-options: nosniff
+x-envoy-attempt-count: 1
+x-envoy-upstream-service-time: 163
+set-cookie: __cf_bm=N6Q_oV0FBS3NsrW.sCdFNdIUFqOEm.ujaIVuYyVI9aE-1757083182-1.0.1.1-851DW72Yyp3BFfcGkUwxlb8HEm3Pl6zHPtnpMNTqUMSXFtR5omr_.0BFczjDLiEx9pAFhz63bHaqMpyOZK3PoDrJHbG.wRkcDSJ2bllRu6E; path=/; expires=Fri, 05-Sep-25 15:09:42 GMT; domain=.supabase.co; HttpOnly; Secure; SameSite=None
+server: cloudflare
+alt-svc: h3=":443"; ma=86400
+

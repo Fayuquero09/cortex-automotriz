@@ -1,0 +1,208 @@
+file_path,file_name,make,model,version,ano,ano_source,text_len,pages_scanned,has_tables,ts_processed
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/BYD DOLPHIN Flyer-ES-MX-20241007.pdf,BYD DOLPHIN Flyer-ES-MX-20241007.pdf,BYD,DOLPHIN,BEV 45KWH GS,2024,text:ano,38406,6,0,2025-09-05T18:59:39.308200
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/BYD HAN Flyer-ES-MX-20241008.pdf,BYD HAN Flyer-ES-MX-20241008.pdf,BYD,HAN,BEV 85KWH,2024,text:ano,12318,6,0,2025-09-05T18:59:40.668105
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/BYD SEAL Flyer-ES-MX-20241007.pdf,BYD SEAL Flyer-ES-MX-20241007.pdf,BYD,SEAL,61KWH RWD,2024,text:ano,15364,6,0,2025-09-05T18:59:41.989501
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/BYD SHARK Flyer-ES-MX-20241007.pdf,BYD SHARK Flyer-ES-MX-20241007.pdf,BYD,SHARK,GL,2024,text:ano,16675,6,0,2025-09-05T18:59:43.596574
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/BYD TANG Flyer-ES-MX-20241007.pdf,BYD TANG Flyer-ES-MX-20241007.pdf,BYD,TANG,BEV 86KWH,2024,text:ano,50595,6,0,2025-09-05T18:59:44.884630
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/BYD_DOLPHIN_MINI_flyer-ES-MX-20250530.pdf,BYD_DOLPHIN_MINI_flyer-ES-MX-20250530.pdf,MINI,MINI,1.6 COOPER COUPE S HOT CHILI AT,2012,,4941,6,0,2025-09-05T19:02:32.989295
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/Brochure_CRV_2025.pdf,Brochure_CRV_2025.pdf,HONDA,CR-V,EX-L MANOS LIBRES,2025,file:ano,4654,6,0,2025-09-05T19:02:33.959079
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/Ficha_Tecnica_RAV4_25_web.pdf,Ficha_Tecnica_RAV4_25_web.pdf,TOYOTA,RAV4,2.5 XLE AWD AT,2025,text:MY,10006,6,1,2025-09-05T19:02:35.570160
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/Flyer-BYD-M9-ES-MX-20250619.pdf,Flyer-BYD-M9-ES-MX-20250619.pdf,FLYER,BYD,M9,,,0,6,0,2025-09-05T19:02:40.965835
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/GWM ORA03-ficha-tecnica-jul-2025.pdf,GWM ORA03-ficha-tecnica-jul-2025.pdf,GWM,ORA 03,63KWH LUXURY,2025,file:mes-ano,375,6,0,2025-09-05T19:02:45.171874
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/GWM-POER 500 Ficha Tecnica.pdf,GWM-POER 500 Ficha Tecnica.pdf,GWM,POER,2.0L TURBO LUXURY AT,2013,text:ano,5933,6,0,2025-09-05T19:02:46.288758
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/JAECOO-7-PHEV-Ficha-Técnica.pdf,JAECOO-7-PHEV-Ficha-Técnica.pdf,JAECOO,JAECOO 7,PHEV ELEMENTAL,2003,text:ano,9112,6,0,2025-09-05T19:02:47.641869
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/JAECOO_7-Ficha_técnica-Completa_compressed.pdf,JAECOO_7-Ficha_técnica-Completa_compressed.pdf,JAECOO,JAECOO 7,ELEMENTAL,2024,,0,6,0,2025-09-05T19:02:49.523838
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/SEALION-7.pdf,SEALION-7.pdf,BYD,SEAL,82KWH AWD,2025,text:ano,9260,6,0,2025-09-05T19:02:50.738726
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/SONG-PLUS-DMI-Flyer-ES-MX-20250611.pdf,SONG-PLUS-DMI-Flyer-ES-MX-20250611.pdf,BYD,SONG PLUS,DM-I 115KM,2024,,13687,6,0,2025-09-05T19:02:57.897196
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/ficha-tecnica-mazda-cx-5-2025-v01.pdf,ficha-tecnica-mazda-cx-5-2025-v01.pdf,MAZDA,CX-5,I GRAND TOURING 2WD,2025,file:ano,6910,6,0,2025-09-05T19:02:59.283623
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/ford-territory-2025-catalogo-descargable.pdf,ford-territory-2025-catalogo-descargable.pdf,FORD,TERRITORY,AMBIENTE FWD 1.8L,2025,file:ano,3577,6,0,2025-09-05T19:03:00.478607
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/nissan-2025-kicks-play-catalogo.pdf,nissan-2025-kicks-play-catalogo.pdf,NISSAN,KICKS,1.6 SENSE LTS T/M A/C PAQ SEG,2025,file:ano,7337,6,0,2025-09-05T19:03:01.547169
+/Users/Fernando.Molina/cortex-automotriz-comp/fichas_pdfs/volkswagen-nuevo-tiguan-2025-ficha-tecnica.pdf,volkswagen-nuevo-tiguan-2025-ficha-tecnica.pdf,VOLKSWAGEN,TIGUAN,2.0 TURBO PIEL TRACK & FUN AT,2025,text:MY,12501,6,1,2025-09-05T19:03:03.290457
+data/oem_specs/chevrolet/2025-Aveo-HB-Ficha-Tecnica-v3.pdf,2025-Aveo-HB-Ficha-Tecnica-v3.pdf,CHEVROLET,AVEO,"B LT, MANUAL CON A/A, ALARMA, RADIO, BLU",2025,file:ano,5023,6,1,2025-09-06T03:06:13.229025
+data/oem_specs/chevrolet/2025-Catalogo-Accesorios-Aveo-HB.pdf,2025-Catalogo-Accesorios-Aveo-HB.pdf,CHEVROLET,AVEO,"J LS, AUTOMTICO CON A/A, CON RADIO",2025,file:ano,1475,6,0,2025-09-06T03:06:14.545248
+data/oem_specs/chevrolet/2025-Catalogo-Accesorios-Trax-NG.pdf,2025-Catalogo-Accesorios-Trax-NG.pdf,CHEVROLET,TRAX,C LTZ,2025,file:ano,1342,6,0,2025-09-06T03:06:15.731771
+data/oem_specs/chevrolet/2025-Catalogo-Trax.pdf,2025-Catalogo-Trax.pdf,CHEVROLET,TRAX,B LT,2025,file:ano,4842,6,0,2025-09-06T03:06:16.933995
+data/oem_specs/chevrolet/2025-Ficha-Tecnica-Trax.pdf,2025-Ficha-Tecnica-Trax.pdf,CHEVROLET,TRAX,B LT,2025,file:ano,4862,6,1,2025-09-06T03:06:18.243124
+data/oem_specs/chevrolet/2025-Manual-de-Propietario-Aveo-HB.pdf,2025-Manual-de-Propietario-Aveo-HB.pdf,CHEVROLET,AVEO,"B LT, MANUAL CON A/A, ALARMA, RADIO, BLU",2025,file:ano,10053,6,0,2025-09-06T03:06:20.034403
+data/oem_specs/chevrolet/2025-Trax-NG-Manual-de-Propietario.pdf,2025-Trax-NG-Manual-de-Propietario.pdf,CHEVROLET,TRAX,B LT,2025,file:ano,6304,6,0,2025-09-06T03:06:22.092710
+data/oem_specs/chevrolet/2025-suburban-manual-de-propietario.pdf,2025-suburban-manual-de-propietario.pdf,CHEVROLET,SUBURBAN,LT C,2025,file:ano,8258,6,0,2025-09-06T03:06:24.164152
+data/oem_specs/chevrolet/2025-tahoe-manual-de-propietario.pdf,2025-tahoe-manual-de-propietario.pdf,CHEVROLET,TAHOE,LT C,2025,file:ano,8258,6,0,2025-09-06T03:06:26.242618
+data/oem_specs/chevrolet/2026-groove-manual-propietario.pdf,2026-groove-manual-propietario.pdf,CHEVROLET,GROOVE,LT MANUAL D,2026,file:ano,8912,6,0,2025-09-06T03:06:27.835454
+data/oem_specs/chevrolet/2026_Captiva_Manual_de_Propietario.pdf,2026_Captiva_Manual_de_Propietario.pdf,CHEVROLET,CAPTIVA,LT A,2026,file:ano,8996,6,0,2025-09-06T03:06:29.597221
+data/oem_specs/chevrolet/25-CHEV-Groove-Manual-de-propietario-v1.pdf,25-CHEV-Groove-Manual-de-propietario-v1.pdf,CHEVROLET,GROOVE,LT MANUAL D,2025,text:ano,9458,6,0,2025-09-06T03:06:32.280897
+data/oem_specs/chevrolet/25-chev-aveo-om-manual-de-propietario.pdf,25-chev-aveo-om-manual-de-propietario.pdf,CHEVROLET,AVEO,"B LT, MANUAL CON A/A, ALARMA, RADIO, BLU",2024,text:ano,10053,6,0,2025-09-06T03:06:34.138950
+data/oem_specs/chevrolet/Catalogo-Accesorios-Captiva-2026.pdf,Catalogo-Accesorios-Captiva-2026.pdf,CATALOGO,Accesorios,Captiva,2026,file:ano,1215,6,0,2025-09-06T03:06:35.401303
+data/oem_specs/chevrolet/Catalogo-Accesorios-Groove-2025-TLD.pdf,Catalogo-Accesorios-Groove-2025-TLD.pdf,KIA,RIO,EX 1.6 AT,2025,file:ano,1301,6,0,2025-09-06T03:06:36.708108
+data/oem_specs/chevrolet/Catalogo-Accesorios-Onix-2025-TLD.pdf,Catalogo-Accesorios-Onix-2025-TLD.pdf,CHEVROLET,ONIX,LT D,2025,file:ano,1014,6,0,2025-09-06T03:06:37.900683
+data/oem_specs/chevrolet/Catalogo-Accesorios-Onix-2026.pdf,Catalogo-Accesorios-Onix-2026.pdf,KIA,RIO,EX 1.6 AT,2026,file:ano,866,6,0,2025-09-06T03:06:39.233458
+data/oem_specs/chevrolet/Catalogo-Accesorios-Suburban-2025-TLD.pdf,Catalogo-Accesorios-Suburban-2025-TLD.pdf,CHEVROLET,SUBURBAN,HIGH COUNTRY G,2025,file:ano,1588,6,0,2025-09-06T03:06:40.523452
+data/oem_specs/chevrolet/Catalogo-Accesorios-Tahoe-2025-TLD.pdf,Catalogo-Accesorios-Tahoe-2025-TLD.pdf,CHEVROLET,TAHOE,HIGH COUNTRY G,2025,file:ano,1650,6,0,2025-09-06T03:06:41.884082
+data/oem_specs/chevrolet/Catalogo-Aveo-HB-2025-BE.pdf,Catalogo-Aveo-HB-2025-BE.pdf,CHEVROLET,AVEO,"B LT, MANUAL CON A/A, ALARMA, RADIO, BLU",2025,file:ano,5905,6,0,2025-09-06T03:06:43.222485
+data/oem_specs/chevrolet/Catalogo-Aveo-Sedan-2026.pdf,Catalogo-Aveo-Sedan-2026.pdf,CHEVROLET,AVEO,"B LT, MANUAL CON A/A, ALARMA, RADIO, BLU",2026,file:ano,5127,6,0,2025-09-06T03:06:44.792579
+data/oem_specs/chevrolet/Catalogo-Captiva-2026.pdf,Catalogo-Captiva-2026.pdf,CHEVROLET,CAPTIVA,PREMIER BLACK EDITION D,2026,file:ano,4843,6,0,2025-09-06T03:06:46.183120
+data/oem_specs/chevrolet/Catalogo-Groove-2025-TLD.pdf,Catalogo-Groove-2025-TLD.pdf,CHEVROLET,GROOVE,LT MANUAL D,2025,file:ano,4238,6,0,2025-09-06T03:06:47.599802
+data/oem_specs/chevrolet/Catalogo-Onix-2025-TLD.pdf,Catalogo-Onix-2025-TLD.pdf,CHEVROLET,ONIX,LT D,2025,file:ano,5402,6,0,2025-09-06T03:06:48.858909
+data/oem_specs/chevrolet/Catalogo-Onix-2026-TLD.pdf,Catalogo-Onix-2026-TLD.pdf,CHEVROLET,ONIX,LT D,2026,file:ano,4591,6,0,2025-09-06T03:06:50.117368
+data/oem_specs/chevrolet/Catalogo-Tahoe-2025.pdf,Catalogo-Tahoe-2025.pdf,CHEVROLET,TAHOE,HIGH COUNTRY G,2025,file:ano,6851,6,0,2025-09-06T03:06:51.900598
+data/oem_specs/chevrolet/Catalogo-Tracker-2025-TLD.pdf,Catalogo-Tracker-2025-TLD.pdf,CHEVROLET,TRACKER,LT SIN ON H,2025,file:ano,5071,6,0,2025-09-06T03:06:53.288911
+data/oem_specs/chevrolet/Catalogo_Accesorios_Traverse_2025_TLD.pdf,Catalogo_Accesorios_Traverse_2025_TLD.pdf,CHEVROLET,TRAVERSE,LT B,2025,file:ano,1042,6,0,2025-09-06T03:06:54.402613
+data/oem_specs/chevrolet/Catalogo_Traverse_2025.pdf,Catalogo_Traverse_2025.pdf,CHEVROLET,TRAVERSE,LT PIEL CON QUEMACOCOS B,2025,file:ano,4195,6,0,2025-09-06T03:06:55.626395
+data/oem_specs/chevrolet/Ficha-Tecnica-Aveo-Sedan-2026.pdf,Ficha-Tecnica-Aveo-Sedan-2026.pdf,CHEVROLET,AVEO,"B LT, MANUAL CON A/A, ALARMA, RADIO, BLU",2026,file:ano,4268,6,1,2025-09-06T03:06:56.803071
+data/oem_specs/chevrolet/Ficha-Tecnica-Captiva-2026.pdf,Ficha-Tecnica-Captiva-2026.pdf,CHEVROLET,CAPTIVA,PREMIER BLACK EDITION D,2026,file:ano,4528,6,1,2025-09-06T03:06:58.216983
+data/oem_specs/chevrolet/Ficha-Tecnica-Onix-2025-TLD.pdf,Ficha-Tecnica-Onix-2025-TLD.pdf,CHEVROLET,ONIX,LT D,2025,file:ano,4418,6,1,2025-09-06T03:06:59.437133
+data/oem_specs/chevrolet/Ficha-Tecnica-Onix-2026-TLD.pdf,Ficha-Tecnica-Onix-2026-TLD.pdf,CHEVROLET,ONIX,LT D,2026,file:ano,4365,6,1,2025-09-06T03:07:00.663452
+data/oem_specs/chevrolet/Ficha-Tecnica-Tahoe-2025-TLD.pdf,Ficha-Tecnica-Tahoe-2025-TLD.pdf,CHEVROLET,TAHOE,HIGH COUNTRY G,2025,file:ano,5350,6,1,2025-09-06T03:07:01.910865
+data/oem_specs/chevrolet/Ficha-Tecnica-Tracker-2025-TLD.pdf,Ficha-Tecnica-Tracker-2025-TLD.pdf,CHEVROLET,TRACKER,4X4 LT HARD TOP AT T,2025,file:ano,6183,6,1,2025-09-06T03:07:03.442580
+data/oem_specs/chevrolet/Ficha_Tecnica_Aveo_Sedan_2025_v3.pdf,Ficha_Tecnica_Aveo_Sedan_2025_v3.pdf,CHEVROLET,AVEO,"B LT, MANUAL CON A/A, ALARMA, RADIO, BLU",2025,file:ano,4268,6,1,2025-09-06T03:07:04.618795
+data/oem_specs/chevrolet/Ficha_Tecnica_Traverse_2025_TLD.pdf,Ficha_Tecnica_Traverse_2025_TLD.pdf,CHEVROLET,TRAVERSE,LT PIEL CON QUEMACOCOS B,2025,file:ano,6585,6,1,2025-09-06T03:07:05.924385
+data/oem_specs/chevrolet/Manual-de-Propietario-2026.pdf,Manual-de-Propietario-2026.pdf,MANUAL,de,Propietario,2026,file:ano,6456,6,0,2025-09-06T03:07:07.433543
+data/oem_specs/chevrolet/Manual-de-Propietario-Onix-MY2025.pdf,Manual-de-Propietario-Onix-MY2025.pdf,CHEVROLET,ONIX,LT D,2024,text:ano,4849,6,0,2025-09-06T03:07:09.012081
+data/oem_specs/chevrolet/Traverse-2025-manual-de-propietario.pdf,Traverse-2025-manual-de-propietario.pdf,CHEVROLET,TRAVERSE,LT B,2025,file:ano,7174,6,0,2025-09-06T03:07:10.629289
+data/oem_specs/chevrolet/blazer-2025-manual-de-propietario.pdf,blazer-2025-manual-de-propietario.pdf,CHEVROLET,BLAZER,RS C,2025,file:ano,7933,6,0,2025-09-06T03:07:12.540693
+data/oem_specs/chevrolet/captiva-manual-de-propietario.pdf,captiva-manual-de-propietario.pdf,CHEVROLET,CAPTIVA,LT A,2025,text:ano,9016,6,0,2025-09-06T03:07:14.558145
+data/oem_specs/chevrolet/catalogo-accesorios-aveo-sedan-2025.pdf,catalogo-accesorios-aveo-sedan-2025.pdf,CHEVROLET,AVEO,"J LS, AUTOMTICO CON A/A, CON RADIO",2025,file:ano,1074,6,0,2025-09-06T03:07:15.963734
+data/oem_specs/chevrolet/catalogo-accesorios-blazer-2025-tld.pdf,catalogo-accesorios-blazer-2025-tld.pdf,CHEVROLET,BLAZER,RS C,2025,file:ano,1531,6,0,2025-09-06T03:07:17.416840
+data/oem_specs/chevrolet/catalogo-accesorios-captiva-black-edition-2025.pdf,catalogo-accesorios-captiva-black-edition-2025.pdf,CHEVROLET,CAPTIVA,PREMIER BLACK EDITION D,2025,file:ano,1208,6,0,2025-09-06T03:07:18.579265
+data/oem_specs/chevrolet/catalogo-accesorios-tracker-2025-tld.pdf,catalogo-accesorios-tracker-2025-tld.pdf,CHEVROLET,TRACKER,RS R,2025,file:ano,1099,6,0,2025-09-06T03:07:19.666187
+data/oem_specs/chevrolet/catalogo-aveo-sedan-2025-v2.pdf,catalogo-aveo-sedan-2025-v2.pdf,CHEVROLET,AVEO,"B LT, MANUAL CON A/A, ALARMA, RADIO, BLU",2025,file:ano,5127,6,0,2025-09-06T03:07:20.832124
+data/oem_specs/chevrolet/catalogo-blazer-2025-tld.pdf,catalogo-blazer-2025-tld.pdf,CHEVROLET,BLAZER,RS BITONO F,2025,file:ano,5281,6,0,2025-09-06T03:07:22.018608
+data/oem_specs/chevrolet/catalogo-captiva-black-edition-2025.pdf,catalogo-captiva-black-edition-2025.pdf,CHEVROLET,CAPTIVA,PREMIER BLACK EDITION D,2025,file:ano,4921,6,0,2025-09-06T03:07:23.329193
+data/oem_specs/chevrolet/catalogo-groove-2026.pdf,catalogo-groove-2026.pdf,CHEVROLET,GROOVE,LT MANUAL D,2026,file:ano,4423,6,0,2025-09-06T03:07:24.544267
+data/oem_specs/chevrolet/catalogo-suburban-2025.pdf,catalogo-suburban-2025.pdf,CHEVROLET,SUBURBAN,LT C,2025,file:ano,7122,6,0,2025-09-06T03:07:26.205602
+data/oem_specs/chevrolet/ficha-tecnica-blazer-2025-tld.pdf,ficha-tecnica-blazer-2025-tld.pdf,CHEVROLET,BLAZER,RS BITONO F,2025,file:ano,3643,6,1,2025-09-06T03:07:27.316949
+data/oem_specs/chevrolet/ficha-tecnica-captiva-black-edition-2025-v2.pdf,ficha-tecnica-captiva-black-edition-2025-v2.pdf,CHEVROLET,CAPTIVA,PREMIER BLACK EDITION D,2025,file:ano,4586,6,1,2025-09-06T03:07:28.588547
+data/oem_specs/chevrolet/ficha-tecnica-groove-2025-tld.pdf,ficha-tecnica-groove-2025-tld.pdf,CHEVROLET,GROOVE,LT MANUAL D,2025,file:ano,5213,6,1,2025-09-06T03:07:29.879525
+data/oem_specs/chevrolet/ficha-tecnica-groove-2026.pdf,ficha-tecnica-groove-2026.pdf,CHEVROLET,GROOVE,LT MANUAL D,2026,file:ano,7402,6,1,2025-09-06T03:07:31.315388
+data/oem_specs/chevrolet/ficha-tecnica-suburban-2025.pdf,ficha-tecnica-suburban-2025.pdf,CHEVROLET,SUBURBAN,5.3L D 4X4 PIEL DVD QUEMACOCOS,2025,file:ano,5518,6,1,2025-09-06T03:07:32.557328
+data/oem_specs/chevrolet/manual-de-propietario.pdf,manual-de-propietario.pdf,MANUAL,de,propietario,2025,text:MY,10358,6,0,2025-09-06T03:07:34.484160
+data/oem_specs/gmc/2019-gmc-terrain-model-overview-catalogo.pdf,2019-gmc-terrain-model-overview-catalogo.pdf,GMC,TERRAIN,SLT B,2019,file:ano,4246,6,0,2025-09-06T03:07:39.401314
+data/oem_specs/gmc/2019-gmc-terrain-model-overview-manual-propietario.pdf,2019-gmc-terrain-model-overview-manual-propietario.pdf,GMC,TERRAIN,DENALI D,2019,file:ano,8173,6,0,2025-09-06T03:07:40.982371
+data/oem_specs/gmc/2025-yukon-manual-de-propietario.pdf,2025-yukon-manual-de-propietario.pdf,GMC,YUKON,DENALI A,2025,file:ano,7928,6,0,2025-09-06T03:07:42.673598
+data/oem_specs/gmc/2026-gmc-terrain.pdf,2026-gmc-terrain.pdf,GMC,TERRAIN,DENALI E,2026,file:ano,7781,6,0,2025-09-06T03:07:44.344130
+data/oem_specs/gmc/25_GMC_Hummer_EV_OM_es_MX_U_MX_18270642A_2024OCT10.pdf,25_GMC_Hummer_EV_OM_es_MX_U_MX_18270642A_2024OCT10.pdf,25,GMC,Hummer,2025,text:ano,6228,6,0,2025-09-06T03:07:46.376573
+data/oem_specs/gmc/Catalogo-Hummer-25-Desktop.pdf,Catalogo-Hummer-25-Desktop.pdf,CATALOGO,Hummer,25,,,1728,6,0,2025-09-06T03:07:47.783085
+data/oem_specs/gmc/Catalogo-Hummer-EV-2025-Accesorios.pdf,Catalogo-Hummer-EV-2025-Accesorios.pdf,CATALOGO,Hummer,EV,2025,file:ano,1947,6,0,2025-09-06T03:07:49.083149
+data/oem_specs/gmc/GMC-Hummer-EV-Cata_logo-accesorios-update.pdf,GMC-Hummer-EV-Cata_logo-accesorios-update.pdf,GMC,Hummer,EV,,,1947,6,0,2025-09-06T03:07:50.077206
+data/oem_specs/gmc/GMC_HUMMER_20EV_AWD_SUV_2024_5d_Electric_EN_1GT-22101.pdf,GMC_HUMMER_20EV_AWD_SUV_2024_5d_Electric_EN_1GT-22101.pdf,GMC,HUMMER,20EV,2024,file:ano,6491,6,0,2025-09-06T03:07:51.559469
+data/oem_specs/gmc/GMC_HUMMER_20EV_AWD_SUV_2024_5d_Electric_MX_1GT-22101.pdf,GMC_HUMMER_20EV_AWD_SUV_2024_5d_Electric_MX_1GT-22101.pdf,GMC,HUMMER,20EV,2024,file:ano,7985,6,0,2025-09-06T03:07:53.117021
+data/oem_specs/gmc/catalogo-accesorios-terrain-2026.pdf,catalogo-accesorios-terrain-2026.pdf,GMC,TERRAIN,DENALI E,2026,file:ano,747,6,0,2025-09-06T03:07:54.247117
+data/oem_specs/gmc/catalogo-sierra-2025-desktop.pdf,catalogo-sierra-2025-desktop.pdf,GMC,SIERRA,DENALI ULTIMATE G CREW CAB,2025,file:ano,2498,6,0,2025-09-06T03:07:55.307286
+data/oem_specs/gmc/catalogo-terrain-2026.pdf,catalogo-terrain-2026.pdf,GMC,TERRAIN,DENALI E,2026,text:MY,2318,6,0,2025-09-06T03:07:56.383372
+data/oem_specs/gmc/catalogo-yukon-accesorios-2025.pdf,catalogo-yukon-accesorios-2025.pdf,GMC,YUKON,DENALI A,2025,file:ano,2093,6,0,2025-09-06T03:07:57.371227
+data/oem_specs/gmc/gmc-canyon-2025-catalogo-escritorio.pdf,gmc-canyon-2025-catalogo-escritorio.pdf,GMC,CANYON,DENALI E,2025,file:ano,2412,6,0,2025-09-06T03:07:58.478343
+data/oem_specs/gmc/gmc-etiquetas-rendimiento-2023-copy.pdf,gmc-etiquetas-rendimiento-2023-copy.pdf,GMC,etiquetas,rendimiento,2023,file:ano,0,6,0,2025-09-06T03:08:01.501210
+data/oem_specs/gmc/gmc-yukon-catalogo-escritorio.pdf,gmc-yukon-catalogo-escritorio.pdf,GMC,YUKON,B PIEL,2007,,3098,6,0,2025-09-06T03:08:02.509276
+data/oem_specs/gmc/manual-de-propietario-acadia-2024.pdf,manual-de-propietario-acadia-2024.pdf,GMC,ACADIA,DENALI G,2024,file:ano,7145,6,0,2025-09-06T03:08:04.224105
+data/oem_specs/gmc/manual-de-propietario.pdf,manual-de-propietario.pdf,MANUAL,de,propietario,2025,text:ano,8337,6,0,2025-09-06T03:08:06.006901
+data/oem_specs/gmc/manual-propietario.pdf,manual-propietario.pdf,MANUAL,propietario,,2025,text:ano,8171,6,0,2025-09-06T03:08:07.896752
+data/oem_specs/gmc/nueva-gmc-acadia-2024-catalogo-escritorio.pdf,nueva-gmc-acadia-2024-catalogo-escritorio.pdf,GMC,ACADIA,DENALI G,2024,file:ano,2557,6,0,2025-09-06T03:08:08.866335
+data/oem_specs/gmc/nueva-gmc-acadia-catalogo-accesorios.pdf,nueva-gmc-acadia-catalogo-accesorios.pdf,GMC,ACADIA,B PIEL,2007,,1856,6,0,2025-09-06T03:08:09.840336
+data/oem_specs/gwm/Cat_logo_Accesorios_Abril_2025.pdf,Cat_logo_Accesorios_Abril_2025.pdf,CAT,logo,Accesorios,2025,file:ano,2280,6,0,2025-09-06T03:08:12.681716
+data/oem_specs/honda/Brochure_ACCORD_Petrol_2025.pdf,Brochure_ACCORD_Petrol_2025.pdf,HONDA,ACCORD,EX-R PIEL,2025,file:ano,3758,6,0,2025-09-06T03:08:14.274183
+data/oem_specs/honda/Brochure_BRV_2025.pdf,Brochure_BRV_2025.pdf,HONDA,BR-V,TOURING,2025,file:ano,3715,6,0,2025-09-06T03:08:15.294472
+data/oem_specs/honda/Brochure_CITY_2026.pdf,Brochure_CITY_2026.pdf,HONDA,CITY,1.5 EX AT,2026,file:ano,4001,6,0,2025-09-06T03:08:16.285589
+data/oem_specs/honda/Brochure_CIVIC_2026.pdf,Brochure_CIVIC_2026.pdf,HONDA,CIVIC,EX-R AT,2026,file:ano,3302,6,0,2025-09-06T03:08:17.244435
+data/oem_specs/honda/Brochure_CRV_2026.pdf,Brochure_CRV_2026.pdf,HONDA,CR-V,EX-L MANOS LIBRES,2026,file:ano,4575,6,0,2025-09-06T03:08:18.252376
+data/oem_specs/honda/Brochure_HRV_2026.pdf,Brochure_HRV_2026.pdf,HONDA,HR-V,1.8 1 MILLION EDITION,2026,file:ano,4563,6,0,2025-09-06T03:08:19.285039
+data/oem_specs/honda/Brochure_ODYSSEY_2025.pdf,Brochure_ODYSSEY_2025.pdf,HONDA,ODYSSEY,BLACK EDITION,2025,file:ano,4482,6,0,2025-09-06T03:08:20.290399
+data/oem_specs/honda/Brochure_PILOT_2025.pdf,Brochure_PILOT_2025.pdf,HONDA,PILOT,BLACK EDITION,2025,file:ano,4773,6,0,2025-09-06T03:08:21.579891
+data/oem_specs/hyundai/FichaTecnica_Creta2026.pdf,FichaTecnica_Creta2026.pdf,HYUNDAI,CRETA,GLS PREMIUM TA,2021,text:ano,7310,6,1,2025-09-06T03:08:23.659599
+data/oem_specs/hyundai/FichaTecnica_GrandFacelift2026.pdf,FichaTecnica_GrandFacelift2026.pdf,FICHATECNICA,GrandFacelift2026,,2013,text:ano,6018,6,0,2025-09-06T03:08:25.228090
+data/oem_specs/hyundai/Ficha_Tecnica_Gi10HB_2026.pdf,Ficha_Tecnica_Gi10HB_2026.pdf,HYUNDAI,HB20,1.6 GL MID AUTO,2026,file:ano,5967,6,0,2025-09-06T03:08:26.802054
+data/oem_specs/hyundai/Ficha_Tecnica_Gi10SD_2026.pdf,Ficha_Tecnica_Gi10SD_2026.pdf,FICHA,Tecnica,Gi10SD,2026,file:ano,5801,6,0,2025-09-06T03:08:28.558000
+data/oem_specs/hyundai/Fichatecnica_elantrahibrido2026.pdf,Fichatecnica_elantrahibrido2026.pdf,HYUNDAI,ELANTRA,GLS PREMIUM TA,2021,text:ano,6457,6,0,2025-09-06T03:08:30.179690
+data/oem_specs/mazda/ficha-tecnica-mazda-bt-50-2025-v01.pdf,ficha-tecnica-mazda-bt-50-2025-v01.pdf,MAZDA,BT-50,SIGNATURE,2025,file:ano,6705,6,0,2025-09-06T03:08:32.124108
+data/oem_specs/mazda/ficha-tecnica-mazda-cx-3-2025-v01.pdf,ficha-tecnica-mazda-cx-3-2025-v01.pdf,MAZDA,CX-3,I SPORT 2WD,2025,file:ano,6116,6,0,2025-09-06T03:08:33.367147
+data/oem_specs/mazda/ficha-tecnica-mazda-cx-30-2025-v01.pdf,ficha-tecnica-mazda-cx-30-2025-v01.pdf,MAZDA,CX-30,2.5 I GRAND TOURING,2025,file:ano,7728,6,0,2025-09-06T03:08:34.721196
+data/oem_specs/mazda/ficha-tecnica-mazda-cx-5-2025-v01.pdf,ficha-tecnica-mazda-cx-5-2025-v01.pdf,MAZDA,CX-5,I GRAND TOURING 2WD,2025,file:ano,6910,6,0,2025-09-06T03:08:36.090566
+data/oem_specs/mazda/ficha-tecnica-mazda-cx-50-2025-v01.pdf,ficha-tecnica-mazda-cx-50-2025-v01.pdf,MAZDA,CX-50,2.5 TURBO SIGNATURE AWD,2025,file:ano,7023,6,0,2025-09-06T03:08:37.579295
+data/oem_specs/mazda/ficha-tecnica-mazda-cx-70-2025-v01.pdf,ficha-tecnica-mazda-cx-70-2025-v01.pdf,MAZDA,CX-70,I GRAND TOURING MHEV,2025,file:ano,7225,6,0,2025-09-06T03:08:39.130274
+data/oem_specs/mazda/ficha-tecnica-mazda-cx-90-2025-v01.pdf,ficha-tecnica-mazda-cx-90-2025-v01.pdf,MAZDA,CX-90,TURBO SIGNATURE AWD,2025,file:ano,7446,6,0,2025-09-06T03:08:40.470774
+data/oem_specs/mazda/ficha-tecnica-mazda-mx-5-2025-v01.pdf,ficha-tecnica-mazda-mx-5-2025-v01.pdf,MAZDA,MX-5,I GRAND TOURING TA,2025,file:ano,6771,6,0,2025-09-06T03:08:41.677741
+data/oem_specs/mazda/ficha-tecnica-mazda-mx-5-i-sport-2024-v01.pdf,ficha-tecnica-mazda-mx-5-i-sport-2024-v01.pdf,MAZDA,MX-5,I GRAND TOURING TA,2024,file:ano,6566,6,0,2025-09-06T03:08:42.848700
+data/oem_specs/mazda/ficha-tecnica-mazda-mx-5-rf-2025-v01.pdf,ficha-tecnica-mazda-mx-5-rf-2025-v01.pdf,MAZDA,MX-5,I GRAND TOURING TA,2025,file:ano,6775,6,0,2025-09-06T03:08:44.141051
+data/oem_specs/mazda/ficha-tecnica-mazda2-hatchback-2026-v01.pdf,ficha-tecnica-mazda2-hatchback-2026-v01.pdf,MAZDA,MAZDA2,I GRAND TOURING 5 PUERTAS T/A,2026,file:ano,6949,6,0,2025-09-06T03:08:45.439928
+data/oem_specs/mazda/ficha-tecnica-mazda2-sedan-2026-v01.pdf,ficha-tecnica-mazda2-sedan-2026-v01.pdf,MAZDA,MAZDA2,I GRAND TOURING 5 PUERTAS T/A,2026,file:ano,7143,6,0,2025-09-06T03:08:47.062335
+data/oem_specs/mazda/ficha-tecnica-mazda3-hatchback-2025-v01.pdf,ficha-tecnica-mazda3-hatchback-2025-v01.pdf,MAZDA,MAZDA3,4 PUERTAS S TA BOLSAS DE AIRE,2025,file:ano,7755,6,0,2025-09-06T03:08:48.583478
+data/oem_specs/mazda/ficha-tecnica-mazda3-sedan-2025-v01.pdf,ficha-tecnica-mazda3-sedan-2025-v01.pdf,MAZDA,MAZDA3,4 PUERTAS S TM BOLSAS DE AIRE,2025,file:ano,8096,6,0,2025-09-06T03:08:50.007354
+data/oem_specs/nissan/nissan-2023-fleet_solutions-catalogo_comerciales.pdf,nissan-2023-fleet_solutions-catalogo_comerciales.pdf,NISSAN,2023,fleet,2023,file:ano,4165,6,0,2025-09-06T03:08:52.956668
+data/oem_specs/nissan/nissan-2023-fleet_solutions-catalogo_productos.pdf,nissan-2023-fleet_solutions-catalogo_productos.pdf,NISSAN,2023,fleet,2023,file:ano,4167,6,0,2025-09-06T03:08:54.344285
+data/oem_specs/nissan/nissan-2025-kicks-catalogo.pdf,nissan-2025-kicks-catalogo.pdf,NISSAN,KICKS,1.6 SENSE LTS T/M A/C PAQ SEG,2025,file:ano,4916,6,0,2025-09-06T03:08:55.540650
+data/oem_specs/nissan/nissan-2025-kicks-play-catalogo.pdf,nissan-2025-kicks-play-catalogo.pdf,NISSAN,KICKS,1.6 SENSE LTS T/M A/C PAQ SEG,2025,file:ano,7337,6,0,2025-09-06T03:08:57.073292
+data/oem_specs/nissan/nissan-2025-kicks_e_power-catalogo.pdf,nissan-2025-kicks_e_power-catalogo.pdf,NISSAN,KICKS,1.6 SENSE LTS T/M A/C PAQ SEG,2025,file:ano,5533,6,0,2025-09-06T03:08:58.124310
+data/oem_specs/nissan/nissan-2025-magnite-catalogo.pdf,nissan-2025-magnite-catalogo.pdf,NISSAN,MAGNITE,ADVANCE 1.0 LTS MT 25,2025,file:ano,5083,6,0,2025-09-06T03:08:59.161456
+data/oem_specs/nissan/nissan-2025-sentra-catalogo.pdf,nissan-2025-sentra-catalogo.pdf,NISSAN,SENTRA,SE-R SPEC V,2025,file:ano,6912,6,0,2025-09-06T03:09:00.282736
+data/oem_specs/nissan/nissan-2025-terminos_promociones_oferta_comercial_posventa.pdf,nissan-2025-terminos_promociones_oferta_comercial_posventa.pdf,NISSAN,2025,terminos,2025,file:ano,9807,6,0,2025-09-06T03:09:02.132033
+data/oem_specs/nissan/nissan-2025-urvan_panel-catalogo.pdf,nissan-2025-urvan_panel-catalogo.pdf,NISSAN,URVAN,4 PTAS. GX LARGA T/M 9 PASAJEROS A/A,2025,file:ano,3132,6,0,2025-09-06T03:09:03.809373
+data/oem_specs/nissan/nissan-2025-urvan_pasajeros-catalogo.pdf,nissan-2025-urvan_pasajeros-catalogo.pdf,NISSAN,URVAN,4 PTAS. GX LARGA T/M 9 PASAJEROS A/A,2025,file:ano,3327,6,0,2025-09-06T03:09:05.500477
+data/oem_specs/nissan/nissan-2025-v_drive-catalogo.pdf,nissan-2025-v_drive-catalogo.pdf,NISSAN,V-DRIVE,V-DRIVE TM A/C AUDIO 24,2025,file:ano,5797,6,1,2025-09-06T03:09:06.930663
+data/oem_specs/nissan/nissan-2025-versa-catalogo.pdf,nissan-2025-versa-catalogo.pdf,NISSAN,VERSA,VERSA GO ASIENTO GIRATORIO ADVANCE TA '1,2025,file:ano,3592,6,0,2025-09-06T03:09:08.580298
+data/oem_specs/nissan/nissan-2025-x_trail_e_power-catalogo.pdf,nissan-2025-x_trail_e_power-catalogo.pdf,NISSAN,X-TRAIL,EXCLUSIVE E-POWER 2 ROW 25,2025,file:ano,6495,6,0,2025-09-06T03:09:10.066818
+data/oem_specs/nissan/nissan-2025-z-catalogo.pdf,nissan-2025-z-catalogo.pdf,NISSAN,Z,TOURING TM 25,2025,file:ano,6246,6,1,2025-09-06T03:09:11.473900
+data/oem_specs/vw/Rescue_SheetVolswagen__Virtus_2022_5d_EN.pdf,Rescue_SheetVolswagen__Virtus_2022_5d_EN.pdf,VOLKSWAGEN,VIRTUS,COMFORLINE TIPTRONIC,2022,file:ano,69,6,0,2025-09-06T03:09:13.123150
+data/oem_specs/vw/Rescue_SheetVolswagen__Virtus_2022_5d_ES.pdf,Rescue_SheetVolswagen__Virtus_2022_5d_ES.pdf,VOLKSWAGEN,VIRTUS,COMFORLINE TIPTRONIC,2022,file:ano,69,6,0,2025-09-06T03:09:14.030316
+data/oem_specs/vw/Rescue_SheetVolswagen__Virtus_2022_5d_PT.pdf,Rescue_SheetVolswagen__Virtus_2022_5d_PT.pdf,VOLKSWAGEN,VIRTUS,COMFORLINE TIPTRONIC,2022,file:ano,44,6,0,2025-09-06T03:09:15.075659
+data/oem_specs/vw/Volkswagen_Jetta_PA_2022_5d_EN_edit.pdf,Volkswagen_Jetta_PA_2022_5d_EN_edit.pdf,VOLKSWAGEN,JETTA,2.0 TM,2022,file:ano,8,6,0,2025-09-06T03:09:16.049950
+data/oem_specs/vw/Volkswagen_Jetta_PA_2022_5d_ES_edit.pdf,Volkswagen_Jetta_PA_2022_5d_ES_edit.pdf,VOLKSWAGEN,JETTA,2.0 TM,2022,file:ano,8,6,0,2025-09-06T03:09:17.180155
+data/oem_specs/vw/Volkswagen_Jetta_PA_2022_5d_PT_edit.pdf,Volkswagen_Jetta_PA_2022_5d_PT_edit.pdf,VOLKSWAGEN,JETTA,2.0 TM,2022,file:ano,8,6,0,2025-09-06T03:09:18.101777
+data/oem_specs/vw/cata_CC_81logo-volkswagen-nuevo-gti-2025.pdf,cata_CC_81logo-volkswagen-nuevo-gti-2025.pdf,VOLKSWAGEN,CC,2.0 TURBO FSI DSG,2025,file:ano,2088,6,0,2025-09-06T03:09:19.172048
+data/oem_specs/vw/catalogo-volkswagen-gli-2025.pdf,catalogo-volkswagen-gli-2025.pdf,VOLKSWAGEN,GLI,GLI MT,2025,file:ano,2046,6,0,2025-09-06T03:09:20.245241
+data/oem_specs/vw/catalogo-volkswagen-jetta-2025.pdf,catalogo-volkswagen-jetta-2025.pdf,VOLKSWAGEN,JETTA,"EUROPA AC SEGURIDAD RIN ALUMINIO 15"" TM",2025,file:ano,2430,6,0,2025-09-06T03:09:21.345094
+data/oem_specs/vw/catalogo-volkswagen-nuevo-tiguan-2025.pdf,catalogo-volkswagen-nuevo-tiguan-2025.pdf,VOLKSWAGEN,TIGUAN,R-LINE 1.4,2025,file:ano,2710,6,0,2025-09-06T03:09:22.479389
+data/oem_specs/vw/catalogo-volkswagen-polo-2026.pdf,catalogo-volkswagen-polo-2026.pdf,VOLKSWAGEN,POLO,2.0L COMFORTLINE 4 PTAS,2026,file:ano,2368,6,0,2025-09-06T03:09:23.601950
+data/oem_specs/vw/catalogo-volkswagen-teramont-2025.pdf,catalogo-volkswagen-teramont-2025.pdf,VOLKSWAGEN,TERAMONT,PEAK EDITION LONG DRIVE,2025,file:ano,2583,6,0,2025-09-06T03:09:25.292377
+data/oem_specs/vw/catalogo-volkswagen-virtus-2025.pdf,catalogo-volkswagen-virtus-2025.pdf,VOLKSWAGEN,VIRTUS,TRENDLINE MANUAL,2025,file:ano,2418,6,0,2025-09-06T03:09:26.671977
+data/oem_specs/vw/volkswagen-gli-2026-ficha-tecnica.pdf,volkswagen-gli-2026-ficha-tecnica.pdf,VOLKSWAGEN,GLI,GLI DSG,2026,file:ano,7520,6,1,2025-09-06T03:09:28.335250
+data/oem_specs/vw/volkswagen-jetta-2026-ficha-tecnica.pdf,volkswagen-jetta-2026-ficha-tecnica.pdf,VOLKSWAGEN,JETTA,"EUROPA AC SEGURIDAD RIN ALUMINIO 15"" TM",2026,file:ano,9120,6,1,2025-09-06T03:09:30.849520
+data/oem_specs/vw/volkswagen-nuevo-gti-2025-ficha-tecnica.pdf,volkswagen-nuevo-gti-2025-ficha-tecnica.pdf,VOLKSWAGEN,GTI,GTI MT PIEL,2025,file:ano,7213,6,1,2025-09-06T03:09:32.717391
+data/oem_specs/vw/volkswagen-nuevo-tiguan-2025-ficha-tecnica.pdf,volkswagen-nuevo-tiguan-2025-ficha-tecnica.pdf,VOLKSWAGEN,TIGUAN,2.0 TURBO PIEL TRACK & FUN AT,2025,text:MY,12501,6,1,2025-09-06T03:09:34.906050
+data/oem_specs/vw/volkswagen-polo-2026-ficha-tecnica.pdf,volkswagen-polo-2026-ficha-tecnica.pdf,VOLKSWAGEN,POLO,"TRACK STD. RADIO 6.5""",2026,file:ano,7099,6,1,2025-09-06T03:09:36.255366
+data/oem_specs/vw/volkswagen-teramont-2025-ficha-tecnica.pdf,volkswagen-teramont-2025-ficha-tecnica.pdf,VOLKSWAGEN,TERAMONT,PEAK EDITION LONG DRIVE,2025,file:ano,12166,6,1,2025-09-06T03:09:38.061733
+data/oem_specs/vw/volkswagen-virtus-2025-ficha-tecnica.pdf,volkswagen-virtus-2025-ficha-tecnica.pdf,VOLKSWAGEN,VIRTUS,TRENDLINE MANUAL,2025,file:ano,8814,6,1,2025-09-06T03:09:39.857678
+data/oem_specs/changan/Solicitud_para_derechos_ARCO_Changan_M_xico_VF.pdf,Solicitud_para_derechos_ARCO_Changan_M_xico_VF.pdf,SOLICITUD,para,derechos,,,4838,6,0,2025-09-06T13:31:24.230190
+data/oem_specs/jeep/FT_JEEP_COMPASS_2025_13ENE2025_V3.pdf,FT_JEEP_COMPASS_2025_13ENE2025_V3.pdf,JEEP,COMPASS,ALTITUDE LIGHT S QUEMACOCOS,2025,file:ano,8581,6,0,2025-09-06T13:31:26.065500
+data/oem_specs/jeep/FT_JEEP_RENEGADE_2025_08ENE2025_DIGITAL_V1.pdf,FT_JEEP_RENEGADE_2025_08ENE2025_DIGITAL_V1.pdf,JEEP,RENEGADE,SPORT,2025,file:ano,8325,6,0,2025-09-06T13:31:27.195046
+data/oem_specs/kia/Kia-K3-Hatchback-2024-5d-GD-SP-I-NCAP--Candado-de-impresi_n.pdf,Kia-K3-Hatchback-2024-5d-GD-SP-I-NCAP--Candado-de-impresi_n.pdf,KIA,K3,L AT,2024,file:ano,3901,6,0,2025-09-06T13:31:29.034401
+data/oem_specs/kia/Kia-K3-Sedan-2023-4d-GD-ES--Candado-de-impresi_n.pdf,Kia-K3-Sedan-2023-4d-GD-ES--Candado-de-impresi_n.pdf,KIA,K3,EX PACK AT,2023,file:ano,3329,6,0,2025-09-06T13:31:30.883379
+data/oem_specs/kia/Kia_K4_Sed_n_2025_4d_GD_ES_Candado_de_impresi_n_V2.pdf,Kia_K4_Sed_n_2025_4d_GD_ES_Candado_de_impresi_n_V2.pdf,KIA,K4,GT LINE,2025,file:ano,3080,6,0,2025-09-06T13:31:32.197280
+data/oem_specs/kia/Kia_K4__Hatchback_2025_5d_GD_ES_VF.pdf,Kia_K4__Hatchback_2025_5d_GD_ES_VF.pdf,KIA,K4,GT LINE,2025,file:ano,3820,6,0,2025-09-06T13:31:33.538453
+data/oem_specs/toyota/Ficha_HILUX_20DIESEL_20y_20GASOLINA_202025.pdf.coredownload.pdf,Ficha_HILUX_20DIESEL_20y_20GASOLINA_202025.pdf.coredownload.pdf,TOYOTA,HILUX,D-CAB SR 4X2 (DOBLE CABINA SR),2025,text:MY,18705,6,1,2025-09-06T13:54:44.504501
+data/oem_specs/toyota/Ficha_Tecnica_AVANZA_25_web.pdf.coredownload.pdf,Ficha_Tecnica_AVANZA_25_web.pdf.coredownload.pdf,TOYOTA,AVANZA,1.5 XLE AT,2025,text:MY,7180,6,1,2025-09-06T13:54:45.942533
+data/oem_specs/toyota/Ficha_Tecnica_HIACE_25_web.pdf.coredownload.pdf,Ficha_Tecnica_HIACE_25_web.pdf.coredownload.pdf,TOYOTA,HIACE,15 PASAJEROS AC,2025,text:MY,8545,6,1,2025-09-06T13:54:47.662278
+data/oem_specs/toyota/Ficha_Tecnica_PRIUS_26_web.pdf.coredownload.pdf,Ficha_Tecnica_PRIUS_26_web.pdf.coredownload.pdf,TOYOTA,PRIUS,PREMIUM AT,2026,text:MY,8883,6,1,2025-09-06T13:54:49.228760
+data/oem_specs/toyota/Ficha_Tecnica_RAV4_25_web.pdf.coredownload.pdf,Ficha_Tecnica_RAV4_25_web.pdf.coredownload.pdf,TOYOTA,RAV4,2.5 XLE AWD AT,2025,text:MY,10006,6,1,2025-09-06T13:54:51.047342
+data/oem_specs/toyota/Ficha_Tecnica_SEQUOIA_25_web.pdf.coredownload.pdf,Ficha_Tecnica_SEQUOIA_25_web.pdf.coredownload.pdf,TOYOTA,SEQUOIA,5.7L V8 PLATINUM,2025,text:MY,8141,6,1,2025-09-06T13:54:52.714600
+data/oem_specs/toyota/Ficha_Tecnica_SIENNA_25_web.pdf.coredownload.pdf,Ficha_Tecnica_SIENNA_25_web.pdf.coredownload.pdf,TOYOTA,SIENNA,XLE PIEL,2025,text:MY,10051,6,1,2025-09-06T13:54:54.347787
+data/oem_specs/toyota/Ficha_Tecnica_Tacoma_25_web.pdf.coredownload.pdf,Ficha_Tecnica_Tacoma_25_web.pdf.coredownload.pdf,TOYOTA,TACOMA,3.5 TRD SPORT 4X4,2025,text:MY,9696,6,1,2025-09-06T13:54:56.157558
+data/oem_specs/toyota/Ficha_Tecnica_YARIS_HB_25_web.pdf.coredownload.pdf,Ficha_Tecnica_YARIS_HB_25_web.pdf.coredownload.pdf,TOYOTA,YARIS,1.5 R MID AT,2025,text:MY,8132,6,1,2025-09-06T13:54:57.651324
+data/oem_specs/toyota/Ficha_Tecnica_Yaris_Sedan_25_web.pdf.coredownload.pdf,Ficha_Tecnica_Yaris_Sedan_25_web.pdf.coredownload.pdf,TOYOTA,YARIS,1.5 R MID AT,2025,text:MY,8988,6,1,2025-09-06T13:54:59.224434
+data/oem_specs/toyota/Ficha_tecnica_4RUNNER_LIMITED_HEV_25_web_1.pdf.coredownload.pdf,Ficha_tecnica_4RUNNER_LIMITED_HEV_25_web_1.pdf.coredownload.pdf,TOYOTA,4RUNNER,TRD PRO HEV,2025,text:MY,8969,6,1,2025-09-06T13:55:00.558792
+data/oem_specs/toyota/Ficha_tecnica_CAMRY_HEV_25_web.pdf.coredownload.pdf,Ficha_tecnica_CAMRY_HEV_25_web.pdf.coredownload.pdf,TOYOTA,CAMRY,XSE BI-TONE HEV,2025,text:MY,10341,6,1,2025-09-06T13:55:02.347302
+data/oem_specs/toyota/Ficha_tecnica_COROLLA_25_web.pdf.coredownload.pdf,Ficha_tecnica_COROLLA_25_web.pdf.coredownload.pdf,TOYOTA,COROLLA,LE W/O SR,2025,text:MY,8945,6,1,2025-09-06T13:55:03.988059
+data/oem_specs/toyota/Ficha_tecnica_COROLLA_CROSS_25_web.pdf.coredownload.pdf,Ficha_tecnica_COROLLA_CROSS_25_web.pdf.coredownload.pdf,TOYOTA,COROLLA,CE MT ELECT,2025,text:MY,8413,6,1,2025-09-06T13:55:05.499054
+data/oem_specs/toyota/Ficha_tecnica_COROLLA_CROSS_HEV_25_web.pdf.coredownload.pdf,Ficha_tecnica_COROLLA_CROSS_HEV_25_web.pdf.coredownload.pdf,TOYOTA,COROLLA,CE MT ELECT,2025,text:MY,8082,6,1,2025-09-06T13:55:06.966711
+data/oem_specs/toyota/Ficha_tecnica_COROLLA_HEV_25_web.pdf.coredownload.pdf,Ficha_tecnica_COROLLA_HEV_25_web.pdf.coredownload.pdf,TOYOTA,COROLLA,LE W/O SR,2025,text:MY,8537,6,0,2025-09-06T13:55:08.539120
+data/oem_specs/toyota/Ficha_tecnica_HIGHLANDER_HEV_25_web.pdf.coredownload.pdf,Ficha_tecnica_HIGHLANDER_HEV_25_web.pdf.coredownload.pdf,TOYOTA,HIGHLANDER,3.5 LIMITED BR AT,2025,text:MY,9952,6,1,2025-09-06T13:55:10.130996
+data/oem_specs/toyota/Ficha_tecnica_RAIZE_25_web.pdf.coredownload.pdf,Ficha_tecnica_RAIZE_25_web.pdf.coredownload.pdf,TOYOTA,RAIZE,XLE CVT BI-TONO,2025,text:MY,7453,6,1,2025-09-06T13:55:11.617382
+data/oem_specs/toyota/Ficha_tecnica_RAV4_HEV_25_web.pdf.coredownload.pdf,Ficha_tecnica_RAV4_HEV_25_web.pdf.coredownload.pdf,TOYOTA,RAV4,2.5 XLE AWD AT,2025,text:MY,8436,6,1,2025-09-06T13:55:13.448768
+data/oem_specs/kia/Kia-K3-Hatchback-2024-5d-GD-SP-I-NCAP--Candado-de-impresi_n.pdf,Kia-K3-Hatchback-2024-5d-GD-SP-I-NCAP--Candado-de-impresi_n.pdf,KIA,K3,L AT,2024,file:ano,3901,6,0,2025-09-06T14:12:47.423428
+data/oem_specs/kia/Kia-K3-Sedan-2023-4d-GD-ES--Candado-de-impresi_n.pdf,Kia-K3-Sedan-2023-4d-GD-ES--Candado-de-impresi_n.pdf,KIA,K3,EX PACK AT,2023,file:ano,3329,6,0,2025-09-06T14:12:48.949271
+data/oem_specs/kia/Kia_K4_Sed_n_2025_4d_GD_ES_Candado_de_impresi_n_V2.pdf,Kia_K4_Sed_n_2025_4d_GD_ES_Candado_de_impresi_n_V2.pdf,KIA,K4,GT LINE,2025,file:ano,3080,6,0,2025-09-06T14:12:50.476159
+data/oem_specs/kia/Kia_K4__Hatchback_2025_5d_GD_ES_VF.pdf,Kia_K4__Hatchback_2025_5d_GD_ES_VF.pdf,KIA,K4,GT LINE,2025,file:ano,3820,6,0,2025-09-06T14:12:51.986397
+data/oem_specs/jeep/FT_JEEP-COMANDER-2025.pdf,FT_JEEP-COMANDER-2025.pdf,FT,JEEP,COMANDER,2025,file:ano,6350,6,0,2025-09-06T14:19:52.063612
+data/oem_specs/jeep/FT_JEEP_COMPASS_2025_13ENE2025_V3.pdf,FT_JEEP_COMPASS_2025_13ENE2025_V3.pdf,JEEP,COMPASS,ALTITUDE LIGHT S QUEMACOCOS,2025,file:ano,8581,6,0,2025-09-06T14:19:53.625026
+data/oem_specs/jeep/FT_JEEP_GCH_ALTITUDE_2025_22NOV2024_V1.pdf,FT_JEEP_GCH_ALTITUDE_2025_22NOV2024_V1.pdf,FT,JEEP,GCH,2025,file:ano,5711,6,0,2025-09-06T14:19:54.873460
+data/oem_specs/jeep/FT_JEEP_RENEGADE_2025_08ENE2025_DIGITAL_V1.pdf,FT_JEEP_RENEGADE_2025_08ENE2025_DIGITAL_V1.pdf,JEEP,RENEGADE,SPORT,2025,file:ano,8325,6,0,2025-09-06T14:19:56.134104
+data/oem_specs/ford/ford-territory-2026-catalogo-descargable.pdf,ford-territory-2026-catalogo-descargable.pdf,FORD,TERRITORY,AMBIENTE FWD 1.8L,2026,file:ano,1310,6,0,2025-09-07T00:49:07.219917
+data/oem_specs/hyundai/Ficha_Tecnica_Palisade.pdf,Ficha_Tecnica_Palisade.pdf,HYUNDAI,PALISADE,LIMITED TECH,2013,text:ano,7593,6,1,2025-09-07T00:49:14.801672
+data/oem_specs/ram/FT_RAM1500_Bighorn2025_28JUN2024_V4.pdf,FT_RAM1500_Bighorn2025_28JUN2024_V4.pdf,RAM,RAM 1500,1500 BIGHORN 3.6 4X4 V6 TA,2024,text:ano,7423,6,0,2025-09-07T00:49:37.205659
+data/oem_specs/ford/ford-bronco-2025-catalogo-descargable.pdf,ford-bronco-2025-catalogo-descargable.pdf,FORD,BRONCO,BADLANDS 4 PUERTAS 2.7L GTDI,2025,file:ano,3961,6,0,2025-09-07T14:06:21.027765
+data/oem_specs/ford/ford-bronco-sport-2025-catalogo-descargable.pdf,ford-bronco-sport-2025-catalogo-descargable.pdf,FORD,BRONCO SPORT,BIG BEND 1.5L ECOBOOST,2025,file:ano,4395,6,0,2025-09-07T14:06:24.040854
+data/oem_specs/ford/ford-expedition-2025-catalogo-descargable.pdf,ford-expedition-2025-catalogo-descargable.pdf,FORD,EXPEDITION,PLATINUM MAX 4X4 3.5L ECOBOOST CON SISTE,2025,file:ano,3303,6,0,2025-09-07T14:06:26.484663
+data/oem_specs/ford/ford-lobo-2025-catalogo-descargable.pdf,ford-lobo-2025-catalogo-descargable.pdf,FORD,LOBO,RAPTOR SUPER CAB 4X4 3.5L V6 CON SPRAY I,2025,file:ano,3583,6,0,2025-09-07T14:06:28.157811
+data/oem_specs/ford/ford-maverick-2025-catalogo-descargable.pdf,ford-maverick-2025-catalogo-descargable.pdf,FORD,MAVERICK,LARIAT SUPERCREW AWD 2.0L ECOBOOST,2025,file:ano,3683,6,0,2025-09-07T14:06:31.024648
+data/oem_specs/ford/ford-mustang-2025-catalogo-descargable.pdf,ford-mustang-2025-catalogo-descargable.pdf,FORD,MUSTANG,DARK HORSE COUPE V8 5.0L AUTOMATICO PIEL,2025,file:ano,3245,6,0,2025-09-07T14:06:32.821345
+data/oem_specs/ford/ford-mustang-mach-e-2025-catalogo-descargable.pdf,ford-mustang-mach-e-2025-catalogo-descargable.pdf,FORD,MUSTANG,GT PREMIUM CONVERTIBLE V8 5.0L MANUAL PI,2025,file:ano,4575,6,0,2025-09-07T14:06:34.317268
+data/oem_specs/ford/ford-ranger-2025-catalogo-descargable.pdf,ford-ranger-2025-catalogo-descargable.pdf,FORD,RANGER,XLT 2.3L 4V TIVCT DI TC 270 HP GAS 10 AT,2025,file:ano,3309,6,0,2025-09-07T14:06:36.900065
+data/oem_specs/ford/ford-territory-2025-catalogo-descargable.pdf,ford-territory-2025-catalogo-descargable.pdf,FORD,TERRITORY,AMBIENTE FWD 1.8L,2025,file:ano,3577,6,0,2025-09-07T14:06:38.267393
+data/oem_specs/ford/ford-territory-2026-catalogo-descargable.pdf,ford-territory-2026-catalogo-descargable.pdf,FORD,TERRITORY,AMBIENTE FWD 1.8L,2026,file:ano,1310,6,0,2025-09-07T14:06:39.942286

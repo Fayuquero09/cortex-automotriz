@@ -1,0 +1,58 @@
+{
+  "default": {
+    "motor": 0.0,
+    "safety": 0.0,
+    "tech": 0.3,
+    "ev": 0.7,
+    "spearman": 0.015198402687576372
+  },
+  "COMPACTOS": {
+    "motor": 0.35,
+    "safety": 0.4,
+    "tech": 0.25,
+    "ev": 0.0,
+    "spearman": -2.0
+  },
+  "DE LUJO": {
+    "motor": 0.0,
+    "safety": 0.0,
+    "tech": 0.3,
+    "ev": 0.7,
+    "spearman": 0.36136166074817233
+  },
+  "DEPORTIVOS": {
+    "motor": 0.35,
+    "safety": 0.4,
+    "tech": 0.25,
+    "ev": 0.0,
+    "spearman": -2.0
+  },
+  "MINIVANS": {
+    "motor": 0.0,
+    "safety": 0.0,
+    "tech": 0.3,
+    "ev": 0.7,
+    "spearman": 0.5773502691896258
+  },
+  "PICK UPS": {
+    "motor": 0.0,
+    "safety": 0.0,
+    "tech": 0.3,
+    "ev": 0.7,
+    "spearman": -0.360163004829714
+  },
+  "SUBCOMPACTOS": {
+    "motor": 0.35,
+    "safety": 0.4,
+    "tech": 0.25,
+    "ev": 0.0,
+    "spearman": -2.0
+  },
+  "SUV'S": {
+    "motor": 0.0,
+    "safety": 0.0,
+    "tech": 0.3,
+    "ev": 0.7,
+    "spearman": -0.012654277236265814
+  }
+}

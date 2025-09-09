@@ -1,0 +1,13 @@
+feature,type,jato_nonnull,pdf_nonnull,overlap_rows,match_mode
+caballos_fuerza ~ mot_potencia_hp,numeric,7774,52,77,by_model_year
+longitud_mm ~ dim_largo_mm,numeric,7840,4,77,by_model_year
+abs ~ seg_act_abs,bool,7910,119,77,by_model_year
+control_estabilidad ~ seg_act_esp,bool,7907,119,77,by_model_year
+alerta_colision ~ adas_aeb,bool,7907,119,77,by_model_year
+sensor_punto_ciego ~ adas_bsm,bool,7907,119,77,by_model_year
+android_auto ~ info_android_auto,bool,7907,119,77,by_model_year
+apple_carplay ~ info_apple_carplay,bool,7907,119,77,by_model_year
+camara_360 ~ info_camara_360,bool,7907,119,77,by_model_year
+techo_corredizo ~ amen_techo_panoramico,bool,7907,119,77,by_model_year
+asientos_calefaccion_conductor ~ conf_asientos_calefaccion,bool,7907,119,77,by_model_year
+asientos_ventilacion_conductor ~ conf_asientos_ventilacion,bool,7907,119,77,by_model_year

@@ -1,0 +1,62 @@
+site:byd.com.mx DOLPHIN BEV 45KWH GS 2023 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx DOLPHIN BEV 45KWH GS 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx DOLPHIN MINI 4 SEATS 300KM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx DOLPHIN MINI 4 SEATS 300KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx DOLPHIN MINI 4 SEATS 300KM 2026 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx DOLPHIN MINI 4 SEATS 380KM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx DOLPHIN MINI 4 SEATS 380KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx DOLPHIN MINI 4 SEATS 380KM 2026 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx HAN BEV 85KWH 2023 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx HAN BEV 85KWH 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx KING DM-I 1.5L FWD 55KM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx KING DM-I 1.5L FWD 55KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx KING DM-I 1.5L FWD 55KM 2026 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SEAL 61KWH RWD 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SEAL 61KWH RWD 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SEAL 82KWH AWD 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SEAL 82KWH AWD 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SEALION 7 AWD 456KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SHARK GL 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SHARK GS 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SONG PLUS DM-I 115KM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SONG PLUS DM-I 115KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SONG PLUS DM-I 115KM 2026 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx SONG PRO DM-I 1.5L FWD 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx TANG BEV 86KWH 2023 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx TANG BEV 86KWH 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx YUAN PLUS BEV 60KWH 480KM GS 2023 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx YUAN PLUS BEV 60KWH 480KM GS 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com.mx YUAN PRO BEV 45KWH 380KM GS 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com DOLPHIN BEV 45KWH GS 2023 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com DOLPHIN BEV 45KWH GS 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com DOLPHIN MINI 4 SEATS 300KM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com DOLPHIN MINI 4 SEATS 300KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com DOLPHIN MINI 4 SEATS 300KM 2026 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com DOLPHIN MINI 4 SEATS 380KM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com DOLPHIN MINI 4 SEATS 380KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com DOLPHIN MINI 4 SEATS 380KM 2026 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com HAN BEV 85KWH 2023 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com HAN BEV 85KWH 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com KING DM-I 1.5L FWD 55KM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com KING DM-I 1.5L FWD 55KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com KING DM-I 1.5L FWD 55KM 2026 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SEAL 61KWH RWD 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SEAL 61KWH RWD 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SEAL 82KWH AWD 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SEAL 82KWH AWD 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SEALION 7 AWD 456KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SHARK GL 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SHARK GS 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SONG PLUS DM-I 115KM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SONG PLUS DM-I 115KM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SONG PLUS DM-I 115KM 2026 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com SONG PRO DM-I 1.5L FWD 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com TANG BEV 86KWH 2023 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com TANG BEV 86KWH 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com YUAN PLUS BEV 60KWH 480KM GS 2023 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com YUAN PLUS BEV 60KWH 480KM GS 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:byd.com YUAN PRO BEV 45KWH 380KM GS 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:gwm.com.mx ORA 03 48KWH PREMIUM 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:gwm.com.mx ORA 03 48KWH PREMIUM 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:gwm.com.mx ORA 03 63KWH LUXURY 2024 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México
+site:gwm.com.mx ORA 03 63KWH LUXURY 2025 (kWh/100 km OR 'kWh por 100 km' OR 'consumo') ficha técnica México

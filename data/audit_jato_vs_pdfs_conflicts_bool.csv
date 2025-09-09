@@ -1,0 +1,11 @@
+feature,pairs_compared,agreement_rate,jato_true_rate,pdf_true_rate
+abs ~ seg_act_abs,77,0.506,1.0,0.506
+control_estabilidad ~ seg_act_esp,77,0.234,0.87,0.13
+alerta_colision ~ adas_aeb,77,0.584,0.597,0.286
+sensor_punto_ciego ~ adas_bsm,77,0.649,0.584,0.312
+android_auto ~ info_android_auto,77,0.662,0.935,0.649
+apple_carplay ~ info_apple_carplay,77,0.662,0.935,0.623
+camara_360 ~ info_camara_360,77,0.636,0.364,0.026
+techo_corredizo ~ amen_techo_panoramico,77,0.636,0.442,0.234
+asientos_calefaccion_conductor ~ conf_asientos_calefaccion,77,0.13,1.0,0.13
+asientos_ventilacion_conductor ~ conf_asientos_ventilacion,77,0.078,1.0,0.078

@@ -1,0 +1,2 @@
+delta_price_pct,beta_own,expected_delta_units_pct,nota
+-0.1,-2.5652916086204574,0.31033187745596935,Elasticidad estimada con TWFE; cambio uniforme en precio (nominal). Ventas estimadas con base en ventas reales por versión enlazadas.

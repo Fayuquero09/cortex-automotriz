@@ -1,0 +1,5 @@
+make,model_promo_raw,model_catalog_match,match_type,page_url,msrp_promo_mxn,bono_promo_mxn,msrp_catalog,precio_transaccion_catalog,delta_msrp
+GAC,PROMOCIONES,,none,https://www.gacmotor.mx/promociones,,,,,
+GAC,COTIZAR AHORA,,none,https://www.gacmotor.mx/promo-gac-days,,,,,
+BYD,nan,,none,https://www.byd.com/mx/service-maintenance/precios-de-mantenimiento,,,,,
+HONDA,PROMOCIONES,,none,https://www.honda.mx/promos,10000.0,,,,
