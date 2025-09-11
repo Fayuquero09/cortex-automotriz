@@ -1,0 +1,15 @@
+{
+  "name": "cortex-frontend-proxy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Static dist server with API/WS proxy for Cortex Automotriz",
+  "main": "dev.server.js",
+  "scripts": {
+    "start": "node dev.server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "http-proxy-middleware": "^2.0.6"
+  }
+}
+

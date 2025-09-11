@@ -1,0 +1,18 @@
+# Python caches and virtualenv
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# macOS
+.DS_Store
+
+# Logs and runtime
+.run-logs/
+
+# Node/Next
+cortex_frontend/node_modules/
+cortex_frontend/.next/
+frontend/node_modules/
+
