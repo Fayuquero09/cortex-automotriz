@@ -1,0 +1,45 @@
+/* Reset mínimo para estabilidad de layout */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+img, svg, video, canvas { max-width: 100%; height: auto; display: block; }
+/* Tablas: forzar layout estable y ancho completo */
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+th, td { padding: 8px; border-bottom: 1px solid #eee; }
+tr:hover { background: #fafafa; cursor: pointer; }
+.row { display: flex; gap: 16px; }
+.col { flex: 1; }
+
+/* Make all numbers align vertically for easier scanning */
+table, th, td {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Helper class for numeric cells (if needed) */
+.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Print/export: force landscape (horizontal) layout automatically */
+@media print {
+  @page { size: A4 landscape; margin: 10mm; }
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .row { flex-direction: row; gap: 12px; }
+  .col { break-inside: avoid; page-break-inside: avoid; }
+  table { page-break-inside: avoid; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+}
+
+/* Default visibility for print helpers */
+.no-print { }
+.print-only { display: none; }
+
+/* Optional helpers for page breaks */
+@media print {
+  .print-break-before { break-before: page; page-break-before: always; }
+  .print-break-after { break-after: page; page-break-after: always; }
+}
