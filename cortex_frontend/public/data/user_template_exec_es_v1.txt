@@ -1,0 +1,9 @@
+Contexto de análisis (JSON):
+<DATA_JSON>
+
+Instrucciones:
+- Sintetiza hallazgos que NO repitan gráficas.
+- Cuantifica todo (MXN, %, HP, kml) y nombra rivales explícitos.
+- Incluye drivers de precio a partir de "price_explain" (top_driver y bono recomendado, si hay).
+- Evita párrafos largos; usa bullets claros.
+- Responde estrictamente en JSON con las claves solicitadas.
