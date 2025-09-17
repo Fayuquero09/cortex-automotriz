@@ -353,6 +353,8 @@ def _options_cache_sig() -> str:
         couple = os.getenv("OPTIONS_CACHE_COUPLED_TO_CATALOG", "0") in {"1","true","True"}
         mt = _OPTIONS_IDX_MTIMES or {}
         parts = []
+        # Bump when code changes logic for building options payload
+        parts.append("v3")
         if couple:
             parts.append(str(_DF_MTIME or "0"))
         # include index source mtimes
@@ -368,6 +370,73 @@ def _compact_key(s: str) -> str:
     except Exception:
         return str(s or "").upper().replace(" ", "")
 
+
+_VEH_JSON_ENTRIES: Optional[list[dict[str, Any]]] = None
+
+
+def _load_vehicle_json_entries() -> list[dict[str, Any]]:
+    """Load vehicles from vehiculos-todos*.json once (preferring the most complete file).
+
+    Each entry keeps canonical uppercase keys to speed up lookups when matching
+    make/model/version/year combinations.
+    """
+    global _VEH_JSON_ENTRIES
+    if _VEH_JSON_ENTRIES is not None:
+        return _VEH_JSON_ENTRIES
+
+    entries: list[dict[str, Any]] = []
+
+    def _up(s: Any) -> str:
+        return str(s or "").strip().upper()
+
+    candidates = [
+        ROOT / "data" / "vehiculos-todos.json",
+        ROOT / "data" / "vehiculos-todos2.json",
+        ROOT / "data" / "vehiculos-todos1.json",
+    ]
+
+    for path in candidates:
+        try:
+            if not path.exists():
+                continue
+            import json as _json
+
+            obj = _json.loads(path.read_text(encoding="utf-8"))
+            vehicles = obj.get("vehicles") if isinstance(obj, dict) else (obj if isinstance(obj, list) else [])
+            if not isinstance(vehicles, list):
+                continue
+            for raw in vehicles:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    mk_raw = ((raw.get("make") or {}).get("name") if isinstance(raw.get("make"), dict) else None) or ((raw.get("manufacturer") or {}).get("name") if isinstance(raw.get("manufacturer"), dict) else "")
+                    mk_up = _canon_make(mk_raw) or _up(mk_raw)
+                    md_raw = (raw.get("model") or {}).get("name") if isinstance(raw.get("model"), dict) else ""
+                    md_up = _canon_model(mk_up, md_raw) or _up(md_raw)
+                    ver_obj = raw.get("version") if isinstance(raw.get("version"), dict) else {}
+                    ver_raw = ver_obj.get("name") if isinstance(ver_obj, dict) else ""
+                    vr_up = _up(ver_raw)
+                    try:
+                        yr_val = ver_obj.get("year")
+                        yr_up = str(int(yr_val)) if yr_val is not None else ""
+                    except Exception:
+                        yr_up = str(ver_obj.get("year") or "")
+                    entries.append({
+                        "mk": mk_up,
+                        "md": md_up,
+                        "ver": vr_up,
+                        "ver_compact": _compact_key(vr_up),
+                        "year": yr_up,
+                        "raw": raw,
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    _VEH_JSON_ENTRIES = entries
+    return _VEH_JSON_ENTRIES
+
 def _options_paths() -> Dict[str, Path]:
     """Return sources used to build the options index.
 
@@ -376,12 +445,14 @@ def _options_paths() -> Dict[str, Path]:
     should not invalidate the options index.
     """
     prefer_versiones = (os.getenv("PREFER_VERSIONES95", "1") not in {"0","false","False"})
-    ver = ROOT / "data" / "versiones95_2024_2026.json"
-    if prefer_versiones and ver.exists():
-        return {"versiones95": ver}
+    # Stay in versiones95 mode unless explicitly disabled in env
+    paths: Dict[str, Path] = {}
+    if prefer_versiones:
+        ver = ROOT / "data" / "versiones95_2024_2026.json"
+        if ver.exists():
+            paths["versiones95"] = ver
 
     # Fallback to previous multi-source strategy
-    paths: Dict[str, Path] = {}
     try:
         paths["catalog"] = _catalog_path()
     except Exception:
@@ -438,6 +509,63 @@ def _ensure_options_index() -> None:
             idx["models_compact"].setdefault(model_c, model_up)
         except Exception:
             pass
+        # Extra keyword-based fallback to populate pillars when columns vary
+        try:
+            import pandas as _pd
+            def _to01(v):
+                s = str(v).strip().lower()
+                if s in ("true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y"): return 1
+                if s in ("false","0","no","ninguno","na","n/a","no disponible","-"): return 0
+                try:
+                    return 1 if float(s)>0 else 0
+                except Exception:
+                    return 0
+            def _cols(keys):
+                ks = [k.lower() for k in keys]
+                out = []
+                for c in df.columns:
+                    lc = str(c).lower()
+                    if any(k in lc for k in ks):
+                        out.append(c)
+                return out
+            def _pillar_by_keys(keys):
+                cols = _cols(keys)
+                if not cols:
+                    return _pd.Series([0]*len(df))
+                binm = df[cols].applymap(_to01)
+                sc = (binm.sum(axis=1) / float(len(cols)) * 100.0).round(1)
+                return sc
+            def _need(col):
+                if col not in df.columns:
+                    return _pd.Series([True]*len(df))
+                return _pd.to_numeric(df[col], errors="coerce").fillna(0) <= 0
+            keys_adas = ["colisión","colision","frenado","punto ciego","blind spot","360","lane","lka","mantenimiento de carril","crucero adapt","acc","estac","rear cross","cross traffic","auto high","luces altas"]
+            keys_safety = ["abs","estabilidad","control estabilidad","airbag","bolsas","cortina"]
+            keys_comfort = ["llave","apertura","portón","porton","cierre","ventanas","seguros","calefacci","ventilaci","clima"]
+            keys_info = ["pantalla","táctil","tactil","android","carplay","bocinas","altav","speaker","wireless","cargador","hud","ambient"]
+            keys_trac = ["awd","4x4","4wd","tracci","driven_wheels","diff","bloqueo","low range","reductora","arrastre","tow","hitch"]
+            keys_util = [
+                "rieles","riel","remolque","enganche","gancho","arrastre","tow","hitch",
+                "12v","110v","toma","tomacorr","outlet",
+                "capacidad de carga","carga util","carga útil","payload",
+                "tercera fila","tercera_fila"
+            ]
+            def _apply(col, keys):
+                need = _need(col)
+                if not need.any():
+                    return
+                ser = _pillar_by_keys(keys)
+                if col not in df.columns:
+                    df[col] = None
+                df.loc[need, col] = ser[need]
+            _apply("equip_p_adas", keys_adas)
+            _apply("equip_p_safety", keys_safety)
+            _apply("equip_p_comfort", keys_comfort)
+            _apply("equip_p_infotainment", keys_info)
+            _apply("equip_p_traction", keys_trac)
+            _apply("equip_p_utility", keys_util)
+        except Exception:
+            pass
 
     # Prefer curated versiones95 file when available (structure only)
     if "versiones95" in paths and paths["versiones95"].exists():
@@ -457,60 +585,56 @@ def _ensure_options_index() -> None:
                 add_item(mk, md, ver, yr)
         except Exception:
             pass
-    else:
-        # Legacy multi-source build
-        # 1) Catalog (already cached in memory)
-        try:
-            df0 = _load_catalog().copy()
-            if pd is not None and len(df0):
-                cols = [c for c in ["make","model","version","ano"] if c in df0.columns]
-                t = df0[cols].copy()
-                for c in ["make","model","version"]:
-                    if c in t.columns:
-                        t[c] = t[c].astype(str)
-                if "ano" in t.columns:
-                    t["ano"] = pd.to_numeric(t["ano"], errors="coerce").astype("Int64")
+
+    # Legacy multi-source build (catalog + processed + flat + json)
+    try:
+        df0 = _load_catalog().copy()
+        if pd is not None and len(df0):
+            cols = [c for c in ["make","model","version","ano"] if c in df0.columns]
+            t = df0[cols].copy()
+            for c in ["make","model","version"]:
+                if c in t.columns:
+                    t[c] = t[c].astype(str)
+            if "ano" in t.columns:
+                t["ano"] = pd.to_numeric(t["ano"], errors="coerce").astype("Int64")
+            for _, r in t.iterrows():
+                add_item(r.get("make",""), r.get("model",""), r.get("version"), int(r.get("ano")) if pd.notna(r.get("ano")) else None)
+    except Exception:
+        pass
+    try:
+        p = paths.get("processed")
+        if p and p.exists() and pd is not None:
+            t = pd.read_csv(p, low_memory=False)
+            t.columns = [str(c).strip().lower() for c in t.columns]
+            if {"make","model","ano"}.issubset(t.columns):
                 for _, r in t.iterrows():
-                    add_item(r.get("make",""), r.get("model",""), r.get("version"), int(r.get("ano")) if pd.notna(r.get("ano")) else None)
-        except Exception:
-            pass
-        # 2) Processed CSV
-        try:
-            p = paths.get("processed")
-            if p and p.exists() and pd is not None:
-                t = pd.read_csv(p, low_memory=False)
-                t.columns = [str(c).strip().lower() for c in t.columns]
-                if {"make","model","ano"}.issubset(t.columns):
-                    for _, r in t.iterrows():
-                        add_item(r.get("make",""), r.get("model",""), r.get("version"), r.get("ano"))
-        except Exception:
-            pass
-        # 3) Flat enriched
-        try:
-            p = paths.get("flat")
-            if p and p.exists() and pd is not None:
-                t = pd.read_csv(p, low_memory=False)
-                t.columns = [str(c).strip().lower() for c in t.columns]
-                if {"make","model","ano"}.issubset(t.columns):
-                    for _, r in t.iterrows():
-                        add_item(r.get("make",""), r.get("model",""), r.get("version"), r.get("ano"))
-        except Exception:
-            pass
-        # 4) JSON curated
-        try:
-            p = paths.get("json")
-            if p and p.exists():
-                import json as _json
-                data = _json.loads(p.read_text(encoding="utf-8"))
-                items = data.get("vehicles") if isinstance(data, dict) else (data if isinstance(data, list) else [])
-                for v in items or []:
-                    mk = (v.get("manufacturer",{}) or {}).get("name") or (v.get("make",{}) or {}).get("name") or ""
-                    md = (v.get("model",{}) or {}).get("name") or ""
-                    ver = (v.get("version",{}) or {}).get("name") or ""
-                    yr = (v.get("version",{}) or {}).get("year") or None
-                    add_item(mk, md, ver, yr)
-        except Exception:
-            pass
+                    add_item(r.get("make",""), r.get("model",""), r.get("version"), r.get("ano"))
+    except Exception:
+        pass
+    try:
+        p = paths.get("flat")
+        if p and p.exists() and pd is not None:
+            t = pd.read_csv(p, low_memory=False)
+            t.columns = [str(c).strip().lower() for c in t.columns]
+            if {"make","model","ano"}.issubset(t.columns):
+                for _, r in t.iterrows():
+                    add_item(r.get("make",""), r.get("model",""), r.get("version"), r.get("ano"))
+    except Exception:
+        pass
+    try:
+        p = paths.get("json")
+        if p and p.exists():
+            import json as _json
+            data = _json.loads(p.read_text(encoding="utf-8"))
+            items = data.get("vehicles") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            for v in items or []:
+                mk = (v.get("manufacturer",{}) or {}).get("name") or (v.get("make",{}) or {}).get("name") or ""
+                md = (v.get("model",{}) or {}).get("name") or ""
+                ver = (v.get("version",{}) or {}).get("name") or ""
+                yr = (v.get("version",{}) or {}).get("year") or None
+                add_item(mk, md, ver, yr)
+    except Exception:
+        pass
 
     _OPTIONS_IDX = idx
     _OPTIONS_IDX_MTIMES = mtimes
@@ -578,6 +702,85 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Simple media proxy for vehicle images
+@app.get("/media/{path:path}")
+def media_proxy(path: str) -> Response:
+    """Proxy images from a configurable base.
+
+    If MEDIA_PROXY_BASE is unset but UPABASE_URL/SUPABASE_URL is present, assume
+    Supabase public bucket 'sscmex' and build
+    {SUPABASE_URL}/storage/v1/object/public/sscmex/<path>.
+    """
+    import mimetypes
+    base = os.getenv("MEDIA_PROXY_BASE")
+    if not base:
+        supa = os.getenv("SUPABASE_URL") or os.getenv("UPABASE_URL")
+        if supa:
+            base = (supa.rstrip("/") + "/storage/v1/object/public/sscmex")
+    if not base:
+        raise HTTPException(status_code=404, detail="MEDIA proxy base not configured")
+    # URL‑encode path components to evitar 400 por espacios o caracteres especiales
+    if "//" in path or "://" in path:
+        raise HTTPException(status_code=400, detail="Invalid media path")
+    raw_parts = [segment.strip() for segment in path.split('/')]
+    safe_parts: list[str] = []
+    for segment in raw_parts:
+        if not segment or segment == ".":
+            continue
+        if segment == "..":
+            raise HTTPException(status_code=400, detail="Path traversal not allowed")
+        safe_parts.append(segment)
+    if not safe_parts:
+        raise HTTPException(status_code=400, detail="Invalid media path")
+    try:
+        from urllib.parse import quote as _quote
+        encoded_parts = [_quote(seg, safe="") for seg in safe_parts]
+    except Exception:
+        encoded_parts = safe_parts
+
+    from urllib.parse import urlparse
+    import posixpath
+    import ipaddress
+
+    parsed = urlparse(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=500, detail="MEDIA proxy base inválido")
+
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise HTTPException(status_code=500, detail="MEDIA proxy base inválido")
+    try:
+        ip_obj = ipaddress.ip_address(host)
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved or ip_obj.is_link_local:
+            raise HTTPException(status_code=403, detail="Destino de media no permitido")
+    except ValueError:
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            raise HTTPException(status_code=403, detail="Destino de media no permitido")
+
+    allow_env = os.getenv("MEDIA_PROXY_ALLOWLIST")
+    if allow_env:
+        allowed_hosts = {h.strip().lower() for h in allow_env.split(",") if h.strip()}
+        if host not in allowed_hosts:
+            raise HTTPException(status_code=403, detail="Host de media fuera de allowlist")
+
+    joined_path = posixpath.join(parsed.path or '/', *encoded_parts)
+    if not joined_path.startswith('/'):
+        joined_path = '/' + joined_path
+    url = f"{parsed.scheme}://{parsed.netloc}{joined_path}"
+    parsed_final = urlparse(url)
+    if parsed_final.hostname and parsed_final.hostname.lower() != host:
+        raise HTTPException(status_code=400, detail="Host de media inválido")
+    try:
+        import requests  # type: ignore
+        r = requests.get(url, timeout=(6, 20), allow_redirects=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Image fetch error: {e}")
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail=f"Upstream responded {r.status_code}")
+    ct = r.headers.get("content-type") or (mimetypes.guess_type(path)[0] or "image/jpeg")
+    return Response(content=r.content, media_type=ct)
 
 
 @app.get("/")
@@ -780,6 +983,136 @@ ALLOWED_YEARS = _allowed_years_from_env()
 _MAINT_PATH_ENV = "RUTA_DATOS_MANTENIMIENTO"
 
 
+# Audio lookup cache (brand / speakers) sourced from vehiculos_todos_flat.csv
+_AUDIO_LOOKUP_CACHE: Dict[str, Any] = {"map": None, "mtime": None}
+_SEASONALITY_CACHE: Dict[tuple[int, str], Dict[str, Any]] = {}
+
+
+def _canon_audio_brand(txt: str) -> str:
+    s = str(txt or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    mapping = {
+        "b&o": "Bang & Olufsen",
+        "bang & olufsen": "Bang & Olufsen",
+        "harmon kardon": "Harman Kardon",
+        "harman-kardon": "Harman Kardon",
+        "mark levinson": "Mark Levinson",
+    }
+    if low in mapping:
+        return mapping[low]
+    parts = [p.upper() if len(p) <= 3 else p.title() for p in re.split(r"\s+", s)]
+    return " ".join(parts)
+
+
+def _build_audio_lookup() -> Dict[tuple[str, str, str, Optional[int]], Dict[str, Any]]:
+    if pd is None:
+        return {}
+    path = ROOT / "data" / "enriched" / "vehiculos_todos_flat.csv"
+    mt = path.stat().st_mtime if path.exists() else None
+    cached_map = _AUDIO_LOOKUP_CACHE.get("map")
+    if cached_map is not None and _AUDIO_LOOKUP_CACHE.get("mtime") == mt:
+        return cached_map  # type: ignore[return-value]
+    lookup: Dict[tuple[str, str, str, Optional[int]], Dict[str, Any]] = {}
+    if not path.exists():
+        _AUDIO_LOOKUP_CACHE.update({"map": lookup, "mtime": mt})
+        return lookup
+    try:
+        df = pd.read_csv(path, usecols=[
+            "make", "model", "version", "ano", "audio_brand", "speakers_count", "bocinas"
+        ], low_memory=False)
+        df.columns = [str(c).strip().lower() for c in df.columns]
+
+        def _norm(v: Any) -> str:
+            return str(v or "").strip().upper()
+
+        for row in df.itertuples(index=False):
+            mk = _norm(getattr(row, 'make', ''))
+            md = _norm(getattr(row, 'model', ''))
+            vr = _norm(getattr(row, 'version', ''))
+            try:
+                yr_val = getattr(row, 'ano', None)
+                yr = int(yr_val) if yr_val == yr_val else None  # type: ignore
+            except Exception:
+                yr = None
+
+            raw_brand = str(getattr(row, 'audio_brand', '') or '').strip()
+            boc = getattr(row, 'speakers_count', None)
+            if boc is None or (isinstance(boc, float) and boc != boc):
+                boc = getattr(row, 'bocinas', None)
+            speakers: Optional[int] = None
+            try:
+                if boc is not None and str(boc).strip() not in {"", "no disponible", "nan", "none"}:
+                    speakers = int(round(float(str(boc).replace(',', '.'))))
+                    if speakers <= 0:
+                        speakers = None
+            except Exception:
+                speakers = None
+
+            brand = _canon_audio_brand(raw_brand)
+            if not brand and speakers is None:
+                continue
+
+            keys = [
+                (mk, md, vr, yr),
+                (mk, md, vr, None),
+                (mk, md, "", yr),
+                (mk, md, "", None),
+            ]
+            for key in keys:
+                entry = lookup.setdefault(key, {})
+            if brand and not entry.get("brand"):
+                entry["brand"] = brand
+                if speakers is not None and not entry.get("speakers"):
+                    entry["speakers"] = int(speakers)
+    except Exception:
+        lookup = {}
+
+    _AUDIO_LOOKUP_CACHE.update({"map": lookup, "mtime": mt})
+    return lookup
+
+
+def _apply_audio_lookup(row: Dict[str, Any]) -> None:
+    try:
+        lookup = _build_audio_lookup()
+        mk = str(row.get("make") or "").strip().upper()
+        md = str(row.get("model") or "").strip().upper()
+        vr = str(row.get("version") or "").strip().upper()
+        try:
+            yr_val = row.get("ano")
+            yr = int(yr_val) if yr_val is not None and str(yr_val).strip() != "" else None
+        except Exception:
+            yr = None
+        if not mk or not md:
+            return
+        existing_brand = str(row.get("audio_brand") or "").strip()
+        if existing_brand:
+            row["audio_brand"] = _canon_audio_brand(existing_brand)
+
+        keys = [
+            (mk, md, vr, yr),
+            (mk, md, vr, None),
+            (mk, md, "", yr),
+            (mk, md, "", None),
+        ]
+        for key in keys:
+            data = lookup.get(key)
+            if not data:
+                continue
+            brand = str(data.get("brand") or "").strip()
+            speakers = data.get("speakers")
+            if brand and not str(row.get("audio_brand") or "").strip():
+                row["audio_brand"] = brand
+            existing_sc = str(row.get("speakers_count") or "").strip().lower()
+            if speakers and existing_sc in {"", "0", "none", "nan"}:
+                row["speakers_count"] = int(speakers)
+            if str(row.get("audio_brand") or "").strip() and str(row.get("speakers_count") or "").strip().lower() not in {"", "0", "none", "nan"}:
+                break
+    except Exception:
+        pass
+
+
 def _catalog_path() -> Path:
     env = os.getenv(CATALOG_PATH_ENV)
     if env:
@@ -831,10 +1164,73 @@ def _load_catalog():
             df.rename(columns={"año": "ano"}, inplace=True)
         if "caballos_de_fuerza" in df.columns and "caballos_fuerza" not in df.columns:
             df.rename(columns={"caballos_de_fuerza": "caballos_fuerza"}, inplace=True)
+        # Merge enriched feature pillars if available
+        try:
+            feat_path = ROOT / "data" / "enriched" / "features_matrix.csv"
+            if feat_path.exists():
+                feat = pd.read_csv(feat_path)
+                if "make" in feat.columns:
+                    feat["make"] = feat["make"].astype(str).str.upper().str.strip()
+                    feat["__join_make"] = feat["make"]
+                if "model" in feat.columns:
+                    feat["model"] = feat["model"].astype(str).str.upper().str.strip()
+                    feat["__join_model"] = feat["model"]
+                if "version" in feat.columns:
+                    feat["version"] = feat["version"].astype(str).str.strip()
+                    feat["__join_version"] = feat["version"].str.upper()
+                if "ano" in feat.columns:
+                    feat["ano"] = pd.to_numeric(feat["ano"], errors="coerce").astype("Int64")
+                value_cols = [c for c in feat.columns if c not in {"make", "model", "version", "ano", "__join_make", "__join_model", "__join_version"}]
+                rename_map = {c: f"{c}__feat" for c in value_cols}
+                feat = feat.rename(columns=rename_map)
+                if {"make", "model", "version"}.issubset(df.columns):
+                    df["__join_make"] = df["make"].astype(str).str.upper().str.strip()
+                    df["__join_model"] = df["model"].astype(str).str.upper().str.strip()
+                    df["__join_version"] = df["version"].astype(str).str.strip().str.upper()
+                    merge_keys_left = ["__join_make", "__join_model", "__join_version"]
+                    merge_keys_right = [key for key in ["__join_make", "__join_model", "__join_version"] if key in feat.columns]
+                    if "ano" in df.columns and "ano" in feat.columns:
+                        merge_keys_left.append("ano")
+                        merge_keys_right.append("ano")
+                    df = df.merge(
+                        feat,
+                        how="left",
+                        left_on=merge_keys_left,
+                        right_on=merge_keys_right,
+                    )
+                    for base_col in ("make", "model", "version"):
+                        col_x = f"{base_col}_x"
+                        col_y = f"{base_col}_y"
+                        if col_x in df.columns:
+                            df[base_col] = df[col_x]
+                            df.drop(columns=[col_x], inplace=True)
+                        if col_y in df.columns:
+                            df.drop(columns=[col_y], inplace=True)
+                    for col in value_cols:
+                        feat_col = f"{col}__feat"
+                        if feat_col not in df.columns:
+                            continue
+                        if col in df.columns:
+                            df[col] = df[col].combine_first(df[feat_col])
+                            df.drop(columns=[feat_col], inplace=True)
+                        else:
+                            df.rename(columns={feat_col: col}, inplace=True)
+                    df.drop(columns=["__join_make", "__join_model", "__join_version"], inplace=True, errors="ignore")
+                    df.drop(columns=[c for c in ["__join_make", "__join_model", "__join_version"] if c in feat.columns], inplace=True, errors="ignore")
+        except Exception:
+            pass
         # normalize basic columns
         for col in ("make", "model", "version"):
             if col in df.columns:
                 df[col] = df[col].astype(str)
+        # Ensure horsepower fallback from original column when missing
+        try:
+            if {"caballos_fuerza","caballos_fuerza_original"}.issubset(df.columns):
+                cf = pd.to_numeric(df["caballos_fuerza"], errors="coerce")
+                cf_orig = pd.to_numeric(df["caballos_fuerza_original"], errors="coerce")
+                df["caballos_fuerza"] = cf.where(cf.notna() & (cf > 0), cf_orig)
+        except Exception:
+            pass
         # Apply aliases (canonicalization) for make/model so the whole app uses canonical names
         try:
             _ = _load_aliases()
@@ -1182,6 +1578,53 @@ def _load_catalog():
                                 jdf["carretera_kml"] = jdf["fuelEconomy"].map(lambda fe: _fe_field(fe, 'highway'))
                         except Exception:
                             pass
+                        # Extract electrification fields (battery/carga/autonomía) from nested dicts
+                        try:
+                            def _from_ev(obj):
+                                out = {"battery_kwh": None, "charge_ac_kw": None, "charge_dc_kw": None,
+                                       "ev_range_km": None, "charge_time_10_80_min": None}
+                                try:
+                                    if not isinstance(obj, dict):
+                                        return out
+                                    # common keys at top-level
+                                    bat = obj.get("battery") or {}
+                                    chg = obj.get("charging") or {}
+                                    if isinstance(bat, dict):
+                                        out["battery_kwh"] = bat.get("capacityKwh") or bat.get("kwh") or bat.get("capacity")
+                                    if isinstance(chg, dict):
+                                        out["charge_ac_kw"] = chg.get("acKw") or chg.get("ac_kw") or chg.get("ac")
+                                        out["charge_dc_kw"] = chg.get("dcKw") or chg.get("dc_kw") or chg.get("dc")
+                                        out["charge_time_10_80_min"] = chg.get("timeTo80Min") or chg.get("time_10_80_min")
+                                    rng = obj.get("rangeKm") or obj.get("range_km") or obj.get("autonomia_km") or obj.get("autonomia")
+                                    if rng is not None:
+                                        out["ev_range_km"] = rng
+                                except Exception:
+                                    return out
+                                return out
+                            # Try top-level 'ev'/'battery'/'charging'
+                            if any(k in jdf.columns for k in ("ev","battery","charging","version")):
+                                ev_df = pd.DataFrame()
+                                if "ev" in jdf.columns:
+                                    ev_df = jdf["ev"].map(_from_ev).apply(pd.Series)
+                                # Also check within version
+                                try:
+                                    if "version" in jdf.columns:
+                                        from_ver = jdf["version"].map(_from_ev).apply(pd.Series)
+                                        ev_df = ev_df.combine_first(from_ver)
+                                except Exception:
+                                    pass
+                                for col in ["battery_kwh","charge_ac_kw","charge_dc_kw","ev_range_km","charge_time_10_80_min"]:
+                                    try:
+                                        if col not in jdf.columns:
+                                            jdf[col] = ev_df.get(col)
+                                        else:
+                                            base = pd.to_numeric(jdf[col], errors="coerce")
+                                            new = pd.to_numeric(ev_df.get(col), errors="coerce")
+                                            jdf[col] = jdf[col].where(~(base.isna() | (base == 0)), new)
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
                         # Extraer tren motriz desde 'version'
                         try:
                             if "version" in jdf.columns:
@@ -1263,7 +1706,16 @@ def _load_catalog():
                                 def _quant(e):
                                     out = {"speakers_count": None, "usb_a_count": None, "usb_c_count": None,
                                            "power_12v_count": None, "power_110v_count": None,
-                                           "screen_main_in": None, "screen_cluster_in": None}
+                                           "screen_main_in": None, "screen_cluster_in": None,
+                                           # extras visibles
+                                           "climate_zones": None, "seats_capacity": None,
+                                           "adas_lane_keep": None, "adas_acc": None,
+                                           "rear_cross_traffic": None, "auto_high_beam": None,
+                                           "hud": None, "ambient_lighting": None,
+                                           "handsfree_tailgate": None,
+                                           "tow_prep": None, "tow_hitch": None,
+                                           "diff_lock": None, "low_range": None,
+                                           "rear_side_airbags": None, "curtain_all_rows": None}
                                     try:
                                         if not isinstance(e, dict):
                                             return out
@@ -1310,11 +1762,55 @@ def _load_catalog():
                                                             out["screen_cluster_in"] = float(v)
                                                         else:
                                                             out["screen_main_in"] = float(v)
+                                                # Climate zones
+                                                if any(k in t for k in ("zonas","zone")) and any(k in t for k in ("clima","climate","aire")):
+                                                    v = _first_num(t)
+                                                    if v is not None: out["climate_zones"] = int(round(v))
+                                                # Seats capacity
+                                                if any(k in t for k in ("capacidad de asientos","capacidad asientos","seats","asientos")):
+                                                    v = _first_num(t)
+                                                    if v is not None: out["seats_capacity"] = int(round(v))
+                                                # ADAS flags
+                                                if any(k in t for k in ("lane keep","mantenimiento de carril","lane centering","lka")):
+                                                    out["adas_lane_keep"] = True
+                                                if any(k in t for k in ("crucero adaptativo","acc","adaptive cruise")):
+                                                    out["adas_acc"] = True
+                                                if any(k in t for k in ("tráfico cruzado","rear cross","cross traffic")):
+                                                    out["rear_cross_traffic"] = True
+                                                if any(k in t for k in ("luces altas autom","auto high beam","matrix")):
+                                                    out["auto_high_beam"] = True
+                                                if any(k in t for k in ("head‑up","head up","hud")):
+                                                    out["hud"] = True
+                                                if any(k in t for k in ("iluminación ambiental","ambient lighting")):
+                                                    out["ambient_lighting"] = True
+                                                # Tailgate handsfree
+                                                if any(k in t for k in ("manos libres","hands‑free","hands free","kick")) and any(k in t for k in ("portón","cajuela","tailgate")):
+                                                    out["handsfree_tailgate"] = True
+                                                # Tow / off‑road
+                                                if any(k in t for k in ("preparación remolque","preparacion remolque","tow prep")):
+                                                    out["tow_prep"] = True
+                                                if any(k in t for k in ("enganche","remolque","hitch")):
+                                                    out["tow_hitch"] = True
+                                                if any(k in t for k in ("bloqueo","diferencial","lock diff")):
+                                                    out["diff_lock"] = True
+                                                if any(k in t for k in ("reductora","low range","4l")):
+                                                    out["low_range"] = True
+                                                # Airbags
+                                                if any(k in t for k in ("bolsas laterales traseras","laterales traseras","rear side airbag")):
+                                                    out["rear_side_airbags"] = True
+                                                if any(k in t for k in ("cortina","todas las filas","all rows curtain")):
+                                                    out["curtain_all_rows"] = True
                                     except Exception:
                                         return out
                                     return out
                                 qdf = jdf["equipment"].map(_quant).apply(pd.Series)
-                                for col in ["speakers_count","usb_a_count","usb_c_count","power_12v_count","power_110v_count","screen_main_in","screen_cluster_in"]:
+                                for col in [
+                                    "speakers_count","usb_a_count","usb_c_count","power_12v_count","power_110v_count",
+                                    "screen_main_in","screen_cluster_in","climate_zones","seats_capacity",
+                                    "adas_lane_keep","adas_acc","rear_cross_traffic","auto_high_beam","hud","ambient_lighting",
+                                    "handsfree_tailgate","tow_prep","tow_hitch","diff_lock","low_range",
+                                    "rear_side_airbags","curtain_all_rows"
+                                ]:
                                     try:
                                         if col not in jdf.columns:
                                             jdf[col] = qdf[col]
@@ -1419,9 +1915,9 @@ def _load_catalog():
                                         # Traction/Utility
                                         if has("awd","4x4","4wd"): out["equip_p_traction"] += 8
                                         if has("bloqueo","diferencial","lock diff"): out["equip_p_traction"] += 5
-                                        if has("toma 12v","12v","power 12v") or has("110v","220v"): out["equip_p_utility"] += 3
-                                        if has("rieles","riel techo","roof rail"): out["equip_p_utility"] += 3
-                                        if has("remolque","enganche","trailer"): out["equip_p_utility"] += 4
+                                        if has("toma 12v","12v","power 12v","toma de corriente","tomacorriente","power outlet","outlet","tomacorriente trasero") or has("110v","220v"): out["equip_p_utility"] += 3
+                                        if has("rieles","riel techo","roof rail","barra techo","barras de techo"): out["equip_p_utility"] += 3
+                                        if has("remolque","enganche","trailer","gancho","arrastre","tow","hitch","capacidad de carga","carga util","carga útil","payload"): out["equip_p_utility"] += 4
                                         # Normalize basic caps to 0..100
                                         caps = {
                                             "equip_p_adas": 45.0,
@@ -1465,6 +1961,8 @@ def _load_catalog():
                             "usb_a_count","usb_c_count","power_12v_count","power_110v_count","wireless_charging",
                             # fuel/energy inferred from JSON
                             "categoria_combustible_final",
+                            # electrificación
+                            "battery_kwh","charge_ac_kw","charge_dc_kw","ev_range_km","charge_time_10_80_min",
                             # garantías
                             "warranty_full_months","warranty_full_km","warranty_powertrain_months","warranty_powertrain_km",
                             "warranty_roadside_months","warranty_roadside_km","warranty_corrosion_months","warranty_corrosion_km",
@@ -1473,6 +1971,8 @@ def _load_catalog():
                             "equip_p_adas","equip_p_safety","equip_p_comfort","equip_p_infotainment",
                             "equip_p_traction","equip_p_utility","equip_p_performance","equip_p_efficiency","equip_p_electrification",
                         }]
+                        # additionally, propagate dynamic feature flags from JSON (feat_*)
+                        keep += [c for c in jdf.columns if isinstance(c, str) and c.startswith("feat_")]
                         if keep:
                             edf = pd.concat([edf, jdf[keep]], ignore_index=True, sort=False)
                             # collapse duplicates by key preferring first non-null
@@ -1502,7 +2002,7 @@ def _load_catalog():
                 def prefer_json(col: str):
                     j = f"{col}_from_json"
                     if j in left.columns:
-                        left[col] = left[j]
+                        left[col] = left[j].combine_first(left.get(col)) if col in left.columns else left[j]
                         left.drop(columns=[j], inplace=True, errors="ignore")
 
                 prefer_json("equip_score")
@@ -1556,6 +2056,12 @@ def _load_catalog():
                 prefer_json("ancho_mm")
                 prefer_json("altura_mm")
                 prefer_json("images_default")
+                # electrification
+                prefer_json("battery_kwh")
+                prefer_json("charge_ac_kw")
+                prefer_json("charge_dc_kw")
+                prefer_json("ev_range_km")
+                prefer_json("charge_time_10_80_min")
                 # infotainment details (copy from _from_json if present)
                 for _c in [
                     "audio_brand","speakers_count","screen_main_in","screen_cluster_in",
@@ -1568,6 +2074,65 @@ def _load_catalog():
                     if j in left.columns:
                         left[_c] = left[j]
                         left.drop(columns=[j], inplace=True, errors="ignore")
+                # Heurísticas: convertir textos comunes a números (capacidad de asientos, zonas de clima, bocinas)
+                try:
+                    import re as _re
+                    import pandas as _pd
+                    def _first_num(text: Any) -> Any:
+                        try:
+                            s = str(text or "")
+                            m = _re.search(r"(\d+[\.,]?\d*)", s)
+                            if not m:
+                                return None
+                            return float(m.group(1).replace(',', '.'))
+                        except Exception:
+                            return None
+                    def _word_to_int(text: Any) -> Any:
+                        try:
+                            s = str(text or "").strip().lower()
+                            m = {
+                                "uno":1, "una":1, "dos":2, "tres":3, "cuatro":4, "cinco":5,
+                                "seis":6, "siete":7, "ocho":8, "nueve":9, "diez":10, "once":11, "doce":12,
+                            }
+                            return m.get(s)
+                        except Exception:
+                            return None
+                    def _coerce_to_int_series(sr: _pd.Series) -> _pd.Series:
+                        def _f(x):
+                            v = _first_num(x)
+                            if v is not None:
+                                try:
+                                    return int(round(float(v)))
+                                except Exception:
+                                    return None
+                            return _word_to_int(x)
+                        return sr.map(_f)
+                    # seats_capacity ← 'capacidad de asientos'
+                    if "seats_capacity" not in left.columns:
+                        left["seats_capacity"] = None
+                    if "capacidad de asientos" in left.columns:
+                        src = _coerce_to_int_series(left["capacidad de asientos"])
+                        mask = _pd.to_numeric(left["seats_capacity"], errors="coerce").isna() & src.notna()
+                        left.loc[mask, "seats_capacity"] = src[mask]
+                    # climate_zones ← 'zonas con control del clima'
+                    if "climate_zones" not in left.columns:
+                        left["climate_zones"] = None
+                    for cand in ["zonas con control del clima", "zonas_control_del_clima", "zonas_clima"]:
+                        if cand in left.columns:
+                            src = _coerce_to_int_series(left[cand])
+                            mask = _pd.to_numeric(left["climate_zones"], errors="coerce").isna() & src.notna()
+                            left.loc[mask, "climate_zones"] = src[mask]
+                    # bocinas: si la columna existe en texto, extraer primer número
+                    if "bocinas" in left.columns:
+                        ser = _coerce_to_int_series(left["bocinas"])
+                        mask = ser.notna()
+                        # Asignar solo donde podamos extraer número (no pisar strings útiles)
+                        try:
+                            left.loc[mask, "bocinas"] = ser[mask]
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
                 # propagate feature flags and pillar scores (copy if not present)
                 for c in cols_to_merge:
                     if c.endswith("_from_json"):
@@ -1578,19 +2143,23 @@ def _load_catalog():
                             left[c] = left[jf]
                     left.drop(columns=[f"{c}_from_json"], inplace=True, errors="ignore")
 
-                # JSON 100% para MY 2024-2026: si hay columnas *_from_json restantes, sobrescribir para esos años
+                # JSON 100% para todas las MY: si hay columnas *_from_json restantes, sobrescribir SIEMPRE
                 try:
-                    if "ano" in left.columns:
-                        yrs = pd.to_numeric(left["ano"], errors="coerce").astype("Int64")
-                        mask = yrs.isin([2024, 2025, 2026])
-                        if mask.any():
-                            json_cols = [c for c in left.columns if c.endswith("_from_json")]
-                            for col in json_cols:
-                                base = col[:-11]
-                                if base not in left.columns:
-                                    left[base] = None
-                                left.loc[mask, base] = left.loc[mask, col]
-                                left.drop(columns=[col], inplace=True, errors="ignore")
+                    json_cols = [c for c in left.columns if c.endswith("_from_json")]
+                    for col in json_cols:
+                        base = col[:-11]
+                        if base not in left.columns:
+                            left[base] = None
+                        left[base] = left[col]
+                        left.drop(columns=[col], inplace=True, errors="ignore")
+                except Exception:
+                    pass
+
+                # Derivar columna visible 'pasajeros' desde seats_capacity si existe
+                try:
+                    if "seats_capacity" in left.columns:
+                        import pandas as _pd
+                        left["pasajeros"] = _pd.to_numeric(left["seats_capacity"], errors="coerce").astype("Int64")
                 except Exception:
                     pass
 
@@ -1873,7 +2442,16 @@ def _load_catalog():
 # ------------------------------- API: /options ---------------------------
 @app.get("/options")
 def get_options(make: Optional[str] = None, model: Optional[str] = None, year: Optional[int] = None) -> Dict[str, Any]:
-    df0 = _load_catalog().copy()
+    """Opciones ligeras para autocompletar.
+
+    Evita cargar el catálogo completo; usa un índice precalculado y solo cae a
+    fuentes pesadas cuando es estrictamente necesario.
+    """
+    df0 = None  # catálogo completo (lazy)
+    try:
+        _ensure_options_index()
+    except Exception:
+        pass
     # Canonicalize incoming params to match dataset
     make = _canon_make(make) if make else make
     model = _canon_model(make, model) if model else model
@@ -1895,18 +2473,19 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
     except Exception:
         pass
 
-    df = df0.copy()
+    df = None  # se cargará bajo demanda si se necesita
     _ensure_options_index()
     idx = _OPTIONS_IDX or {"models": {}, "models_compact": {}}
     # Restrict default option sources to allowed years (2024+). However, to avoid empty brand/model lists,
     # compute top-level makes/models from the full catalog (df0) and apply year filtering only for year-specific lists.
-    try:
-        if "ano" in df.columns:
-            df = df[df["ano"].isin(list(ALLOWED_YEARS))]
-    except Exception:
-        pass
+    if df is not None:
+        try:
+            if "ano" in df.columns:
+                df = df[df["ano"].isin(list(ALLOWED_YEARS))]
+        except Exception:
+            pass
     # If a specific year is requested, filter lists to that year
-    if year is not None and "ano" in df.columns:
+    if year is not None and (df is not None) and "ano" in df.columns:
         try:
             df = df[df["ano"] == int(year)]
         except Exception:
@@ -1915,15 +2494,67 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
     def u(x: Optional[str]) -> Optional[str]:
         return x.upper() if isinstance(x, str) else x
 
-    # Build top-level lists from catalog filtered to allowed years (coverage completa)
+    # Build top-level lists from FULL catalog (df0) to avoid empty brand/model lists
+    # when ALLOWED_YEARS filtering removes too much data. Year-specific lists below
+    # will respect ALLOWED_YEARS, but the global brand/model menus should be complete.
+    makes_all: list[str] = []
+    models_all: list[str] = []
+    # 1) Derivar de índice ligero (rápido)
     try:
-        if pd is not None:
-            makes_all = sorted(map(str, df.get("make", pd.Series(dtype=str)).astype(str).str.upper().dropna().unique().tolist()))
-            models_all = sorted(map(str, df.get("model", pd.Series(dtype=str)).astype(str).str.upper().dropna().unique().tolist()))
-        else:
-            makes_all, models_all = [], []
+        if idx and idx.get("models"):
+            models_all = sorted(list(idx["models"].keys()))
+            mkset = set()
+            for rec in idx["models"].values():
+                for mk in (rec.get("makes") or set()):
+                    mkset.add(str(mk).upper())
+            makes_all = sorted(list(mkset))
     except Exception:
-        makes_all, models_all = [], []
+        pass
+    # 2) Unir con fuentes adicionales (flat/processed/catalog) para cobertura completa
+    if pd is not None:
+        try:
+            makes_set = set(map(str, makes_all))
+            models_set = set(map(str, models_all))
+            # a) flat enriquecido (ligero)
+            try:
+                flat = ROOT / "data" / "enriched" / "vehiculos_todos_flat.csv"
+                if flat.exists():
+                    t = pd.read_csv(flat, usecols=[c for c in ["make","model","ano"] if True], low_memory=True)
+                    t.columns = [str(c).strip().lower() for c in t.columns]
+                    if "make" in t.columns:
+                        makes_set.update(t["make"].astype(str).str.upper().dropna().unique().tolist())
+                    if "model" in t.columns:
+                        models_set.update(t["model"].astype(str).str.upper().dropna().unique().tolist())
+            except Exception:
+                pass
+            # b) processed
+            try:
+                proc = ROOT / "data" / "equipo_veh_limpio_procesado.csv"
+                if proc.exists():
+                    t = pd.read_csv(proc, usecols=["make","model","ano"], low_memory=True)
+                    t.columns = [str(c).strip().lower() for c in t.columns]
+                    if "make" in t.columns:
+                        makes_set.update(t["make"].astype(str).str.upper().dropna().unique().tolist())
+                    if "model" in t.columns:
+                        models_set.update(t["model"].astype(str).str.upper().dropna().unique().tolist())
+            except Exception:
+                pass
+            # c) catálogo principal (solo columnas make/model para evitar carga pesada)
+            try:
+                pcat = _catalog_path()
+                if pcat.exists():
+                    t = pd.read_csv(pcat, usecols=["make","model"], low_memory=True)
+                    t.columns = [str(c).strip().lower() for c in t.columns]
+                    if "make" in t.columns:
+                        makes_set.update(t["make"].astype(str).str.upper().dropna().unique().tolist())
+                    if "model" in t.columns:
+                        models_set.update(t["model"].astype(str).str.upper().dropna().unique().tolist())
+            except Exception:
+                pass
+            makes_all = sorted(list(makes_set))
+            models_all = sorted(list(models_set))
+        except Exception:
+            pass
 
     payload: Dict[str, Any] = {
         "makes": makes_all,
@@ -1933,6 +2564,39 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
         "selected": {"make": u(make), "model": u(model), "year": year},
         "autofill": {},
     }
+
+    def _uniq_versions(arr: list[Any]) -> list[str]:  # type: ignore[name-defined]
+        try:
+            out: Dict[str, str] = {}
+            for v in arr or []:
+                s = str(v or "").strip()
+                if not s:
+                    continue
+                k = s.upper()
+                cur = out.get(k)
+                if cur is None:
+                    out[k] = s
+                    continue
+                # prefer variant with lowercase (mixed case) over ALL CAPS
+                def has_lower(t: str) -> bool:
+                    try:
+                        import re as _re
+                        return bool(_re.search(r"[a-z]", t))
+                    except Exception:
+                        return any(ch.islower() for ch in t)
+                if has_lower(s) and not has_lower(cur):
+                    out[k] = s
+            return list(out.values())
+        except Exception:
+            # fallback: unique preserving order, case-insensitive
+            seen: set[str] = set()
+            res: list[str] = []
+            for v in arr or []:
+                s = str(v or "").strip()
+                k = s.upper()
+                if s and k not in seen:
+                    res.append(s); seen.add(k)
+            return res
 
     def _filter_years(ys: List[int]) -> List[int]:
         try:
@@ -2020,6 +2684,27 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
                                     versions_set.add(str(name))
             except Exception:
                 pass
+        if df0 is None:
+            try:
+                df0 = _load_catalog().copy()
+            except Exception:
+                df0 = None
+        if df0 is not None and len(df0):
+            try:
+                sub_cat = df0.copy()
+                if "make" in sub_cat.columns:
+                    if make:
+                        sub_cat = sub_cat[sub_cat["make"].astype(str).str.upper() == make.upper()]
+                    elif mf:
+                        sub_cat = sub_cat[sub_cat["make"].astype(str).str.upper().isin(mf)]
+                if "model" in sub_cat.columns:
+                    sub_cat = sub_cat[sub_cat["model"].astype(str).str.upper() == target]
+                if "ano" in sub_cat.columns:
+                    cat_years = set(pd.to_numeric(sub_cat["ano"], errors="coerce").dropna().astype(int).tolist())
+                    if cat_years:
+                        years_set = {y for y in years_set if y in cat_years} or cat_years
+            except Exception:
+                pass
         years_all = sorted([y for y in years_set if y in ALLOWED_YEARS])
         mf = sorted(list(mf))
         years = _filter_years(years_all)
@@ -2037,9 +2722,13 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
                 pass
         if mf:
             payload["autofill"]["make_from_model"] = mf[0]
+            if not make and len(mf) == 1:
+                payload["selected"]["make"] = mf[0]
         # Final fallback: derive versions from main catalog for selected filters
-        if year and not payload.get("versions"):
+        if year and not payload.get("versions") and (pd is not None):
             try:
+                if df0 is None:
+                    df0 = _load_catalog().copy()
                 sub2 = df0.copy()
                 if make and "make" in sub2.columns:
                     sub2 = sub2[sub2["make"].astype(str).str.upper() == make.upper()]
@@ -2048,16 +2737,34 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
                 if "ano" in sub2.columns:
                     sub2 = sub2[pd.to_numeric(sub2["ano"], errors="coerce").fillna(0).astype(int) == int(year)]
                 if "version" in sub2.columns:
-                    vlist = sorted(map(str, sub2["version"].dropna().unique().tolist()))
+                    vlist = [str(x) for x in sub2["version"].dropna().tolist()]
+                    vlist = _uniq_versions(vlist)
                     if vlist:
                         payload["versions"] = vlist
             except Exception:
                 pass
 
     if make and not model:
-        sub = df[df["make"].str.upper() == make.upper()]
-        models = sorted(sub["model"].str.upper().dropna().unique().tolist()) if len(sub) else []
-        years_all = sorted(sub.get("ano", pd.Series(dtype=int)).dropna().unique().tolist()) if len(sub) else []
+        sub = df
+        if sub is None and idx:
+            # sin catálogo en memoria: derivar modelos por marca desde el índice
+            try:
+                models = []
+                years_all = []
+                for m, rec in (idx.get("models") or {}).items():
+                    makes = {str(x).upper() for x in rec.get("makes", set())}
+                    if make.upper() in makes:
+                        yrs = set(rec.get("years", set()))
+                        if yrs.intersection(ALLOWED_YEARS):
+                            models.append(m)
+                            years_all.extend(list(yrs))
+                payload = payload  # no-op keep scope
+            except Exception:
+                pass
+        if sub is not None:
+            sub = sub[sub["make"].str.upper() == make.upper()]
+        models = sorted(sub["model"].str.upper().dropna().unique().tolist()) if (sub is not None and len(sub)) else (locals().get('models') or [])
+        years_all = sorted(sub.get("ano", pd.Series(dtype=int)).dropna().unique().tolist()) if (sub is not None and len(sub)) else (locals().get('years_all') or [])
         # Add from index
         try:
             _ensure_options_index()
@@ -2078,6 +2785,13 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
         years = _filter_years(years_all)
         payload["models_for_make"] = models
         payload["years"] = years
+
+    # Dedup de versiones (case-insensitive) para evitar 'LIMITED HEV' y 'Limited HEV'
+    try:
+        if payload.get("versions"):
+            payload["versions"] = _uniq_versions(list(payload.get("versions") or []))
+    except Exception:
+        pass
 
     audit("resp", "/options", query={"make": make, "model": model, "year": year}, body_keys=list(payload.keys()))
     # Save to cache
@@ -2486,12 +3200,33 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 yr = int(row.get("ano")) if row.get("ano") is not None else None
             except Exception:
                 yr = None
-            sub = df[(df.get("make").astype(str).str.upper() == mk) & (df.get("model").astype(str).str.upper() == md)]
+            sub_all = df[(df.get("make").astype(str).str.upper() == mk) & (df.get("model").astype(str).str.upper() == md)]
+            if sub_all.empty:
+                return
+            sub = sub_all.copy()
+            year_used: Optional[int] = None
             if yr is not None and "ano" in sub.columns:
                 try:
-                    sub = sub[pd.to_numeric(sub["ano"], errors="coerce") == int(yr)]
+                    sub_year = sub[pd.to_numeric(sub["ano"], errors="coerce") == int(yr)]
                 except Exception:
-                    pass
+                    sub_year = pd.DataFrame()
+                if not sub_year.empty:
+                    sub = sub_year
+                    year_used = int(yr)
+                else:
+                    try:
+                        cand = sub_all.copy()
+                        cand["__ano_tmp"] = pd.to_numeric(cand["ano"], errors="coerce")
+                        cand = cand.dropna(subset=["__ano_tmp"])
+                        if not cand.empty:
+                            cand["__dist_tmp"] = (cand["__ano_tmp"] - int(yr)).abs()
+                            cand = cand.sort_values(by=["__dist_tmp"]).head(5)
+                            year_used = int(cand.iloc[0]["__ano_tmp"])
+                            sub = cand.drop(columns=["__dist_tmp","__ano_tmp"], errors="ignore")
+                        else:
+                            sub = sub_all
+                    except Exception:
+                        sub = sub_all
             if sub.empty:
                 return
             # Candidate preference: exact version match first
@@ -2527,6 +3262,26 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                     sub = sub.assign(__cov=sub.apply(_nz_count, axis=1)).sort_values(by=["__cov"], ascending=False)
             except Exception:
                 pass
+            try:
+                best_cov = _nz_count(sub.iloc[0]) if len(sub) else 0
+            except Exception:
+                best_cov = 0
+            if best_cov == 0:
+                try:
+                    al_cov = sub_all.copy()
+                    al_cov["__cov_tmp"] = al_cov.apply(_nz_count, axis=1)
+                    al_cov = al_cov[al_cov["__cov_tmp"] > 0]
+                    if not al_cov.empty:
+                        al_cov = al_cov.sort_values(by=["__cov_tmp"], ascending=False)
+                        if "ano" in al_cov.columns and year_used is None:
+                            try:
+                                year_used = int(pd.to_numeric(al_cov.iloc[0]["ano"], errors="coerce"))
+                            except Exception:
+                                pass
+                        sub = al_cov.drop(columns=["__cov_tmp"], errors="ignore")
+                except Exception:
+                    pass
+
             s0 = sub.iloc[0].to_dict()
             for c in feat_cols:
                 if row.get(c) is None:
@@ -2537,6 +3292,11 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                     if s == "":
                         continue
                     row[c] = v
+            try:
+                if year_used is not None and row.get("ano") is not None and "_features_source_year" not in row:
+                    row["_features_source_year"] = int(year_used)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -2862,18 +3622,42 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
             md = _canon_model(mk, row.get("model")) or str(row.get("model") or "").strip().upper()
             vr = str(row.get("version") or "").strip().upper()
             yr = str(row.get("ano") or "").strip()
-            if not (mk and md and vr and yr):
+            if not (mk and md and vr):
                 return
-            pjson = ROOT / "data" / "vehiculos-todos.json"
-            if not pjson.exists():
-                pjson = ROOT / "data" / "vehiculos-todos1.json"
-            if not pjson.exists():
+            entries = _load_vehicle_json_entries()
+            if not entries:
                 return
-            import json as _json, re as _re
-            obj = _json.loads(pjson.read_text(encoding="utf-8"))
-            items = obj.get("vehicles") if isinstance(obj, dict) else (obj if isinstance(obj, list) else [])
-            def up(s):
-                return str(s or "").strip().upper()
+
+            vr_compact = _compact_key(vr)
+
+            hit_entry = None
+            if yr:
+                for ent in entries:
+                    if ent["mk"] == mk and ent["md"] == md and ent["ver"] == vr and ent["year"] == yr:
+                        hit_entry = ent
+                        break
+                if not hit_entry:
+                    for ent in entries:
+                        if ent["mk"] == mk and ent["md"] == md and ent["ver_compact"] == vr_compact and ent["year"] == yr:
+                            hit_entry = ent
+                            break
+            if not hit_entry:
+                for ent in entries:
+                    if ent["mk"] == mk and ent["md"] == md and ent["ver"] == vr:
+                        hit_entry = ent
+                        break
+            if not hit_entry:
+                for ent in entries:
+                    if ent["mk"] == mk and ent["md"] == md and ent["ver_compact"] == vr_compact:
+                        hit_entry = ent
+                        break
+            if not hit_entry:
+                return
+
+            hit = hit_entry["raw"]
+
+            import re as _re
+
             def _to_kml_text(v):
                 try:
                     s = str(v or "").strip().lower()
@@ -2891,20 +3675,6 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     return None
                 return None
-            hit = None
-            for v in items or []:
-                try:
-                    mk2 = up(((v.get("make") or {}).get("name") if isinstance(v.get("make"), dict) else None) or ((v.get("manufacturer") or {}).get("name") if isinstance(v.get("manufacturer"), dict) else ""))
-                    md2 = up((v.get("model") or {}).get("name") if isinstance(v.get("model"), dict) else "")
-                    ver2 = up((v.get("version") or {}).get("name") if isinstance(v.get("version"), dict) else "")
-                    yr2 = str((v.get("version") or {}).get("year") if isinstance(v.get("version"), dict) else "")
-                    if mk2 == mk and md2 == md and ver2 == vr and yr2 == yr:
-                        hit = v
-                        break
-                except Exception:
-                    continue
-            if not hit:
-                return
             # FE
             fe = (hit.get("fuelEconomy") or {}) if isinstance(hit.get("fuelEconomy"), dict) else {}
             ck = _to_kml_text(fe.get("combined"))
@@ -3004,11 +3774,20 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                             yr = int(str(r.get("Año") or r.get("ano") or r.get("AÑO") or "").strip())
                         except Exception:
                             yr = None
-                        try:
-                            raw = str(r.get("service_cost_60k_mxn") or "").replace(",", "").replace("$", "").strip()
-                            val = float(raw)
-                        except Exception:
-                            val = None
+                        # Parse value: allow numeric and textual 'Incluido'
+                        raw = str(r.get("service_cost_60k_mxn") or "").strip()
+                        val = None
+                        if raw != "":
+                            low = raw.lower().strip()
+                            # Accept 'incluido' or similar as 0 (incluido)
+                            if any(tok in low for tok in ("incluido","inclu","gratis","incl.")):
+                                val = 0.0
+                            else:
+                                try:
+                                    raw_num = raw.replace(",", "").replace("$", "")
+                                    val = float(raw_num)
+                                except Exception:
+                                    val = None
                         # Acepta 0 (incluido) y >1; ignora sólo 1 (sentinela) o negativos/NaN
                         if val is None or (val == 1) or (val < 0):
                             continue
@@ -3038,7 +3817,7 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 row["service_cost_60k_mxn"] = float(val)
         except Exception:
             pass
-    for _c in ("caballos_fuerza","longitud_mm","combinado_kml","ciudad_kml","carretera_kml"):
+    for _c in ("caballos_fuerza","longitud_mm","combinado_kml","ciudad_kml","carretera_kml","msrp","precio_transaccion"):
         _fill_from_model(own, _c)
     for _s in ("categoria_combustible_final","tipo_de_combustible_original","body_style","transmision","traccion","driven_wheels","doors","images_default"):
         _fill_from_model_any(own, _s)
@@ -3085,6 +3864,12 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         tt = tco60_total(own)
         if tt is not None:
             own["tco_total_60k_mxn"] = tt
+    # Extra inferences for display completeness
+    try:
+        _infer_hp_from_texts(own)
+        _ensure_audio_speakers(own)
+    except Exception:
+        pass
     if own.get("cost_per_hp_mxn") is None:
         cph = cost_per_hp(own)
         if cph is not None:
@@ -3255,12 +4040,69 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         s = str(v).strip().lower()
         return s in {"true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y"}
 
+    # Infer HP from text fields and ensure audio/speakers fallbacks
+    def _infer_hp_from_texts(r: Dict[str, Any]) -> None:
+        try:
+            cur = r.get("caballos_fuerza")
+            curv = None
+            try:
+                curv = float(cur) if cur is not None and str(cur).strip() != "" else None
+            except Exception:
+                curv = None
+            src = " ".join(str(r.get(k) or "") for k in ("version","version_display","header_description"))
+            s = src.lower()
+            import re as _re
+            hp = None
+            for m in _re.findall(r"(\d{2,4})\s*(?:hp|bhp)\b", s):
+                try:
+                    hp = max(float(hp or 0), float(m))
+                except Exception:
+                    pass
+            for m in _re.findall(r"(\d{2,4})\s*(?:ps|cv)\b", s):
+                try:
+                    hp = max(float(hp or 0), float(m) * 0.98632)
+                except Exception:
+                    pass
+            if hp is not None:
+                if (curv is None) or (hp > curv):
+                    r["caballos_fuerza"] = float(hp)
+        except Exception:
+            pass
+
+    def _ensure_audio_speakers(r: Dict[str, Any]) -> None:
+        try:
+            # speakers_count ← bocinas si no viene
+            if (r.get("speakers_count") in (None, "", 0)) and (r.get("bocinas") not in (None, "")):
+                try:
+                    v = float(r.get("bocinas"))
+                    if v > 0:
+                        r["speakers_count"] = int(round(v))
+                except Exception:
+                    pass
+            # audio_brand ← detectar en 'audio' si no viene
+            if not str(r.get("audio_brand") or "").strip():
+                txt = str(r.get("audio") or "")
+                s = txt.lower()
+                BRANDS = [
+                    'bose','harman kardon','jbl','bang & olufsen','b&o','burmester','beats','alpine',
+                    'meridian','focal','akg','mark levinson','infinity','pioneer','sony','kenwood','dynaudio','rockford'
+                ]
+                for b in BRANDS:
+                    if b in s:
+                        r["audio_brand"] = _canon_audio_brand(b)
+                        break
+            if (str(r.get("audio_brand") or "").strip() == "") or (r.get("speakers_count") in (None, "", 0)):
+                _apply_audio_lookup(r)
+        except Exception:
+            pass
+
     for c in competitors:
         # numeric fallback for comps
         for _c in ("caballos_fuerza","longitud_mm","combinado_kml"):
             _fill_from_model(c, _c)
         for _s in ("categoria_combustible_final","tipo_de_combustible_original"):
             _fill_from_model_any(c, _s)
+        _fill_from_json(c)
         _ensure_service(c)
         _ensure_service_from_catalog(c)
         _ensure_service_from_csv(c)
@@ -3280,6 +4122,12 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         c = ensure_equip_score(c)
         c = ensure_pillars(c)
         c = _attach_monthlies(c)
+        # Extra inferences for display completeness
+        try:
+            _infer_hp_from_texts(c)
+            _ensure_audio_speakers(c)
+        except Exception:
+            pass
         # Calcular/normalizar bono
         b = bonus(c)
         if b is not None:
@@ -3354,6 +4202,7 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
             base_row = own
             comp_row = c
             feature_map = {
+                # ADAS / Seguridad
                 "alerta_colision": "Frenado de emergencia",
                 "sensor_punto_ciego": "Punto ciego",
                 "tiene_camara_punto_ciego": "Cámara punto ciego",
@@ -3361,33 +4210,91 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "asistente_estac_frontal": "Asistente estac. frontal",
                 "asistente_estac_trasero": "Asistente estac. trasero",
                 "control_frenado_curvas": "Frenado en curvas",
+                "rear_cross_traffic": "Tráfico cruzado trasero",
+                "auto_high_beam": "Luces altas automáticas",
+                "adas_lane_keep": "Mantenimiento de carril",
+                "adas_acc": "Crucero adaptativo (ACC)",
+                "rear_side_airbags": "Bolsas laterales traseras",
+                "bolsas_cortina_todas_filas": "Bolsas de cortina (todas las filas)",
+                # Confort / Infoentretenimiento
                 "llave_inteligente": "Llave inteligente",
                 "tiene_pantalla_tactil": "Pantalla táctil",
                 "android_auto": "Android Auto",
                 "apple_carplay": "Apple CarPlay",
+                "wireless_charging": "Cargador inalámbrico",
+                "hud": "Head‑Up Display",
+                "ambient_lighting": "Iluminación ambiental",
+                # Versatilidad / Carrocería
                 "techo_corredizo": "Techo corredizo",
                 "apertura_remota_maletero": "Portón eléctrico",
                 "cierre_automatico_maletero": "Cierre portón",
                 "limpiaparabrisas_lluvia": "Limpia automático",
                 "rieles_techo": "Rieles de techo",
                 "tercera_fila": "3ª fila asientos",
+                # Remolque / Off‑road
                 "enganche_remolque": "Enganche remolque",
                 "preparacion_remolque": "Preparación remolque",
+                "tow_hitch": "Enganche remolque",
+                "tow_prep": "Preparación remolque",
+                "diff_lock": "Bloqueo diferencial",
+                "low_range": "Caja reductora (4L)",
+                # Asientos
                 "asientos_calefaccion_conductor": "Asiento conductor calefacción",
                 "asientos_calefaccion_pasajero": "Asiento pasajero calefacción",
                 "asientos_ventilacion_conductor": "Asiento conductor ventilación",
                 "asientos_ventilacion_pasajero": "Asiento pasajero ventilación",
             }
+            # fallback mapping from JSON feat_* columns when canonical col is missing
+            fallback_by_col = {
+                "alerta_colision": ["feat_aeb"],
+                "sensor_punto_ciego": ["feat_blind"],
+                "tiene_camara_punto_ciego": ["feat_blind","feat_camara"],
+                "camara_360": ["feat_camara_360"],
+                "adas_lane_keep": ["feat_lane"],
+                "adas_acc": ["feat_acc"],
+                "tiene_pantalla_tactil": ["feat_pantalla"],
+                "android_auto": ["feat_android"],
+                "apple_carplay": ["feat_carplay"],
+                "techo_corredizo": ["feat_quemacocos"],
+                "rieles_techo": ["feat_roof_rails"],
+                "enganche_remolque": ["feat_tow"],
+                "diff_lock": ["feat_bloqueo"],
+                "low_range": ["feat_reductora"],
+                "tercera_fila": ["feat_third_row"],
+                # seats comfort
+                "asientos_calefaccion_conductor": ["feat_calefaccion"],
+                "asientos_calefaccion_pasajero": ["feat_calefaccion"],
+                "asientos_ventilacion_conductor": ["feat_ventilacion"],
+                "asientos_ventilacion_pasajero": ["feat_ventilacion"],
+            }
+            def _present(row: Dict[str, Any], main_col: str) -> bool:
+                v = row.get(main_col)
+                if _truthy(v):
+                    return True
+                # numeric truthy (e.g., 1)
+                try:
+                    if v is not None and float(v) > 0:
+                        return True
+                except Exception:
+                    pass
+                # fallbacks
+                for fb in fallback_by_col.get(main_col, []):
+                    vv = row.get(fb)
+                    if _truthy(vv):
+                        return True
+                    try:
+                        if vv is not None and float(vv) > 0:
+                            return True
+                    except Exception:
+                        pass
+                return False
+
             for col, label in feature_map.items():
-                b = base_row.get(col)
-                d = comp_row.get(col)
-                if b is None and d is None:
-                    continue
-                bt = _truthy(b)
-                dt = _truthy(d)
-                if dt and not bt:
+                b_has = _present(base_row, col)
+                d_has = _present(comp_row, col)
+                if d_has and not b_has:
                     diffs["features_plus"].append(label)
-                if bt and not dt:
+                if b_has and not d_has:
                     diffs["features_minus"].append(label)
             # Numeric comparisons
             num_map = [
@@ -3399,6 +4306,8 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 ("usb_c_count", "USB-C"),
                 ("power_12v_count", "Tomas 12V"),
                 ("power_110v_count", "Tomas 110V"),
+                ("climate_zones", "Zonas de clima"),
+                ("seats_capacity", "Capacidad de asientos"),
             ]
             seen_labels = set()
             for col, label in num_map:
@@ -3426,6 +4335,14 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                         diffs["numeric_diffs"].append({"label": label, "own": bn, "comp": dn})
                 except Exception:
                     pass
+        except Exception:
+            pass
+
+        # Excluir rivales sin ventas (YTD = 0) para evitar ruido en comparaciones
+        try:
+            sales_ytd = to_num(c.get("ventas_model_ytd"))
+            if sales_ytd is not None and sales_ytd <= 0:
+                continue
         except Exception:
             pass
 
@@ -3489,35 +4406,172 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
         system_prompt_override = sys_txt or None
         user_template_override = usr_txt or None
 
-    system = system_prompt_override or (
-        "Eres un analista automotriz senior. Tu salida debe ser clara, breve y accionable en español."
-        " Prohibido describir o 'leer' gráficas; NO uses frases como 'la gráfica muestra', 'en el gráfico', etc."
-        " Entrega hallazgos no obvios, palancas y acciones priorizadas a partir de los datos y señales proporcionadas."
-        " Cuantifica SIEMPRE cada punto con cifras concretas (MXN, %, HP, kml) y nombra explícitamente rivales al comparar."
-        " Evita frases genéricas como 'es competitivo' sin números o evidencia; cada bullet debe tener un dato duro."
-        " Responde SIEMPRE en JSON válido (UTF-8, sin Markdown) con dos bloques: \n"
-        "  (a) 'insights' con la estructura estratégica siguiente, y\n"
-        "  (b) 'struct' con claves canónicas + argumentos mínimos para traducción/render sin volver a llamarte.\n"
-        "Esquema de 'insights': {\n"
-        "  \"hallazgos_clave\": string[5..7],\n"
-        "  \"oportunidades\": string[3..5],\n"
-        "  \"riesgos_y_contramedidas\": string[3..5],\n"
-        "  \"acciones_priorizadas\": string[4..6],\n"
-        "  \"preguntas_para_el_equipo\": string[3..4],\n"
-        "  \"supuestos_y_datos_faltantes\": string[2..5]\n"
-        "}\n"
-        "Esquema de 'struct': { sections: [ { id: string, items: [ { key: string, args?: object } ] } ] }\n"
-        "Secciones/keys esperadas: hallazgos_clave→hallazgo{text,evidencia?}, oportunidades→oportunidad{palanca,accion,impacto?,urgencia?},"
-        " riesgos_y_contramedidas→riesgo{text,mitigacion?}, acciones_priorizadas→(accion_p1|accion_p2){text,owner?,cuando?,kpi?},"
-        " preguntas_para_el_equipo→pregunta{text}, supuestos_y_datos_faltantes→supuesto{text}."
-        " Si faltan datos, indica 'N/D' y sugiere cómo obtenerlos. Sin párrafos largos; bullets cortos y accionables."
-    )
+    if system_prompt_override:
+        system = system_prompt_override
+    else:
+        lang_label = {
+            "es": "español",
+            "en": "English",
+            "zh": "Chinese"
+        }
+        lang_name = lang_label.get(lang_req or "", "español")
+        if lang_req == "en":
+            system = (
+                "You are a senior automotive strategist. Write the output in coherent English prose and always from the perspective of our base vehicle ('we'). "
+                "Deliver exactly three short paragraphs (two sentences each): (1) what the combined metrics reveal about our standing, (2) which product, price, and messaging levers we would pull, (3) the risks we monitor and how we react immediately. "
+                "All comparisons must be voiced as 'we' versus each competitor and spell out why it matters. "
+                "Never describe or quote the on-screen charts or restate deltas verbatim; use data to explain causes, trade-offs, or tensions. "
+                "Use figures only when they unlock a fresh implication by crossing metrics (e.g., $/HP with 7 seats, TCO with equipment, sales with positioning). "
+                "Mention audio brand and speaker count only when it creates a differentiated storyline. "
+                "Return valid UTF-8 JSON (no Markdown) with two blocks: (a) 'insights': {hallazgos_clave[5..7], oportunidades[3..5], riesgos_y_contramedidas[3..5], acciones_priorizadas[4..6], preguntas_para_el_equipo[3..4], supuestos_y_datos_faltantes[2..5]} where each entry is a narrative sentence; (b) 'struct' following the canonical section/item schema so the UI can render it."
+            )
+        elif lang_req == "zh":
+            system = (
+                "你是一位资深汽车策略分析师，所有内容必须用中文撰写，并始终以“我们”的视角阐述。"
+                " 请写出三个紧凑段落，每段两句话：(1) 结合多项指标讲出我们与竞品的故事；(2) 点出我们会启动的产品、定价与沟通杠杆；(3) 需要预警的风险以及我们会如何立即应对。"
+                " 所有比较都要以“我们 vs 对手”的措辞呈现，并说明对我们的意义。"
+                " 严禁描述或复述图表，也不要逐字重复图表里的差值，要用数据解释因果、权衡或机会。"
+                " 只有在跨指标产生新含义时才引用数字，例如美元/马力与7座、TCO与装备、销量与定位的联动。"
+                " 仅当品牌及喇叭数量能强化故事时才提及。"
+                " 结果需为 UTF-8 JSON（不要 Markdown）：包含 (a) 'insights'，结构为 hallazgos_clave[5..7]、oportunidades[3..5]、riesgos_y_contramedidas[3..5]、acciones_priorizadas[4..6]、preguntas_para_el_equipo[3..4]、supuestos_y_datos_faltantes[2..5]；(b) 'struct'，遵循既定 section/item 架构以便前端渲染。"
+            )
+        else:
+            system = (
+                "Eres un analista automotriz senior. Escribe la narrativa en español y SIEMPRE desde la perspectiva de nuestro vehículo ('nosotros'). "
+                " Redacta exactamente tres párrafos cortos (dos oraciones cada uno): (1) qué historia cuentan las cifras combinadas al compararnos, (2) qué palancas moveríamos en producto, precio y comunicación, (3) qué riesgos vigilar y cómo reaccionar de inmediato. "
+                " Todas las comparaciones deben narrarse como 'nosotros' frente a cada rival, dejando claro por qué importa. "
+                " Prohibido describir las gráficas o repetir literalmente los deltas; usa los datos para explicar causas, tensiones u oportunidades. "
+                " Usa cifras sólo cuando aporten una implicación nueva al cruzar métricas (p. ej. $/HP con 7 plazas, TCO con equipamiento, ventas con posicionamiento). "
+                " Menciona la marca del audio y el número de bocinas sólo si refuerzan la historia. "
+                " Devuelve JSON UTF-8 (sin Markdown) con dos bloques: (a) 'insights' con las claves {hallazgos_clave[5..7], oportunidades[3..5], riesgos_y_contramedidas[3..5], acciones_priorizadas[4..6], preguntas_para_el_equipo[3..4], supuestos_y_datos_faltantes[2..5]} escritos en narrativa; (b) 'struct' siguiendo el esquema canónico para que el front pueda renderizarlo."
+            )
     # Derivar señales básicas no-obvias para el modelo
     def _to_f(v):
         try:
             return float(v)
         except Exception:
             return None
+
+    def _to_i(v):
+        try:
+            return int(round(float(v)))
+        except Exception:
+            return None
+
+    def _seat_count(row: Dict[str, Any]) -> Optional[int]:
+        keys = [
+            "seats_capacity",
+            "pasajeros",
+            "capacidad_de_asientos",
+            "capacidad_asientos",
+            "capacidad de asientos",
+            "asientos",
+            "plazas",
+            "capacidad",
+        ]
+        word_map = {
+            "dos": 2,
+            "tres": 3,
+            "cuatro": 4,
+            "cinco": 5,
+            "seis": 6,
+            "siete": 7,
+            "ocho": 8,
+        }
+        for key in keys:
+            try:
+                val = row.get(key)
+                if val is None or str(val).strip() == "":
+                    continue
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    n = _to_i(val)
+                    if n and n > 0:
+                        return n
+                s = str(val).strip().lower()
+                if s in word_map:
+                    return word_map[s]
+                n = _to_i(s)
+                if n and n > 0:
+                    return n
+            except Exception:
+                continue
+        try:
+            third_row = str(row.get("tercera_fila") or row.get("third_row") or "").strip().lower()
+            if third_row and third_row not in {"no", "false", "0", "none"}:
+                return 7
+        except Exception:
+            pass
+        return None
+
+    def _has_flag(row: Dict[str, Any], *keys: str) -> bool:
+        truthy = {
+            "true",
+            "1",
+            "si",
+            "sí",
+            "estandar",
+            "estándar",
+            "incluido",
+            "standard",
+            "std",
+            "present",
+            "x",
+            "y",
+            "yes",
+        }
+        for key in keys:
+            try:
+                val = row.get(key)
+                if val is None:
+                    continue
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    if float(val) > 0:
+                        return True
+                s = str(val).strip().lower()
+                if s in truthy:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _short_name(row: Dict[str, Any]) -> str:
+        model = str(row.get("model") or "").strip()
+        make = str(row.get("make") or "").strip()
+        version = str(row.get("version") or "").strip()
+        base = model or make
+        if version:
+            return f"{base} {version}".strip()
+        return base or make or model
+
+    def _ventas(row: Dict[str, Any]) -> Optional[int]:
+        for year in (2025, 2024, 2026):
+            try:
+                val = row.get(f"ventas_ytd_{year}")
+                if val is None:
+                    continue
+                num = _to_i(val)
+                if num is not None:
+                    return num
+            except Exception:
+                continue
+        return None
+
+    def _join_features_text(items: List[str], lang: str) -> str:
+        elems = [s for s in items if s]
+        if not elems:
+            return ""
+        if lang == "zh":
+            return "、".join(elems)
+        if len(elems) == 1:
+            return elems[0]
+        if lang == "en":
+            if len(elems) == 2:
+                return f"{elems[0]} and {elems[1]}"
+            return f"{', '.join(elems[:-1])}, and {elems[-1]}"
+        # default: Spanish-style conjunction
+        if len(elems) == 2:
+            return f"{elems[0]} y {elems[1]}"
+        return f"{', '.join(elems[:-1])} y {elems[-1]}"
     try:
         own_price = _to_f(own.get("precio_transaccion") or own.get("msrp"))
         own_hp = _to_f(own.get("caballos_fuerza"))
@@ -3560,13 +4614,138 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
             "nearest_tx": near_tx,
             "delta_tx_nearest": (near_tx - own_price) if (near_tx is not None and own_price is not None) else None,
         }
+
+        threads: List[Dict[str, str]] = []
+
+        own_tco = _to_f(own.get("tco_total_60k_mxn") or own.get("tco_60k_mxn"))
+        seat_ct = _seat_count(own)
+        has_360 = _has_flag(own, "camara_360", "camera_360", "camara360")
+
+        feature_labels = []
+        if seat_ct is not None and seat_ct >= 7:
+            feature_labels.append({"es": "7 plazas", "en": "7 seats", "zh": "7座"})
+        if has_360:
+            feature_labels.append({"es": "cámara 360°", "en": "360° camera", "zh": "360°全景"})
+
+        cph_delta_pct = None
+        if own_cph is not None and cph_med not in {None, 0}:
+            try:
+                cph_delta_pct = ((own_cph - cph_med) / cph_med) * 100.0
+            except Exception:
+                cph_delta_pct = None
+
+        tco_delta_pct = None
+        if own_tco is not None and tco_med not in {None, 0}:
+            try:
+                tco_delta_pct = ((own_tco - tco_med) / tco_med) * 100.0
+            except Exception:
+                tco_delta_pct = None
+
+        if (
+            cph_delta_pct is not None
+            and cph_delta_pct <= -5.0
+            and tco_delta_pct is not None
+            and tco_delta_pct >= 1.0
+            and feature_labels
+        ):
+            cph_pct = f"{abs(int(round(cph_delta_pct)))}%"
+            tco_pct = f"{abs(int(round(tco_delta_pct)))}%"
+            feat_es = _join_features_text([f["es"] for f in feature_labels], "es")
+            feat_en = _join_features_text([f["en"] for f in feature_labels], "en")
+            feat_zh = _join_features_text([f["zh"] for f in feature_labels], "zh")
+            threads.append({
+                "id": "value_pack",
+                "es": (
+                    f"Nuestro costo por HP es {cph_pct} menor que la media rival y además sumamos {feat_es},"
+                    f" pero el TCO a 60k km queda {tco_pct} más alto → activar paquete de valor para capitalizarlo."
+                ),
+                "en": (
+                    f"Our cost per HP is {cph_pct} lower than the rival median and we add {feat_en},"
+                    f" yet the 60k km TCO sits {tco_pct} higher → push a value-pack offer to convert that gap."
+                ),
+                "zh": (
+                    f"我们的美元/马力比竞品中位数低{cph_pct}，并且提供{feat_zh}，"
+                    f"但6万公里TCO高出{tco_pct} → 启动价值包方案来转化差距。"
+                ),
+            })
+
+        own_sales = _ventas(own)
+        top_comp = None
+        top_sales = None
+        for comp in comps_short:
+            item = comp.get("item") or {}
+            sales = _ventas(item)
+            if sales is None:
+                continue
+            if top_sales is None or sales > top_sales:
+                top_sales = sales
+                top_comp = item
+
+        own_price = _to_f(own.get("precio_transaccion") or own.get("msrp"))
+        if (
+            own_sales is not None
+            and top_comp is not None
+            and top_sales is not None
+            and top_sales > own_sales
+        ):
+            comp_name = _short_name(top_comp) or "el rival líder"
+            comp_price = _to_f(top_comp.get("precio_transaccion") or top_comp.get("msrp"))
+            price_gap_pct = None
+            if own_price and comp_price and comp_price != 0:
+                try:
+                    price_gap_pct = ((own_price - comp_price) / comp_price) * 100.0
+                except Exception:
+                    price_gap_pct = None
+            if price_gap_pct is not None and abs(price_gap_pct) >= 3.0:
+                sales_clause_es = f"Vendemos {own_sales} vs {comp_name} {top_sales}"
+                sales_clause_en = f"We deliver {own_sales} units versus {comp_name} at {top_sales}"
+                sales_clause_zh = f"我们销量是{own_sales}台，对手{comp_name}达到{top_sales}台"
+                gap_pct = f"{abs(int(round(price_gap_pct)))}%"
+                if price_gap_pct > 0:
+                    threads.append({
+                        "id": "premium_gap",
+                        "es": (
+                            f"{sales_clause_es}, aunque estamos {gap_pct} por arriba en precio →"
+                            " reforzar narrativa premium con evidencia de equipamiento y servicio."
+                        ),
+                        "en": (
+                            f"{sales_clause_en}, while pricing {gap_pct} above →"
+                            " double down on premium proof points in messaging."
+                        ),
+                        "zh": (
+                            f"{sales_clause_zh}，售价却高出{gap_pct} →"
+                            " 需要用高价值证据支撑溢价定位。"
+                        ),
+                    })
+                else:
+                    threads.append({
+                        "id": "value_visibility",
+                        "es": (
+                            f"{sales_clause_es}, aun cuando cobramos {gap_pct} por debajo →"
+                            " urge amplificar visibilidad y prueba de valor en piso."
+                        ),
+                        "en": (
+                            f"{sales_clause_en}, even with pricing {gap_pct} below →"
+                            " amplify visibility and proof-of-value to convert traffic."
+                        ),
+                        "zh": (
+                            f"{sales_clause_zh}，即使我们的价格低{gap_pct} →"
+                            " 应加强曝光与价值证明来拉动转换。"
+                        ),
+                    })
+
+        if threads:
+            signals["threads"] = threads
     except Exception:
         signals = {}
+
+    if "threads" not in signals:
+        signals["threads"] = []
 
     # Resúmenes determinísticos de explicación de precio (top 3 rivales)
     explainers = []
     try:
-        for c in comps_short[:3]:
+        for c in comps_short[:4]:
             it = c.get("item") or {}
             try:
                 ex = post_price_explain({"own": own, "comp": it, "use_heuristics": True, "use_regression": True})
@@ -3587,12 +4766,512 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
                     "name": name,
                     "apples": (ex.get("apples_to_apples") if isinstance(ex, dict) else None),
                     "bonus": (ex.get("recommended_bonus") if isinstance(ex, dict) else None),
+                    "explain": (ex if isinstance(ex, dict) else None),
                     "top_driver": top_drv,
                 })
             except Exception:
-                explainers.append({"name": name, "error": True})
+                explainers.append({"name": name, "error": True, "explain": (ex if isinstance(ex, dict) else None)})
     except Exception:
         explainers = []
+
+    # Localized helpers
+    def _fmt_mxn(v, lang: str = "es") -> str:
+        try:
+            n = float(v)
+        except Exception:
+            return "N/D"
+        # keep MXN currency symbol; locale grouping kept simple
+        s = f"$ {int(round(n)):,}"
+        if lang in {"zh"}:
+            s = s.replace(",", ",")
+        return s
+
+    def _tr(lang: str, key: str, **kw) -> str:
+        es = {
+            "analysis_vs": "Análisis vs {name}",
+            "compar_no": "Comparabilidad: No — {motivos}.",
+            "compar_yes": "Comparabilidad: Sí.",
+            "price_above": "Precio: {name} está {delta} por arriba del nuestro.",
+            "price_below": "Precio: {name} está {delta} por debajo del nuestro.",
+            "price_parity": "Precio: paridad de transacción.",
+            "top_driver": "Driver principal del gap: {label} ({sign}{amount}).",
+            "tco_above": "TCO 60k: {name} {delta} por arriba del nuestro.",
+            "tco_below": "TCO 60k: {delta} por debajo del nuestro.",
+            "reco": "Recomendación vs {name}: bono táctico de {amount} o paquete de valor equivalente.",
+        }
+        en = {
+            "analysis_vs": "Analysis vs {name}",
+            "compar_no": "Comparability: No — {motivos}.",
+            "compar_yes": "Comparability: Yes.",
+            "price_above": "Price: {name} is {delta} above ours.",
+            "price_below": "Price: {name} is {delta} below ours.",
+            "price_parity": "Price: transaction parity.",
+            "top_driver": "Top gap driver: {label} ({sign}{amount}).",
+            "tco_above": "TCO 60k: {name} {delta} above ours.",
+            "tco_below": "TCO 60k: {delta} below ours.",
+            "reco": "Recommendation vs {name}: tactical rebate {amount} or equivalent value pack.",
+        }
+        zh = {
+            "analysis_vs": "对比分析：{name}",
+            "compar_no": "同类可比：否 — {motivos}。",
+            "compar_yes": "同类可比：是。",
+            "price_above": "价格：{name} 高于本车 {delta}。",
+            "price_below": "价格：{name} 低于本车 {delta}。",
+            "price_parity": "价格：成交价持平。",
+            "top_driver": "差额主因：{label}（{sign}{amount}）。",
+            "tco_above": "6万公里TCO：{name} 高于本车 {delta}。",
+            "tco_below": "6万公里TCO：低于本车 {delta}。",
+            "reco": "建议（对比 {name}）：战术补贴 {amount} 或等值价值包。",
+        }
+        d = es if lang == "es" else (en if lang == "en" else zh)
+        try:
+            return d.get(key, key).format(**kw)
+        except Exception:
+            return d.get(key, key)
+
+    # Build own-vehicle executive analysis (sections 1..7)
+    def _build_vehicle_analysis() -> list[dict]:
+        out: list[dict] = []
+        try:
+            def _fmt(n):
+                try:
+                    return f"$ {int(round(float(n))):,}".replace(",", ",")
+                except Exception:
+                    return None
+            def _hp(x):
+                try:
+                    v = float(x)
+                    return int(round(v))
+                except Exception:
+                    return None
+            own_price = _to_f(own.get("precio_transaccion") or own.get("msrp"))
+            own_hp = _hp(own.get("caballos_fuerza"))
+            own_len = _to_f(own.get("longitud_mm"))
+            own_tco = _to_f(own.get("tco_total_60k_mxn") or own.get("tco_60k_mxn"))
+            # ventas YTD (prefer 2025)
+            def _ytd(row: Dict[str, Any]) -> int | None:
+                for y in (2025, 2024, 2026):
+                    v = row.get(f"ventas_ytd_{y}")
+                    try:
+                        if v is not None:
+                            return int(float(v))
+                    except Exception:
+                        continue
+                return None
+            own_ytd = _ytd(own)
+            # choose two closest-by price competitors
+            cand = []
+            for c in comps_short:
+                it = c.get("item") or {}
+                p = _to_f(it.get("precio_transaccion") or it.get("msrp"))
+                if p is None or own_price is None:
+                    continue
+                cand.append({"item": it, "abs": abs(p-own_price)})
+            cand = sorted(cand, key=lambda x: x["abs"])[:2]
+            c1 = (cand[0]["item"] if len(cand)>=1 else {}) or {}
+            c2 = (cand[1]["item"] if len(cand)>=2 else {}) or {}
+            def _name(r):
+                s = f"{str(r.get('make') or '').strip()} {str(r.get('model') or '').strip()}".strip()
+                if r.get("version"): s += f" {str(r.get('version'))}"
+                return s
+            def _short(r):
+                m = (r.get('model') or r.get('make') or '').strip()
+                v = (r.get('version') or '').strip()
+                return (f"{m} {v}" if v else m).strip()
+            # 1) Fotografía ejecutiva
+            title1 = f"1) Fotografía ejecutiva ({_name(own)} {int(own.get('ano') or 0) if own.get('ano') else ''})".strip()
+            sec1 = {"title": title1, "items": []}
+            if own_price is not None:
+                hints = []
+                for r in [c1, c2]:
+                    try:
+                        p = _to_f(r.get("precio_transaccion") or r.get("msrp"))
+                        if p is None: continue
+                        if abs(p-own_price) <= (own_price*0.01):
+                            hints.append(f"pareado con {r.get('model') or r.get('make')}")
+                        elif p > own_price:
+                            hints.append(f"debajo de {r.get('model') or r.get('make')}" )
+                        else:
+                            hints.append(f"encima de {r.get('model') or r.get('make')}" )
+                    except Exception:
+                        pass
+                note = ("; ".join(hints)) if hints else ""
+                sec1["items"].append({"key": "line", "args": {"text": f"Precio transacción: {_fmt(own_price)} MXN {('('+note+')') if note else ''}"}})
+            # Potencia / tren
+            drv = _drivetrain(own) or ""
+            fb = _fuel_bucket(own)
+            # Intentar obtener cadena de motor (e.g., 3.0L V6)
+            def _motor_str(row: Dict[str, Any]) -> str | None:
+                try:
+                    s = str(row.get("motor") or row.get("engine") or "").strip()
+                    if s:
+                        return s
+                    # a veces viene en versión
+                    ver = str(row.get("version") or "")
+                    import re as _re
+                    m = _re.search(r"([0-9]\.?[0-9])\s*L.*?(V\d|En\s*L[ií]nea\d|I\d)", ver, flags=_re.IGNORECASE)
+                    if m:
+                        return f"{m.group(1)}L {m.group(2).upper()}"
+                except Exception:
+                    pass
+                return None
+            parts = []
+            mot = _motor_str(own)
+            if mot: parts.append(mot)
+            if fb in {"HEV","PHEV","BEV"}: parts.append(fb)
+            if own_hp is not None: parts.append(f"{own_hp} hp")
+            if drv: parts.append(drv)
+            if parts:
+                sec1["items"].append({"key": "line", "args": {"text": f"Potencia / tren motor: {'; '.join(parts)}."}})
+            # Pasajeros: intenta número explícito, si no heurística por tercera fila
+            def _seats(row: Dict[str, Any]) -> int | None:
+                try:
+                    v = row.get("seats_capacity") or row.get("pasajeros")
+                    if v is not None:
+                        vv = int(float(v))
+                        if vv > 0:
+                            return vv
+                except Exception:
+                    pass
+                keys = [
+                    "capacidad_de_asientos","capacidad_asientos","capacidad de asientos","asientos","plazas","capacidad"
+                ]
+                for k in keys:
+                    v = row.get(k)
+                    try:
+                        if v is None: continue
+                        s = str(v).strip().lower()
+                        if s in {"no disponible","nd","n/d","-",""}: continue
+                        # palabras → número
+                        mapping = {"dos":2,"tres":3,"cuatro":4,"cinco":5,"seis":6,"siete":7}
+                        if s in mapping: return mapping[s]
+                        n = int(float(s))
+                        if n>0: return n
+                    except Exception:
+                        continue
+                try:
+                    flag = str(row.get("tercera_fila") or row.get("third_row") or "").strip().lower()
+                    if flag and flag not in {"no","false","0","none"}: return 7
+                except Exception:
+                    pass
+                return None
+            seats = _seats(own) or 5
+            if own_len is not None:
+                sec1["items"].append({"key": "line", "args": {"text": f"Espacio / formato: {seats} pasajeros, {int(own_len)} mm de largo."}})
+            # Electrificación (si aplica)
+            try:
+                if fb in {"hev","phev","bev"}:
+                    bat = _to_f(own.get("battery_kwh"))
+                    ac = _to_f(own.get("charge_ac_kw"))
+                    dc = _to_f(own.get("charge_dc_kw"))
+                    rng = _to_f(own.get("ev_range_km"))
+                    parts_ev = []
+                    if bat: parts_ev.append(f"batería {int(round(bat))} kWh")
+                    if rng: parts_ev.append(f"autonomía ~{int(round(rng))} km")
+                    pwr = []
+                    if ac: pwr.append(f"AC {int(round(ac))} kW")
+                    if dc: pwr.append(f"DC {int(round(dc))} kW")
+                    if pwr:
+                        parts_ev.append("carga " + ", ".join(pwr))
+                    if parts_ev:
+                        sec1["items"].append({"key": "line", "args": {"text": f"Electrificación: {'; '.join(parts_ev)}."}})
+            except Exception:
+                pass
+            # Valor técnico clave (precio/HP)
+            if own_hp and own_price:
+                own_cph = own_price/own_hp if own_hp>0 else None
+                c1_cph = (_to_f(c1.get('precio_transaccion') or c1.get('msrp')) or 0)/(_hp(c1.get('caballos_fuerza')) or 1) if c1 else None
+                c2_cph = (_to_f(c2.get('precio_transaccion') or c2.get('msrp')) or 0)/(_hp(c2.get('caballos_fuerza')) or 1) if c2 else None
+                comp_text = ""
+                try:
+                    if c1_cph and c2_cph:
+                        m1 = _short(c1)
+                        m2 = _short(c2)
+                        comp_text = f" (vs {m1} {_fmt(c1_cph)} y {m2} {_fmt(c2_cph)})"
+                except Exception:
+                    pass
+                sec1["items"].append({"key": "line", "args": {"text": f"Valor técnico clave: {_fmt(own_cph)} MXN por HP{comp_text}."}})
+            # TCO 60k
+            if own_tco is not None:
+                t1 = _to_f(c1.get("tco_total_60k_mxn") or c1.get("tco_60k_mxn")) if c1 else None
+                t2 = _to_f(c2.get("tco_total_60k_mxn") or c2.get("tco_60k_mxn")) if c2 else None
+                comp_tco = ""
+                try:
+                    if t1 and t2:
+                        m1 = _short(c1)
+                        m2 = _short(c2)
+                        comp_tco = f" (vs {m1} {_fmt(t1)}; vs {m2} {_fmt(t2)})"
+                except Exception:
+                    pass
+                sec1["items"].append({"key": "line", "args": {"text": f"TCO 60k km: {_fmt(own_tco)}{comp_tco}."}})
+            # Warranty summary (if present)
+            try:
+                fm = _to_f(own.get("warranty_full_months"))
+                fk = _to_f(own.get("warranty_full_km"))
+                pm = _to_f(own.get("warranty_powertrain_months"))
+                if fm or fk or pm:
+                    txt = []
+                    if fm: txt.append(f"{int(fm)} meses")
+                    if fk: txt.append(f"{int(fk)} km")
+                    base = " ".join(txt) if txt else None
+                    if base and pm:
+                        sec1["items"].append({"key": "line", "args": {"text": f"Garantía: {base}; tren motor {int(pm)} meses."}})
+                    elif base:
+                        sec1["items"].append({"key": "line", "args": {"text": f"Garantía: {base}."}})
+            except Exception:
+                pass
+            # YTD
+            if own_ytd is not None:
+                y1 = _ytd(c1) if c1 else None
+                y2 = _ytd(c2) if c2 else None
+                if y1 is not None or y2 is not None:
+                    sec1["items"].append({"key": "line", "args": {"text": f"YTD 2025: {own_ytd} unidades{(f' (vs { _short(c1)} {y1}; vs { _short(c2)} {y2})' if (y1 is not None and y2 is not None) else '')}."}})
+            out.append(sec1)
+
+            # 2) ¿Se justifica el precio vs rivales?
+            sec2 = {"title": "2) ¿Se justifica el precio vs rivales?", "items": []}
+            # Mensaje de síntesis y bullets
+            if own_hp and _hp(c1.get('caballos_fuerza')) and _hp(c2.get('caballos_fuerza')):
+                dhp1 = own_hp - _hp(c1.get('caballos_fuerza'))
+                dhp2 = own_hp - _hp(c2.get('caballos_fuerza'))
+                try:
+                    pct1 = (dhp1 / _hp(c1.get('caballos_fuerza'))) * 100.0 if _hp(c1.get('caballos_fuerza')) else None
+                    pct2 = (dhp2 / _hp(c2.get('caballos_fuerza'))) * 100.0 if _hp(c2.get('caballos_fuerza')) else None
+                except Exception:
+                    pct1 = pct2 = None
+                lead = "Sí, por desempeño y tamaño; vigilar eficiencia y confort."  # resumen
+                sec2["items"].append({"key": "line", "args": {"text": lead}})
+                sec2["items"].append({"key": "bul", "args": {"text": f"Desempeño: {('+' if dhp1>=0 else '')}{dhp1} hp vs { _short(c1)}{(f' ({pct1:.0f}%)' if pct1 is not None else '')} y {('+' if dhp2>=0 else '')}{dhp2} hp vs { _short(c2)}{(f' ({pct2:.0f}%)' if pct2 is not None else '')}."}})
+            if own_len:
+                sec2["items"].append({"key": "bul", "args": {"text": "Tamaño/versatilidad: mayor longitud y 7 plazas → más presencia y habitabilidad."}})
+            # Seguridad/ADAS (blind spot / 360)
+            def _t(x):
+                try:
+                    return 1 if str(x).strip().lower() in {"true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y"} else 0
+                except Exception:
+                    return 0
+            try:
+                bs = _t(own.get("sensor_punto_ciego"))
+                c360 = _t(own.get("camara_360"))
+                if bs or c360:
+                    falt = []
+                    if not bs: falt.append("Blind Spot")
+                    if not c360: falt.append("360°")
+                    if falt:
+                        sec2["items"].append({"key": "bul", "args": {"text": f"Seguridad/ADAS: falta {', '.join(falt)} vs algunos rivales."}})
+            except Exception:
+                pass
+            # Pilares: confort y eficiencia
+            try:
+                pc = _to_f(own.get("equip_p_comfort"))
+                ec = _to_f(own.get("equip_p_efficiency"))
+                for lab, key in [("Confort","equip_p_comfort"),("Eficiencia","equip_p_efficiency")]:
+                    diffs = []
+                    for t in [c1, c2]:
+                        vt = _to_f(t.get(key))
+                        if vt is not None and pc is not None:
+                            diffs.append(vt - pc)
+                    if len(diffs)==2:
+                        s = f"{lab}: rivales +{diffs[0]:.1f} y +{diffs[1]:.1f} pts; su TCO queda ~{abs((own_tco or 0)-( (_to_f(c1.get('tco_total_60k_mxn')) or 0) ))/ (own_tco or 1) * 100:.1f}% abajo (aprox.)."
+                        sec2["items"].append({"key": "bul", "args": {"text": s}})
+            except Exception:
+                pass
+            sec2["items"].append({"key": "line", "args": {"text": "Conclusión: defender precio por potencia, 7 plazas y 4x4; cerrar brecha con 2–3 quick wins de equipamiento y bono pequeño."}})
+            out.append(sec2)
+
+            # 3) Recomendación de bono (guardrails)
+            sec3 = {"title": "3) Recomendación de bono (guardrails)", "items": []}
+            # Usar gap de TCO (promedio vs 2 comps) y sugerir 30–60% de ese gap
+            gaps = []
+            for t in [c1, c2]:
+                tc = _to_f(t.get("tco_total_60k_mxn") or t.get("tco_60k_mxn"))
+                if own_tco is not None and tc is not None:
+                    gaps.append(own_tco - tc)
+            if gaps:
+                avg_gap = sum(gaps)/len(gaps)
+                lo = max(15000, min(40000, int(round(abs(avg_gap)*0.3, -2))))
+                hi = max(lo, min(45000, int(round(abs(avg_gap)*0.6, -2))))
+                sec3["items"].append({"key": "line", "args": {"text": f"Propuesta: bono táctico {_fmt(lo)}–{_fmt(hi)} o paquete valor equivalente (accesorios + mantenimiento)."}})
+            out.append(sec3)
+
+            # 4) Equipo a añadir (alto impacto / bajo costo)
+            sec4 = {"title": "4) Equipo a añadir (alto impacto / costo contenido)", "items": []}
+            try:
+                # Tomar features que rivales tienen y base no, de los diffs del primer competidor
+                diffs0 = (comps[0].get("diffs") if isinstance(comps[0], dict) else {}) if comps else {}
+                plus = (diffs0.get("features_plus") or [])[:5]  # ellos tienen
+                for f in plus:
+                    sec4["items"].append({"key": "bul", "args": {"text": f}})
+            except Exception:
+                pass
+            out.append(sec4)
+
+            # 5) Mensajes para piso de ventas / marketing
+            sec5 = {"title": "5) Mensajes para piso de ventas / marketing", "items": []}
+            if own_hp and drv:
+                lead_power = "líder claro de potencia" if (own_hp and _hp(c1.get('caballos_fuerza')) and _hp(c2.get('caballos_fuerza')) and own_hp>1.15*max(_hp(c1.get('caballos_fuerza')), _hp(c2.get('caballos_fuerza')))) else "potencia que se siente"
+                sec5["items"].append({"key": "bul", "args": {"text": f"{lead_power}: {own_hp} hp y {drv}."}})
+            sec5["items"].append({"key": "bul", "args": {"text": "7 plazas + 360° + Blind Spot."}})
+            sec5["items"].append({"key": "bul", "args": {"text": "Costo de propiedad bajo control: paquete de valor que compensa TCO."}})
+            if fb == "HEV":
+                sec5["items"].append({"key": "bul", "args": {"text": "MHEV optimizado: suavidad y refinamiento, no solo ahorro."}})
+            out.append(sec5)
+
+            # 6) Posicionamiento competitivo rápido
+            sec6 = {"title": "6) Posicionamiento competitivo rápido", "items": []}
+            if c1:
+                sec6["items"].append({"key": "line", "args": {"text": f"Vs {c1.get('make')} {c1.get('model')}: Ganamos en hp/$ y 7 plazas; perdemos en confort y TCO. Acción: portón eléctrico + clima multizona + bono { _fmt(lo) if 'lo' in locals() else '$20,000' }–{ _fmt(hi) if 'hi' in locals() else '$35,000' }."}})
+            if c2:
+                sec6["items"].append({"key": "line", "args": {"text": f"Vs {c2.get('make')} {c2.get('model')}: Ganamos en $/HP y 7 plazas; perdemos en eficiencia/badge. Acción: mantener paridad de transacción con pack valor; vender capacidad y potencia."}})
+            out.append(sec6)
+
+            # 7) Metas comerciales (8–12 semanas)
+            sec7 = {"title": "7) Metas comerciales (8–12 semanas)", "items": []}
+            sec7["items"].append({"key": "bul", "args": {"text": "Ejecutar bono/pack valor y medir efecto en tasa de cierre."}})
+            sec7["items"].append({"key": "bul", "args": {"text": "Introducir quick-wins de equipamiento (portón, clima multizona) si aplica."}})
+            sec7["items"].append({"key": "bul", "args": {"text": "KPIs: win-rate vs líder, pruebas de manejo, adjuntos de pack valor."}})
+            out.append(sec7)
+        except Exception:
+            pass
+        return out
+
+    # Build per-competitor sections (1-1 deep dives)
+    def _build_comp_sections() -> list[dict]:
+        out: list[dict] = []
+        try:
+            for i, c in enumerate(comps_short):
+                it = (c.get("item") if isinstance(c, dict) else {}) or {}
+                deltas = (c.get("deltas") if isinstance(c, dict) else {}) or {}
+                name = f"{str(it.get('make') or '').strip()} {str(it.get('model') or '').strip()}".strip()
+                if it.get("version"):
+                    name += f" – {it.get('version')}"
+                if it.get("ano"):
+                    name += f" ({it.get('ano')})"
+                ex = explainers[i].get("explain") if (i < len(explainers)) else None
+                apples = (ex.get("apples_to_apples") if isinstance(ex, dict) else None)
+                decomp = (ex.get("decomposition") if isinstance(ex, dict) else None) or []
+                # map components by label
+                comp_map = {}
+                try:
+                    for d in decomp:
+                        k = str(d.get("componente") or "").lower()
+                        comp_map[k] = d
+                except Exception:
+                    pass
+                def _delta(key: str) -> float | None:
+                    try:
+                        ent = deltas.get(key) or {}
+                        v = ent.get("delta")
+                        return float(v) if v is not None else None
+                    except Exception:
+                        return None
+                items = []
+                # resumen
+                items.append({"key": "resumen", "args": {"make": it.get("make"), "model": it.get("model"), "version": it.get("version"), "ano": it.get("ano")}})
+                # apples flag
+                if apples is not None:
+                    items.append({"key": "apples_flag", "args": {"ok": bool(apples.get("ok")), "motivos": " • ".join(apples.get("motivos_no") or [])}})
+                # Δ precio (TX)
+                dp = _delta("precio_transaccion") or _delta("msrp")
+                if dp is not None:
+                    items.append({"key": "delta_precio", "args": {"mxn": dp}})
+                # efectos desde decomposition si existen
+                def _comp_mxn(label_sub: str) -> float | None:
+                    for k, d in comp_map.items():
+                        if label_sub in k:
+                            try:
+                                return float(d.get("monto"))
+                            except Exception:
+                                return None
+                    return None
+                mx_hp = _comp_mxn("hp")
+                if mx_hp is not None:
+                    items.append({"key": "efecto_hp", "args": {"mxn": mx_hp, "dhp": _delta("caballos_fuerza")}})
+                mx_trac = _comp_mxn("tracci")
+                if mx_trac is not None:
+                    items.append({"key": "efecto_awd", "args": {"mxn": mx_trac}})
+                mx_prop = _comp_mxn("propuls")
+                if mx_prop is not None:
+                    items.append({"key": "efecto_propulsion", "args": {"mxn": mx_prop}})
+                mx_eq = _comp_mxn("equip")
+                if mx_eq is not None:
+                    items.append({"key": "efecto_equipo", "args": {"mxn": mx_eq}})
+                mx_dim = _comp_mxn("dimens")
+                if mx_dim is not None:
+                    items.append({"key": "efecto_dim", "args": {"mxn": mx_dim}})
+                mx_res = _comp_mxn("no explic")
+                if mx_res is not None:
+                    items.append({"key": "residual", "args": {"mxn": mx_res}})
+                # bono sugerido
+                try:
+                    bon = (ex.get("recommended_bonus") or {}).get("mxn") if isinstance(ex, dict) else None
+                    if isinstance(bon, (int,float)) and bon>0:
+                        items.append({"key": "bono_sugerido", "args": {"mxn": bon}})
+                except Exception:
+                    pass
+                # TCO 60k
+                try:
+                    items.append({"key": "tco_60k", "args": {"service": it.get("service_cost_60k_mxn"), "fuel": it.get("fuel_cost_60k_mxn")}})
+                except Exception:
+                    pass
+                out.append({"id": "competidor", "title": name, "items": items})
+
+                # Análisis narrativo 1‑a‑1 inmediatamente después
+                try:
+                    lines: list[str] = []
+                    # Comparabilidad
+                    if apples is not None and apples.get("ok") is False:
+                        mot = "; ".join(apples.get("motivos_no") or [])
+                        if mot:
+                            lines.append(_tr(lang_req or 'es', 'compar_no', motivos=mot))
+                    elif apples is not None and apples.get("ok") is True:
+                        lines.append(_tr(lang_req or 'es', 'compar_yes'))
+                    # Precio relativo
+                    own_tx = _to_f(own.get("precio_transaccion") or own.get("msrp"))
+                    comp_tx = _to_f(it.get("precio_transaccion") or it.get("msrp"))
+                    if own_tx is not None and comp_tx is not None:
+                        diff = comp_tx - own_tx
+                        if diff > 0:
+                            lines.append(_tr(lang_req or 'es', 'price_above', name=name, delta=_fmt_mxn(diff, lang_req)))
+                        elif diff < 0:
+                            lines.append(_tr(lang_req or 'es', 'price_below', name=name, delta=_fmt_mxn(abs(diff), lang_req)))
+                        else:
+                            lines.append(_tr(lang_req or 'es', 'price_parity'))
+                    # Driver principal
+                    try:
+                        valid = [d for d in decomp if isinstance(d, dict)]
+                        if valid:
+                            top = sorted(valid, key=lambda d: abs(float(d.get("monto") or 0)), reverse=True)[0]
+                            lbl = str(top.get("componente") or "").strip()
+                            m = float(top.get("monto") or 0)
+                            sign = "+" if m>0 else "−"
+                            lines.append(_tr(lang_req or 'es', 'top_driver', label=lbl, sign=sign, amount=_fmt_mxn(abs(m), lang_req)))
+                    except Exception:
+                        pass
+                    # TCO comparado
+                    own_tco = _to_f(own.get("tco_total_60k_mxn") or own.get("tco_60k_mxn"))
+                    comp_tco = _to_f(it.get("tco_total_60k_mxn") or it.get("tco_60k_mxn"))
+                    if own_tco is not None and comp_tco is not None:
+                        d = comp_tco - own_tco
+                        if d>0:
+                            lines.append(_tr(lang_req or 'es', 'tco_above', name=name, delta=_fmt_mxn(d, lang_req)))
+                        elif d<0:
+                            lines.append(_tr(lang_req or 'es', 'tco_below', delta=_fmt_mxn(abs(d), lang_req)))
+                    # Recomendación puntual
+                    try:
+                        bon = (ex.get("recommended_bonus") or {}).get("mxn") if isinstance(ex, dict) else None
+                        if isinstance(bon, (int,float)) and bon>0:
+                            lines.append(_tr(lang_req or 'es', 'reco', name=name, amount=_fmt_mxn(bon, lang_req)))
+                    except Exception:
+                        pass
+                    if lines:
+                        out.append({"id": "analisis_vs", "title": _tr(lang_req or 'es', 'analysis_vs', name=name), "items": [{"key": "line", "args": {"text": ln}} for ln in lines]})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return out
+
 
     # Construir mensaje de usuario
     user = {
@@ -3620,7 +5299,12 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Construir clave estable del análisis
     try:
         import hashlib as _hash
-        cache_key = _hash.sha1(_json.dumps({"own": own, "comps": comps_short}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        # Permitir forzar regeneración desde el cliente: incluir 'refresh' en la clave
+        refresh = payload.get("refresh") or payload.get("cache_bust")
+        cache_basis = {"own": own, "comps": comps_short, "refresh": refresh}
+        cache_key = _hash.sha256(
+            _json.dumps(cache_basis, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
     except Exception:
         cache_key = None
     if not hasattr(post_insights, "_cache"):
@@ -3636,47 +5320,315 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Deterministic fallback (sin IA) para no dejar el bloque vacío
     def _deterministic_struct() -> Dict[str, Any]:
-        secs: list[dict] = []
-        # Hallazgos clave (precio y drivers)
-        items_h: list[dict] = []
-        try:
-            for ex in (explainers or [])[:3]:
-                name = ex.get("name") or "Competidor"
-                td = ex.get("top_driver") or {}
-                comp = str(td.get("componente") or "ΔPrecio")
-                monto = float(td.get("monto") or 0)
-                items_h.append({"key": "hallazgo", "args": {"text": f"{name}: driver principal {comp} por $ {int(round(monto)):,}"}})
-        except Exception:
-            pass
-        if not items_h:
-            items_h = [{"key": "hallazgo", "args": {"text": "Sin IA: comparación realizada; ΔTX y drivers disponibles en el bloque de explicación de precio."}}]
-        secs.append({"id": "hallazgos_clave", "items": items_h})
-        # Oportunidades (bono / posicionamiento)
-        items_o: list[dict] = []
-        try:
-            for ex in (explainers or [])[:2]:
-                name = ex.get("name") or "Competidor"
-                b = (ex.get("bonus") or {}).get("mxn")
-                if isinstance(b, (int,float)) and b>0:
-                    items_o.append({"key": "oportunidad", "args": {"palanca": f"Bono vs {name}", "accion": f"Evaluar bono ~$ {int(round(b)):,}", "impacto": "Cerrar ΔTX", "urgencia": "Alta"}})
-        except Exception:
-            pass
-        if not items_o:
-            items_o = [{"key": "oportunidad", "args": {"palanca": "Financiamiento/bono táctico", "accion": "A/B por plaza", "impacto": "Conversión", "urgencia": "Media"}}]
-        secs.append({"id": "oportunidades", "items": items_o})
-        # Riesgos
-        items_r = [{"key": "riesgo", "args": {"text": "ΔPrecio no explicado alto; riesgo de percepción de sobreprecio", "mitigacion": "Bono/tasa + paquete de valor"}}]
-        secs.append({"id": "riesgos_y_contramedidas", "items": items_r})
+        from collections import Counter
+
+        def _fmt_money(v: Optional[float]) -> str:
+            return _fmt_mxn(v) if v is not None else "N/D"
+
+        def _fmt_abs_money(v: Optional[float]) -> str:
+            if v is None:
+                return "N/D"
+            return _fmt_mxn(abs(v))
+
+        def _fmt_delta_money(v: Optional[float]) -> str:
+            if v is None:
+                return "±N/D"
+            if abs(v) < 1:
+                return "±$ 0"
+            sign = "+" if v > 0 else ("−" if v < 0 else "±")
+            return f"{sign}{_fmt_mxn(abs(v))}"
+
+        def _fmt_hp(v: Optional[float]) -> str:
+            if v is None:
+                return "N/D"
+            try:
+                return f"{int(round(v))} hp"
+            except Exception:
+                return "N/D"
+
+        def _fmt_delta_hp(v: Optional[float]) -> str:
+            if v is None:
+                return "±0 hp"
+            sign = "+" if v > 0 else ("−" if v < 0 else "±")
+            return f"{sign}{abs(int(round(v)))} hp"
+
+        def _fmt_pct(v: Optional[float]) -> str:
+            if v is None:
+                return "N/D"
+            sign = "+" if v > 0 else ("−" if v < 0 else "±")
+            return f"{sign}{abs(round(v, 1)):.1f} pts"
+
+        def _fmt_match(v: Optional[float]) -> str:
+            if v is None:
+                return "N/D"
+            return f"{round(v, 0):.0f}%"
+
+        def _join_feats(arr: list[str]) -> str:
+            vals = [str(x) for x in arr if x]
+            return ", ".join(vals[:2]) if vals else "equipamiento adicional"
+
+        own_price = _to_f(own.get("precio_transaccion") or own.get("msrp"))
+        own_hp = _to_f(own.get("caballos_fuerza"))
+        own_tco = _to_f(own.get("tco_total_60k_mxn") or own.get("tco_60k_mxn"))
+        own_fuel = _to_f(own.get("fuel_cost_60k_mxn"))
+        own_score = _to_f(own.get("equip_score"))
+
+        comps_full: list[Dict[str, Any]] = []
+        for entry in (comp_json.get("competitors") or []):
+            item = entry.get("item") or {}
+            deltas = entry.get("deltas") or {}
+            diffs = entry.get("diffs") or {}
+            mk = str(item.get("make") or "").strip()
+            md = str(item.get("model") or "").strip()
+            ver = str(item.get("version_display") or item.get("version") or "").strip()
+            name_parts = [p for p in [mk, md, ver] if p]
+            name = " ".join(name_parts) or (mk or md or "Competidor")
+            short = (md or mk or name).strip()
+            price = _to_f(item.get("precio_transaccion") or item.get("msrp"))
+            hp = _to_f(item.get("caballos_fuerza"))
+            tco = _to_f(item.get("tco_total_60k_mxn") or item.get("tco_60k_mxn"))
+            fuel = _to_f(item.get("fuel_cost_60k_mxn"))
+            equip_gap = _to_f(item.get("equip_over_under_pct"))
+            match_pct = _to_f(item.get("equip_match_pct"))
+            sales = _to_f(item.get("ventas_model_ytd"))
+            tx_gap = price - own_price if (price is not None and own_price is not None) else None
+            hp_gap = hp - own_hp if (hp is not None and own_hp is not None) else None
+            tco_gap = tco - own_tco if (tco is not None and own_tco is not None) else None
+            fuel_gap = fuel - own_fuel if (fuel is not None and own_fuel is not None) else None
+            comps_full.append({
+                "name": name,
+                "short": short,
+                "price": price,
+                "hp": hp,
+                "tco": tco,
+                "fuel": fuel,
+                "equip_gap": equip_gap,
+                "match_pct": match_pct,
+                "sales": sales,
+                "tx_gap": tx_gap,
+                "hp_gap": hp_gap,
+                "tco_gap": tco_gap,
+                "fuel_gap": fuel_gap,
+                "features_plus": diffs.get("features_plus") or [],
+                "features_minus": diffs.get("features_minus") or [],
+                "deltas": deltas,
+            })
+
+        plus_counter: Counter[str] = Counter()
+        minus_counter: Counter[str] = Counter()
+        for info in comps_full:
+            plus_counter.update([f for f in info["features_plus"] if f])
+            minus_counter.update([f for f in info["features_minus"] if f])
+
+        sections: list[dict] = []
+
+        # Hallazgos clave
+        hallazgos: list[dict] = []
+        ordered = sorted(
+            comps_full,
+            key=lambda x: (
+                abs(x["tx_gap"]) if x.get("tx_gap") is not None else (
+                    abs(x["tco_gap"]) if x.get("tco_gap") is not None else 0.0
+                )
+            ),
+            reverse=True,
+        )
+        for info in ordered[:3]:
+            bits: list[str] = []
+            if info.get("price") is not None:
+                if info.get("tx_gap") is not None:
+                    bits.append(f"TX {_fmt_money(info['price'])} ({_fmt_delta_money(info['tx_gap'])})")
+                else:
+                    bits.append(f"TX {_fmt_money(info['price'])}")
+            if info.get("hp") is not None:
+                if info.get("hp_gap") is not None:
+                    bits.append(f"HP {_fmt_hp(info['hp'])} ({_fmt_delta_hp(info['hp_gap'])})")
+                else:
+                    bits.append(f"HP {_fmt_hp(info['hp'])}")
+            if info.get("equip_gap") is not None:
+                bits.append(f"Equip {_fmt_pct(info['equip_gap'])}")
+            elif info.get("match_pct") is not None:
+                bits.append(f"Match equip {_fmt_match(info['match_pct'])}")
+            if info.get("tco_gap") is not None:
+                bits.append(f"ΔTCO {_fmt_delta_money(info['tco_gap'])}")
+            if info.get("fuel_gap") is not None:
+                bits.append(f"ΔFuel 60k {_fmt_delta_money(info['fuel_gap'])}")
+            if info.get("sales") is not None:
+                bits.append(f"Ventas YTD {int(round(info['sales'])):,}")
+            text = f"{info['name']}: " + (", ".join(bits) if bits else "datos clave pendientes")
+            hallazgos.append({"key": "hallazgo", "args": {"text": text}})
+        if not hallazgos:
+            if signals.get("nearest_tx") is not None and own_price is not None:
+                gap = signals.get("delta_tx_nearest")
+                hallazgos.append({
+                    "key": "hallazgo",
+                    "args": {"text": f"Benchmark de precio: {_fmt_money(signals['nearest_tx'])} ({_fmt_delta_money(gap)}) contra nuestra oferta."}
+                })
+            else:
+                hallazgos.append({"key": "hallazgo", "args": {"text": "Sin rivales generados; habilitar auto‑selección para poblar comparativos."}})
+        sections.append({"id": "hallazgos_clave", "items": hallazgos})
+
+        # Oportunidades
+        oportunidades: list[dict] = []
+        for info in sorted(comps_full, key=lambda x: x.get("tx_gap") or 0, reverse=True):
+            gap = info.get("tx_gap")
+            if gap is not None and gap > 0:
+                oportunidades.append({
+                    "key": "oportunidad",
+                    "args": {
+                        "palanca": f"Gap de precio vs {info['short']}",
+                        "accion": f"Comunicar ahorro de {_fmt_abs_money(gap)} contra {info['short']} en pitch y cotizador.",
+                        "impacto": "Conversión",
+                        "urgencia": "Alta",
+                    },
+                })
+            if len(oportunidades) >= 2:
+                break
+        top_minus = [f for f, _ in minus_counter.most_common(3)]
+        if top_minus:
+            oportunidades.append({
+                "key": "oportunidad",
+                "args": {
+                    "palanca": "Diferenciadores de equipamiento",
+                    "accion": f"Incluir {', '.join(top_minus[:3])} en demos y comunicación para reforzar valor percibido.",
+                    "impacto": "Percepción de valor",
+                    "urgencia": "Media",
+                },
+            })
+        if signals.get("own_cph") is not None and signals.get("cph_median") is not None:
+            try:
+                delta_cph = float(signals["own_cph"]) - float(signals["cph_median"])
+                if delta_cph <= 0:
+                    oportunidades.append({
+                        "key": "oportunidad",
+                        "args": {
+                            "palanca": "Costo por HP competitivo",
+                            "accion": f"Resaltar ${abs(round(delta_cph,0)):,} menos por HP vs mediana del set.",
+                            "impacto": "Argumento técnico",
+                            "urgencia": "Media",
+                        },
+                    })
+            except Exception:
+                pass
+        if not oportunidades:
+            oportunidades.append({
+                "key": "oportunidad",
+                "args": {
+                    "palanca": "Generación de leads",
+                    "accion": "Activar campaña digital con hooks de valor (capacidad, 4x4, seguridad).",
+                    "impacto": "Top of funnel",
+                    "urgencia": "Media",
+                },
+            })
+        sections.append({"id": "oportunidades", "items": oportunidades})
+
+        # Riesgos y contramedidas
+        riesgos: list[dict] = []
+        for info in sorted(comps_full, key=lambda x: x.get("tx_gap") if x.get("tx_gap") is not None else 0):
+            gap = info.get("tx_gap")
+            equip_gap = info.get("equip_gap")
+            if gap is not None and gap < 0:
+                riesgos.append({
+                    "key": "riesgo",
+                    "args": {
+                        "text": f"{info['name']} ofrece TX {_fmt_abs_money(gap)} por debajo; riesgo de percepción de sobreprecio.",
+                        "mitigacion": "Simular bono/tasa escalonada vs rival y reforzar paquete de valor.",
+                    },
+                })
+            elif equip_gap is not None and equip_gap > 5:
+                feats = _join_feats(info["features_plus"])
+                riesgos.append({
+                    "key": "riesgo",
+                    "args": {
+                        "text": f"{info['name']} suma {_fmt_pct(equip_gap)} en equipamiento ({feats}).",
+                        "mitigacion": "Evaluar paquete opcional o incluir upgrade en propuesta comercial.",
+                    },
+                })
+            if len(riesgos) >= 3:
+                break
+        if not riesgos:
+            riesgos.append({
+                "key": "riesgo",
+                "args": {
+                    "text": "Datos de rivales limitados; riesgo de decisiones con información incompleta.",
+                    "mitigacion": "Recolectar ficha técnica y pricing actualizado antes de comités.",
+                },
+            })
+        sections.append({"id": "riesgos_y_contramedidas", "items": riesgos})
+
         # Acciones priorizadas
-        items_a = [
-            {"key": "accion_p1", "args": {"text": "Definir bono/tasa por dealer en función del residual ΔTX", "owner": "Comercial", "cuando": "Inmediato", "kpi": "Uplift en cierre"}},
-            {"key": "accion_p2", "args": {"text": "Mensajes: $/HP y 4x4 + 7 plazas", "owner": "Marketing", "cuando": "Semanas 1–2", "kpi": "CTR/Leads"}},
-        ]
-        secs.append({"id": "acciones_priorizadas", "items": items_a})
-        # Preguntas / Supuestos
-        secs.append({"id": "preguntas_para_el_equipo", "items": [{"key": "pregunta", "args": {"text": "¿Objetivo de share y precio por región?"}}]})
-        secs.append({"id": "supuestos_y_datos_faltantes", "items": [{"key": "supuesto", "args": {"text": "Pilares/equipo incompletos en algunos rivales; revisar fuente"}}]})
-        return {"sections": secs}
+        acciones: list[dict] = []
+        cheapest = None
+        for info in comps_full:
+            gap = info.get("tx_gap")
+            if gap is not None and gap < 0:
+                if cheapest is None or gap < cheapest.get("tx_gap", 0):
+                    cheapest = info
+        if cheapest is not None and cheapest.get("tx_gap") is not None:
+            acciones.append({
+                "key": "accion_p1",
+                "args": {
+                    "text": f"Diseñar incentivo específico contra {cheapest['short']} (gap {_fmt_abs_money(cheapest['tx_gap'])}).",
+                    "owner": "Comercial",
+                    "cuando": "Próxima semana",
+                    "kpi": "Cierre regional",
+                },
+            })
+        if top_minus:
+            acciones.append({
+                "key": "accion_p2",
+                "args": {
+                    "text": f"Actualizar pitch de ventas destacando {', '.join(top_minus[:2])} en primeras visitas.",
+                    "owner": "Marketing",
+                    "cuando": "Q+1",
+                    "kpi": "Tasa de pruebas de manejo",
+                },
+            })
+        if not acciones:
+            acciones.append({
+                "key": "accion_p1",
+                "args": {
+                    "text": "Consolidar benchmark de precio/equipamiento y validar con red de distribuidores.",
+                    "owner": "Planeación",
+                    "cuando": "Mes en curso",
+                    "kpi": "Reporte validado",
+                },
+            })
+        sections.append({"id": "acciones_priorizadas", "items": acciones})
+
+        # Preguntas para el equipo
+        preguntas: list[dict] = []
+        missing_map = {
+            "equip_p_adas": "detalle ADAS del propio",
+            "equip_p_safety": "pilar de seguridad",
+            "equip_p_comfort": "pilar de confort",
+            "equip_p_infotainment": "pilar de infoentretenimiento",
+            "fuel_cost_60k_mxn": "consumo energético 60k",
+            "service_cost_60k_mxn": "costo de servicio 60k",
+        }
+        for key, label in missing_map.items():
+            if _to_f(own.get(key)) is None:
+                preguntas.append({"key": "pregunta", "args": {"text": f"¿Confirmar {label} para el modelo base?"}})
+        if not preguntas:
+            preguntas.append({"key": "pregunta", "args": {"text": "¿Qué volúmenes objetivo y mix de versiones requieren soporte comercial?"}})
+        sections.append({"id": "preguntas_para_el_equipo", "items": preguntas})
+
+        # Supuestos y datos faltantes
+        supuestos: list[dict] = []
+        try:
+            src_year = own.get("_features_source_year")
+            if src_year and own.get("ano") and int(src_year) != int(own.get("ano")):
+                supuestos.append({"key": "supuesto", "args": {"text": f"Equipamiento base tomado de MY {src_year}; validar cambios para {own.get('ano')}"}})
+        except Exception:
+            pass
+        if plus_counter:
+            tops = ", ".join([f for f, _ in plus_counter.most_common(2)])
+            supuestos.append({"key": "supuesto", "args": {"text": f"Rivales reportan features adicionales ({tops}); se asume disponibilidad real en plaza."}})
+        if not supuestos:
+            supuestos.append({"key": "supuesto", "args": {"text": "Análisis generado sin IA por falta de API key; validar hallazgos manualmente."}})
+        sections.append({"id": "supuestos_y_datos_faltantes", "items": supuestos})
+
+        return {"sections": sections}
 
     # 4) Llamar a OpenAI si hay API key; si no, devolver fallback
     if not api_key:
@@ -3686,6 +5638,7 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
             "insights": "",
             "insights_json": None,
             "insights_struct": _deterministic_struct(),
+            "used_fallback_struct": True,
             "compare": comp_json,
         }
     try:
@@ -3741,13 +5694,105 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
                 pass
             return None
         parsed = _parse_any(text)
+
+        def _struct_has_content(st: Dict[str, Any] | None) -> bool:
+            try:
+                secs = (st or {}).get("sections") or []
+                for s in secs:
+                    items = (s or {}).get("items") or []
+                    for it in items:
+                        args = it.get("args") if isinstance(it, dict) else None
+                        if isinstance(args, dict) and any(str(v).strip() for v in args.values() if v is not None):
+                            return True
+                        if isinstance(args, str) and str(args).strip():
+                            return True
+                return False
+            except Exception:
+                return False
+
+        def _struct_from_insights_blob(blob: Dict[str, Any]) -> Dict[str, Any]:
+            secs: list[dict] = []
+            try:
+                m = {
+                    "hallazgos_clave": "hallazgo",
+                    "oportunidades": "oportunidad",
+                    "riesgos_y_contramedidas": "riesgo",
+                    "acciones_priorizadas": "accion_p1",
+                    "preguntas_para_el_equipo": "pregunta",
+                    "supuestos_y_datos_faltantes": "supuesto",
+                }
+                for sec_id, key in m.items():
+                    arr = blob.get(sec_id)
+                    if isinstance(arr, list) and arr:
+                        items = []
+                        for x in arr:
+                            try:
+                                val = None
+                                if isinstance(x, dict):
+                                    # Prefer explicit text fields; then field matching the key; else first value
+                                    val = x.get("text") or x.get("texto") or x.get("resumen") or x.get(key)
+                                    if val is None:
+                                        try:
+                                            # first non-empty value
+                                            for v in x.values():
+                                                if v is not None and str(v).strip():
+                                                    val = v; break
+                                        except Exception:
+                                            pass
+                                else:
+                                    val = x
+                                sval = str(val or "").strip()
+                                if sval:
+                                    items.append({"key": key, "args": {"text": sval}})
+                            except Exception:
+                                continue
+                        if items:
+                            secs.append({"id": sec_id, "items": items})
+            except Exception:
+                pass
+            return {"sections": secs}
+
+        # Extract fields
+        ins_json = (parsed.get("insights") if isinstance(parsed, dict) and parsed.get("insights") is not None else parsed)
+        ins_struct = (parsed.get("struct") if isinstance(parsed, dict) else None)
+        used_fallback = False
+        # If struct is missing/empty, try to build it from insights blob; else fallback deterministic
+        if not _struct_has_content(ins_struct):
+            if isinstance(ins_json, dict):
+                candidate = _struct_from_insights_blob(ins_json)
+                if _struct_has_content(candidate):
+                    ins_struct = candidate
+            if not _struct_has_content(ins_struct):
+                ins_struct = _deterministic_struct()
+                used_fallback = True
+
+        # Insert per-vehicle 1–7 analysis, then 1–1 competitor deep dives right after the first (general) section
+        try:
+            vehicle_secs = _build_vehicle_analysis()
+            comp_secs = _build_comp_sections()
+            if isinstance(ins_struct, dict) and (vehicle_secs or comp_secs):
+                secs = list(ins_struct.get("sections") or [])
+                new_list = []
+                if secs:
+                    new_list.append(secs[0])
+                if vehicle_secs:
+                    new_list.extend(vehicle_secs)
+                if comp_secs:
+                    new_list.extend(comp_secs)
+                if secs and len(secs) > 1:
+                    new_list.extend(secs[1:])
+                ins_struct["sections"] = new_list
+        except Exception:
+            pass
+
         res = {
             "ok": True,
             "model": model,
             "insights": text,
-            "insights_json": (parsed.get("insights") if isinstance(parsed, dict) and parsed.get("insights") is not None else parsed),
-            "insights_struct": (parsed.get("struct") if isinstance(parsed, dict) else None),
+            "insights_json": ins_json,
+            "insights_struct": ins_struct,
             "compare": comp_json,
+            "used_fallback_struct": used_fallback,
         }
         # cachear
         if cache_key:
@@ -3755,7 +5800,7 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
         return res
     except Exception:
         # Fallback en caso de error de red/parseo
-        return {"ok": True, "model": model, "insights": "", "insights_json": None, "insights_struct": _deterministic_struct(), "compare": comp_json}
+        return {"ok": True, "model": model, "insights": "", "insights_json": None, "insights_struct": _deterministic_struct(), "compare": comp_json, "used_fallback_struct": True}
 
 
 # ------------------------------ Price Explain -----------------------------
@@ -4282,6 +6327,8 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
         # exclude the same exact model-year
         if "ano" in df.columns:
             df = df[~((df["model"].str.upper() == md) & (df["ano"] == yr))]
+    # Keep a copy without year restriction to allow graceful fallback later
+    df_no_year = df.copy()
     # restrict to same MY unless explicitly allowed
     if (yr is not None) and ("ano" in df.columns) and (not include_different_years):
         try:
@@ -4385,6 +6432,8 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
             return "ice"
         return "other"
 
+    # Save a copy before propulsion filter for fallback
+    df_after_segment = df.copy()
     if same_propulsion and "categoria_combustible_final" in df.columns and md:
         try:
             base = df0[(df0["model"].str.upper() == md) & ((df0["ano"] == yr) if yr is not None and "ano" in df0.columns else True)]
@@ -4463,6 +6512,43 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
         out = df.sort_values(by=["_dist"]).head(k)
     else:
         out = df.head(k)
+
+    # Fallbacks: if not enough comps, gradually relax propulsion and then year filters
+    try:
+        def _rank(frame):
+            if own_price and ("msrp" in frame.columns or "precio_transaccion" in frame.columns):
+                pc = "precio_transaccion" if "precio_transaccion" in frame.columns else "msrp"
+                pr = pd.to_numeric(frame[pc], errors="coerce")
+                ff = frame.assign(_dist=(pr - own_price).abs()).dropna(subset=["_dist"]).sort_values(by=["_dist"]).head(k)
+                return ff
+            return frame.head(k)
+        if len(out) < k:
+            # Relax propulsion
+            alt = _rank(df_after_segment)
+            if len(alt) > len(out):
+                out = alt
+        if len(out) < k and include_different_years is False and yr is not None:
+            # Relax year restriction, keep segment constraints
+            # Start from df_no_year and reapply segment filter if known
+            base = df_no_year.copy()
+            if base_seg_fixed:
+                try:
+                    def _seg_series(frame):
+                        if "segmento_ventas" in frame.columns:
+                            return frame["segmento_ventas"].astype(str).map(_norm_segment)
+                        if "body_style" in frame.columns:
+                            return frame["body_style"].astype(str).map(_norm_segment)
+                        return None
+                    cs = _seg_series(base)
+                    if cs is not None:
+                        base = base[cs.fillna("").str.upper() == str(base_seg_fixed).upper()]
+                except Exception:
+                    pass
+            out2 = _rank(base)
+            if len(out2) > len(out):
+                out = out2
+    except Exception:
+        pass
     # Final safeguard: enforce same-segment after ranking (in case of missing seg in some rows earlier)
     if same_segment and base_seg_fixed:
         try:
@@ -4565,7 +6651,55 @@ def version_diffs(make: Optional[str] = None, model: Optional[str] = None, year:
         except Exception:
             pass
     if sub.empty:
-        return {"base": None, "items": [], "count": 0}
+        # Fallback: construir versiones desde fuentes enriquecidas (flat/JSON) para no dejar vacío
+        try:
+            import json as _json
+            # 1) Flat enriquecido (preferido para estructura make/model/version/año)
+            flat = ROOT / "data" / "enriched" / "vehiculos_todos_flat.csv"
+            rows: list[dict] = []
+            def _up(s: Any) -> str: return str(s or "").strip().upper()
+            if flat.exists() and pd is not None:
+                t = pd.read_csv(flat, low_memory=False)
+                t.columns = [str(c).strip().lower() for c in t.columns]
+                q = t.copy()
+                if "model" in q.columns:
+                    q = q[(q["model"].astype(str).map(_up) == _up(model))]
+                if make and "make" in q.columns:
+                    q = q[(q["make"].astype(str).map(_up) == _up(make))]
+                if year is not None and "ano" in q.columns:
+                    q = q[pd.to_numeric(q["ano"], errors="coerce").fillna(0).astype(int) == int(year)]
+                if not q.empty:
+                    keep = [c for c in ["make","model","version","ano","msrp","precio_transaccion","equip_score",
+                                        "bocinas","speakers_count","screen_main_in","screen_cluster_in",
+                                        "usb_a_count","usb_c_count","power_12v_count","power_110v_count"] if c in q.columns]
+                    if keep:
+                        q = q[keep]
+                    for _, r in q.iterrows():
+                        rows.append({k: r.get(k) for k in keep})
+            # 2) JSON curado como último recurso
+            if not rows:
+                pjson = ROOT / "data" / "vehiculos-todos.json"
+                if not pjson.exists(): pjson = ROOT / "data" / "vehiculos-todos1.json"
+                if pjson.exists():
+                    data = _json.loads(pjson.read_text(encoding="utf-8"))
+                    items = data.get("vehicles") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                    for v in items or []:
+                        mk = (v.get("manufacturer",{}) or {}).get("name") or (v.get("make",{}) or {}).get("name") or ""
+                        md = (v.get("model",{}) or {}).get("name") or ""
+                        yr = (v.get("version",{}) or {}).get("year") or None
+                        if _up(md) == _up(model) and ((not make) or _up(mk)==_up(make)) and ((year is None) or (str(yr).isdigit() and int(yr)==int(year))):
+                            rows.append({
+                                "make": mk, "model": md,
+                                "version": (v.get("version",{}) or {}).get("name"),
+                                "ano": int(yr) if (yr and str(yr).isdigit()) else None,
+                                "msrp": (v.get("pricing",{}) or {}).get("msrp"),
+                            })
+            if rows:
+                sub = pd.DataFrame(rows)
+            else:
+                return {"base": None, "items": [], "count": 0}
+        except Exception:
+            return {"base": None, "items": [], "count": 0}
 
     # pick base
     base_row = None
@@ -4633,16 +6767,55 @@ def version_diffs(make: Optional[str] = None, model: Optional[str] = None, year:
             "asientos_ventilacion_conductor": "Asiento conductor ventilación",
             "asientos_ventilacion_pasajero": "Asiento pasajero ventilación",
         }
+        # fallback mapping from JSON feat_* columns when canonical col is missing
+        fallback_by_col = {
+            "alerta_colision": ["feat_aeb"],
+            "sensor_punto_ciego": ["feat_blind"],
+            "tiene_camara_punto_ciego": ["feat_blind","feat_camara"],
+            "camara_360": ["feat_camara_360"],
+            "adas_lane_keep": ["feat_lane"],
+            "adas_acc": ["feat_acc"],
+            "tiene_pantalla_tactil": ["feat_pantalla"],
+            "android_auto": ["feat_android"],
+            "apple_carplay": ["feat_carplay"],
+            "techo_corredizo": ["feat_quemacocos"],
+            "rieles_techo": ["feat_roof_rails"],
+            "enganche_remolque": ["feat_tow"],
+            "diff_lock": ["feat_bloqueo"],
+            "low_range": ["feat_reductora"],
+            "tercera_fila": ["feat_third_row"],
+            # seats comfort
+            "asientos_calefaccion_conductor": ["feat_calefaccion"],
+            "asientos_calefaccion_pasajero": ["feat_calefaccion"],
+            "asientos_ventilacion_conductor": ["feat_ventilacion"],
+            "asientos_ventilacion_pasajero": ["feat_ventilacion"],
+        }
+        def _present(row: Dict[str, Any], main_col: str) -> bool:
+            v = row.get(main_col)
+            if _truthy(v):
+                return True
+            # numeric truthy
+            try:
+                if v is not None and float(v) > 0:
+                    return True
+            except Exception:
+                pass
+            for fb in fallback_by_col.get(main_col, []):
+                vv = row.get(fb)
+                if _truthy(vv):
+                    return True
+                try:
+                    if vv is not None and float(vv) > 0:
+                        return True
+                except Exception:
+                    pass
+            return False
         for col, label in feature_map.items():
-            b = base.get(col)
-            d = row.get(col)
-            if b is None and d is None:
-                continue
-            bt = _truthy(b)
-            dt = _truthy(d)
-            if dt and not bt:
+            b_has = _present(base, col)
+            d_has = _present(row, col)
+            if d_has and not b_has:
                 diffs["features_plus"].append(label)
-            if bt and not dt:
+            if b_has and not d_has:
                 diffs["features_minus"].append(label)
         num_map = [
             ("bocinas", "Bocinas"),
@@ -4653,6 +6826,8 @@ def version_diffs(make: Optional[str] = None, model: Optional[str] = None, year:
             ("usb_c_count", "USB-C"),
             ("power_12v_count", "Tomas 12V"),
             ("power_110v_count", "Tomas 110V"),
+            ("climate_zones", "Zonas de clima"),
+            ("seats_capacity", "Capacidad de asientos"),
         ]
         seen = set()
         for col, label in num_map:
@@ -4790,112 +6965,146 @@ async def ws_echo(ws: WebSocket):  # simple echo for dev
 # ------------------------------- Seasonality API ---------------------------
 @app.get("/seasonality")
 def seasonality(segment: Optional[str] = Query(None), year: Optional[int] = Query(2025)) -> Dict[str, Any]:
-    """Return seasonality by segment for a given year (default 2025).
+    """Return seasonality by segment for a given year (default 2025)."""
 
-    Response: { segments: [{ name, months: [{ m, units, share_pct }] }] }
-    """
+    import unicodedata as _ud
+
+    def _normalize_token(val: Optional[str]) -> str:
+        s = str(val or "").strip()
+        if not s:
+            return ""
+        s = _ud.normalize('NFKD', s)
+        s = ''.join(ch for ch in s if _ud.category(ch) != 'Mn')
+        s = s.replace('’', "'").replace('´', "'").replace('`', "'")
+        return s
+
     try:
-        # Prefer precomputed sales_ytd_{year}.csv to build seasonality on the fly
-        sales_ytd = ROOT / "data" / "enriched" / f"sales_ytd_{year}.csv"
-        items: Dict[str, list] = {}
-        if sales_ytd.exists() and pd is not None:
-            s = pd.read_csv(sales_ytd, low_memory=False)
-            s.columns = [str(c).strip().lower() for c in s.columns]
-            # We need a segment per model; approximate with body_style/segmento from catalog if available
-            seg_map: Dict[tuple, str] = {}
-            try:
+        year_int = int(year or 2025)
+    except Exception:
+        year_int = 2025
+
+    seg_norm = _normalize_token(segment).upper() if segment else "*"
+
+    if pd is None:
+        return {"segments": []}
+
+    sales_ytd = ROOT / "data" / "enriched" / f"sales_ytd_{year_int}.csv"
+    items: Dict[str, list] = {}
+
+    def _segment_lookup() -> Dict[tuple, str]:
+        seg_map: Dict[tuple, str] = {}
+        try:
+            proc = ROOT / "data" / "equipo_veh_limpio_procesado.csv"
+            if proc.exists():
+                f = pd.read_csv(proc, low_memory=False)
+                f.columns = [str(c).strip().lower() for c in f.columns]
+                col = None
+                for c in ("body_style", "segmento_ventas"):
+                    if c in f.columns:
+                        col = c
+                        break
+                if col and {"make","model"}.issubset(f.columns):
+                    def _norm_seg(sv: str) -> str:
+                        base = _normalize_token(sv)
+                        low = base.lower()
+                        if any(x in low for x in ("pick","cab","chasis","camioneta")): return "Pickup"
+                        if any(x in low for x in ("todo terreno","suv","crossover","sport utility")): return "SUV'S"
+                        if "van" in low: return "Van"
+                        if any(x in low for x in ("hatch","hb")): return "Hatchback"
+                        if any(x in low for x in ("sedan","sedán","saloon")): return "Sedán"
+                        return base
+                    ff = f[["make","model", col]].dropna(how="any")
+                    ff["seg"] = ff[col].astype(str).map(_norm_seg)
+                    grp = ff.groupby([ff["make"].astype(str).str.upper(), ff["model"].astype(str).str.upper()])["seg"].agg(lambda x: x.value_counts().idxmax())
+                    seg_map = {k: v for k, v in grp.to_dict().items()}
+            if not seg_map:
                 flat = ROOT / "data" / "enriched" / "vehiculos_todos_flat.csv"
                 if flat.exists():
                     f = pd.read_csv(flat, low_memory=False)
                     f.columns = [str(c).strip().lower() for c in f.columns]
-                    if {"make","model"}.issubset(f.columns):
+                    col = None
+                    for c in ("segmento_ventas", "body_style"):
+                        if c in f.columns:
+                            col = c
+                            break
+                    if col and {"make","model"}.issubset(f.columns):
                         def _norm_seg(sv: str) -> str:
-                            s0 = (sv or "").strip().lower()
-                            if any(x in s0 for x in ("pick","cab","chasis")): return "Pickup"
-                            if any(x in s0 for x in ("todo terreno","suv","crossover")): return "SUV'S"
-                            if "van" in s0: return "Van"
-                            if any(x in s0 for x in ("hatch","hb")): return "Hatchback"
-                            if any(x in s0 for x in ("sedan","sedán","saloon")): return "Sedán"
-                            return sv
-                        ff = f[["make","model","segmento_ventas","body_style"]].dropna(how="all")
-                        ff["seg"] = ff["segmento_ventas"].fillna(ff["body_style"]).astype(str).map(_norm_seg)
+                            base = _normalize_token(sv)
+                            low = base.lower()
+                            if any(x in low for x in ("pick","cab","chasis","camioneta")): return "Pickup"
+                            if any(x in low for x in ("todo terreno","suv","crossover","sport utility")): return "SUV'S"
+                            if "van" in low: return "Van"
+                            if any(x in low for x in ("hatch","hb")): return "Hatchback"
+                            if any(x in low for x in ("sedan","sedán","saloon")): return "Sedán"
+                            return base
+                        ff = f[["make","model", col]].dropna(how="any")
+                        ff["seg"] = ff[col].astype(str).map(_norm_seg)
                         grp = ff.groupby([ff["make"].astype(str).str.upper(), ff["model"].astype(str).str.upper()])["seg"].agg(lambda x: x.value_counts().idxmax())
                         seg_map = {k: v for k, v in grp.to_dict().items()}
-            except Exception:
-                pass
-            def up(x): return str(x or "").strip().upper()
-            s["__mk"], s["__md"] = s.get("make"," "), s.get("model"," ")
-            s["__mk"], s["__md"] = s["__mk"].map(up), s["__md"].map(up)
-            s["seg"] = s.apply(lambda r: seg_map.get((r["__mk"], r["__md"])) or "(sin segmento)", axis=1)
-            if segment:
-                # Normaliza el argumento para que coincida con el mismo criterio usado al construir 'seg'
-                def _norm_arg(v: Optional[str]) -> Optional[str]:
-                    if v is None: return None
-                    v0 = str(v or "").strip().lower()
-                    if any(x in v0 for x in ("pick","cab","chasis")): return "Pickup"
-                    if any(x in v0 for x in ("todo terreno","suv","crossover","sport utility")): return "SUV'S"
-                    if "van" in v0: return "Van"
-                    if any(x in v0 for x in ("hatch","hb")): return "Hatchback"
-                    if any(x in v0 for x in ("sedan","sedán","saloon")): return "Sedán"
-                    return v
-                seg_arg = _norm_arg(segment)
-                s = s[s["seg"].str.upper() == str(seg_arg or segment).upper()]
-            # aggregate by month fields ventas_{year}_MM if present, else use ytd columns already month-split
-            months_cols = [c for c in s.columns if str(c).startswith(f"ventas_{year}_")]
-            if not months_cols:
-                # if only YTD present, can't split reliably
-                return {"segments": []}
-            seg_groups = {}
-            for _, row in s.iterrows():
-                sg = row.get("seg")
-                if sg is None: continue
-                m = seg_groups.setdefault(sg, {i:0 for i in range(1,13)})
-                for mm in range(1,13):
-                    col = f"ventas_{year}_{mm:02d}"
+        except Exception:
+            seg_map = {}
+        return seg_map
+
+    seg_map = _segment_lookup()
+
+    def _segment_value(mk: str, md: str) -> str:
+        key = (str(mk or "").strip().upper(), str(md or "").strip().upper())
+        seg = seg_map.get(key)
+        if seg:
+            return seg
+        return "(sin segmento)"
+
+    if sales_ytd.exists():
+        df = pd.read_csv(sales_ytd, low_memory=False)
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        df["__seg"] = df.apply(lambda r: _segment_value(r.get("make", ""), r.get("model", "")), axis=1)
+        if seg_norm != "*":
+            target = seg_norm
+            df = df[df["__seg"].map(lambda x: _normalize_token(x).upper()) == target]
+        months_cols = [c for c in df.columns if c.startswith(f"ventas_{year_int}_")]
+        if months_cols:
+            grouped = df.groupby("__seg")[months_cols].sum(numeric_only=True)
+            for seg, row in grouped.iterrows():
+                months: list[Dict[str, Any]] = []
+                total = float(row.sum()) or 1.0
+                for col in months_cols:
                     try:
-                        v = int(float(str(row.get(col) or 0).replace(",","")))
+                        month_num = int(col.rsplit('_', 1)[-1])
                     except Exception:
-                        v = 0
-                    m[mm] = m.get(mm,0) + v
-            for sg, mon in seg_groups.items():
-                total = sum(mon.values()) or 1
-                items[sg] = [{"m": mm, "units": mon.get(mm,0), "share_pct": round(mon.get(mm,0)/total*100,2)} for mm in range(1,13)]
-        # Fallback solo si no existe el archivo precomputado y hay columnas mensuales en el catálogo
-        if not items:
-            df = _load_catalog().copy()
-            month_cols_exist = any(c.startswith(f"ventas_{year}_") for c in map(str, df.columns))
-            if not month_cols_exist:
-                return {"segments": []}
-            if {"segmento_ventas"}.issubset(df.columns):
-                def _u(v):
-                    try:
-                        return int(float(v))
-                    except Exception:
-                        return 0
-                def _norm_seg_arg(v: Optional[str]) -> Optional[str]:
-                    if v is None: return None
-                    s0 = str(v or "").strip().lower()
-                    return "SUV'S" if "todo terreno" in s0 else (v if s0 else None)
-                seg_filter = _norm_seg_arg(segment) if segment else None
-                aggr: Dict[str, Dict[int,int]] = {}
-                for _, row in df.iterrows():
-                    seg0 = str(row.get("segmento_ventas") or "").strip()
-                    seg = ("SUV'S" if "todo terreno" in seg0.lower() else seg0) or "(sin segmento)"
-                    if seg_filter and seg.upper() != str(seg_filter).upper():
                         continue
-                    months = aggr.setdefault(seg, {})
-                    for m in range(1,13):
-                        col = f"ventas_{year}_{m:02d}"
-                        if col in df.columns:
-                            months[m] = months.get(m,0) + _u(row.get(col))
-                for seg, months in aggr.items():
-                    total = sum(months.values()) or 1
-                    items[seg] = [{"m": m, "units": months.get(m,0), "share_pct": round(months.get(m,0)/total*100,2)} for m in range(1,13)]
-        out = [{"name": seg, "months": sorted(vals, key=lambda x: x["m"])} for seg, vals in items.items()]
-        audit("resp", "/seasonality", body={"segments": [s.get("name") for s in out]})
-        return {"segments": out}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+                    val = int(float(row[col])) if col in row else 0
+                    share = round((val / total) * 100.0, 2) if total else 0.0
+                    months.append({"m": month_num, "units": val, "share_pct": share})
+                months.sort(key=lambda x: x["m"])
+                items[seg] = months
+
+    if not items:
+        # Fallback: try catalog monthly columns if available
+        df = _load_catalog().copy()
+        df["__seg"] = df.apply(lambda r: _segment_value(r.get("make", ""), r.get("model", "")), axis=1)
+        if seg_norm != "*":
+            target = seg_norm
+            df = df[df["__seg"].map(lambda x: _normalize_token(x).upper()) == target]
+        months_cols = [c for c in map(str, df.columns) if c.startswith(f"ventas_{year_int}_")]
+        if months_cols:
+            grouped = df.groupby("__seg")[months_cols].sum(numeric_only=True)
+            for seg, row in grouped.iterrows():
+                months: list[Dict[str, Any]] = []
+                total = float(row.sum()) or 1.0
+                for col in months_cols:
+                    try:
+                        month_num = int(col.rsplit('_', 1)[-1])
+                    except Exception:
+                        continue
+                    val = int(float(row[col])) if col in row else 0
+                    share = round((val / total) * 100.0, 2) if total else 0.0
+                    months.append({"m": month_num, "units": val, "share_pct": share})
+                months.sort(key=lambda x: x["m"])
+                items[seg] = months
+
+    segments = [{"name": seg, "months": vals} for seg, vals in items.items()]
+    audit("resp", "/seasonality", body={"segments": [s.get("name") for s in segments]})
+    return {"segments": segments}
 # ------------------------------- Debug: options sources ---------------------
 @app.get("/debug/options-sources")
 def debug_options_sources() -> Dict[str, Any]:
@@ -4959,6 +7168,62 @@ def debug_options_sources() -> Dict[str, Any]:
         out["json"] = {"error": str(e)}
     return out
 
+    # -- Helpers: inferencias de HP desde texto y audio/speakers desde columnas genéricas --
+    def _infer_hp_from_texts(r: Dict[str, Any]) -> None:
+        try:
+            cur = r.get("caballos_fuerza")
+            curv = None
+            try:
+                curv = float(cur) if cur is not None and str(cur).strip() != "" else None
+            except Exception:
+                curv = None
+            src = " ".join(str(r.get(k) or "") for k in ("version","version_display","header_description"))
+            s = src.lower()
+            import re as _re
+            hp = None
+            for m in _re.findall(r"(\d{2,4})\s*(?:hp|bhp)\b", s):
+                try:
+                    hp = max(float(hp or 0), float(m))
+                except Exception:
+                    pass
+            for m in _re.findall(r"(\d{2,4})\s*(?:ps|cv)\b", s):
+                try:
+                    hp = max(float(hp or 0), float(m) * 0.98632)
+                except Exception:
+                    pass
+            if hp is not None:
+                if (curv is None) or (hp > curv):
+                    r["caballos_fuerza"] = float(hp)
+        except Exception:
+            pass
+
+    def _ensure_audio_speakers(r: Dict[str, Any]) -> None:
+        try:
+            # speakers_count ← bocinas si no viene
+            if (r.get("speakers_count") in (None, "", 0)) and (r.get("bocinas") not in (None, "")):
+                try:
+                    v = float(r.get("bocinas"))
+                    if v > 0:
+                        r["speakers_count"] = int(round(v))
+                except Exception:
+                    pass
+            # audio_brand ← detectar en 'audio' si no viene
+            if not str(r.get("audio_brand") or "").strip():
+                txt = str(r.get("audio") or "")
+                s = txt.lower()
+                BRANDS = [
+                    'bose','harman kardon','jbl','bang & olufsen','b&o','burmester','beats','alpine',
+                    'meridian','focal','akg','mark levinson','infinity','pioneer','sony','kenwood','dynaudio','rockford'
+                ]
+                for b in BRANDS:
+                    if b in s:
+                        r["audio_brand"] = _canon_audio_brand(b)
+                        break
+            if (str(r.get("audio_brand") or "").strip() == "") or (r.get("speakers_count") in (None, "", 0)):
+                _apply_audio_lookup(r)
+        except Exception:
+            pass
+
 
 # ------------------------------- Debug: coverage ----------------------------
 @app.get("/debug/coverage")
@@ -4989,3 +7254,122 @@ def debug_coverage(years: str = "2024,2025,2026") -> Dict[str, Any]:
         return {"total": total, "years": years, "coverage": stats}
     except Exception as e:
         return {"error": str(e)}
+
+
+# ------------------------------ Dealer Insights --------------------------
+@app.post("/dealer_insights")
+def post_dealer_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Resumen para dealers centrado en el vehículo propio (sin IA).
+
+    Body: { own?: row, make?, model?, year?, version? }
+    Devuelve secciones con features por grupo, cuantitativos y un pitch 30s.
+    """
+    own = payload.get("own") or {}
+    if not own:
+        mk = payload.get("make")
+        md = payload.get("model")
+        yr = payload.get("year") or payload.get("ano")
+        vr = payload.get("version")
+        try:
+            df = _load_catalog().copy()
+        except Exception:
+            raise HTTPException(status_code=500, detail="catalog not available")
+        for c in ("make","model","version"):
+            if c in df.columns:
+                df[c] = df[c].astype(str)
+        sub = df.copy()
+        if mk:
+            sub = sub[sub["make"].astype(str).str.upper()==str(_canon_make(mk) or mk).upper()]
+        if md:
+            sub = sub[sub["model"].astype(str).str.upper()==str(_canon_model(mk, md) or md).upper()]
+        if yr is not None and "ano" in sub.columns:
+            try:
+                sub = sub[pd.to_numeric(sub["ano"], errors="coerce").fillna(0).astype(int)==int(yr)]
+            except Exception:
+                pass
+        if vr:
+            sub = sub[sub["version"].astype(str).str.upper()==str(vr).upper()]
+        if not sub.empty:
+            own = sub.iloc[0].to_dict()
+    if not own:
+        raise HTTPException(status_code=400, detail="dealer_insights: own not resolved")
+
+    # Asegurar score/pilares/energía
+    try:
+        cur = dict(own)
+        cur = ensure_fuel_60(cur)
+        cur = ensure_equip_score(cur)
+        cur = ensure_pillars(cur)
+        own = cur
+    except Exception:
+        pass
+
+    def _truth(v):
+        s = str(v or "").strip().lower()
+        if s in {"true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y"}: return True
+        try:
+            return float(s)>0
+        except Exception:
+            return False
+
+    fmap = {
+        "ADAS": [("alerta_colision","Frenado de emergencia"),("sensor_punto_ciego","Punto ciego"),("camara_360","Cámara 360"),("adas_lane_keep","Mantenimiento de carril"),("adas_acc","Crucero adaptativo (ACC)"),("rear_cross_traffic","Tráfico cruzado trasero"),("auto_high_beam","Luces altas automáticas")],
+        "Seguridad": [("abs","ABS"),("control_estabilidad","Control de estabilidad"),("rear_side_airbags","Bolsas laterales traseras"),("bolsas_cortina_todas_filas","Bolsas de cortina (todas las filas)")],
+        "Confort": [("llave_inteligente","Llave inteligente"),("techo_corredizo","Techo corredizo"),("apertura_remota_maletero","Portón eléctrico"),("cierre_automatico_maletero","Cierre portón"),("asientos_calefaccion_conductor","Asiento conductor calefacción"),("asientos_calefaccion_pasajero","Asiento pasajero calefacción"),("asientos_ventilacion_conductor","Asiento conductor ventilación"),("asientos_ventilacion_pasajero","Asiento pasajero ventilación")],
+        "Info": [("tiene_pantalla_tactil","Pantalla táctil"),("android_auto","Android Auto"),("apple_carplay","Apple CarPlay"),("wireless_charging","Cargador inalámbrico"),("hud","Head‑Up Display"),("ambient_lighting","Iluminación ambiental")],
+        "Tracción": [("driven_wheels","AWD/4x4"),("diff_lock","Bloqueo diferencial"),("low_range","Caja reductora (4L)")],
+        "Utilidad": [("rieles_techo","Rieles de techo"),("enganche_remolque","Enganche remolque"),("preparacion_remolque","Preparación remolque"),("tercera_fila","3ª fila asientos")],
+    }
+    groups = {}
+    for g, arr in fmap.items():
+        got = []
+        for key, label in arr:
+            v = own.get(key)
+            ok = _truth(v)
+            if key == "driven_wheels":
+                ok = True if str(v or "").lower().find("awd")>=0 or str(v or "").lower().find("4x4")>=0 or str(v or "").lower().find("4wd")>=0 else False
+            if ok:
+                got.append(label)
+        if got:
+            groups[g] = got
+
+    def _n(v):
+        try:
+            return float(v)
+        except Exception:
+            return None
+    quant = {
+        "Bocinas": _n(own.get("speakers_count") or own.get("bocinas")),
+        "Pantalla central (in)": _n(own.get("screen_main_in")),
+        "Clúster (in)": _n(own.get("screen_cluster_in")),
+        "USB-A": _n(own.get("usb_a_count")),
+        "USB-C": _n(own.get("usb_c_count")),
+        "Tomas 12V": _n(own.get("power_12v_count")),
+        "Tomas 110V": _n(own.get("power_110v_count")),
+        "Zonas de clima": _n(own.get("climate_zones")),
+        "Capacidad de asientos": _n(own.get("seats_capacity")),
+    }
+
+    name = f"{own.get('make','')} {own.get('model','')}{(' – '+str(own.get('version'))) if own.get('version') else ''}{(' ('+str(own.get('ano'))+')') if own.get('ano') else ''}"
+    hp = own.get("caballos_fuerza")
+    drv = str(own.get("driven_wheels") or '').upper() or 'FWD/RWD'
+    seats = own.get("seats_capacity") or 5
+    adas = ', '.join((groups.get("ADAS") or [])[:3]) or 'ADAS básicos'
+    info = ', '.join((groups.get("Info") or [])[:3]) or 'Conectividad completa'
+    pitch = f"{name}: {int(hp) if (hp and str(hp).strip()) else 'N/D'} hp, {drv}, {int(seats) if str(seats).strip() else '5'} plazas. ADAS: {adas}. Info: {info}."
+
+    sections = []
+    sections.append({"id":"resumen","items":[{"key":"resumen","args": {"make": own.get("make"), "model": own.get("model"), "version": own.get("version"), "ano": own.get("ano")}}]})
+    for g, feats in (groups or {}).items():
+        sections.append({"id": g.lower(), "title": g, "items": [{"key":"hallazgo", "args": {"text": ', '.join(feats)}}]})
+    q_items = []
+    for k,v in quant.items():
+        if v is not None:
+            if float(v).is_integer():
+                q_items.append({"key":"hallazgo","args":{"text": f"{k}: {int(v)}"}})
+            else:
+                q_items.append({"key":"hallazgo","args":{"text": f"{k}: {round(float(v),1)}"}})
+    if q_items:
+        sections.append({"id":"cuantitativos","title":"Cuantitativos","items": q_items})
+    sections.append({"id":"pitch","title":"Pitch 30s","items":[{"key":"hallazgo","args":{"text": pitch}}]})
+    return {"ok": True, "own": {"make": own.get("make"), "model": own.get("model"), "version": own.get("version"), "ano": own.get("ano")}, "groups": groups, "quant": quant, "pitch": pitch, "sections": sections}
