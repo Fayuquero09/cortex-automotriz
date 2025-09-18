@@ -6338,20 +6338,29 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # optional: filter by same segment/body style (robust mapping)
     def _norm_segment(s: str) -> Optional[str]:
-        s = str(s or "").strip().lower()
+        s_raw = str(s or "").strip()
+        s = s_raw.lower()
+        for a, b in (("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u"),("ñ","n")):
+            s = s.replace(a, b)
         if not s or s in {"nan","none","null","na","n/a","-"}:
             return None
-        if any(x in s for x in ("pick","cab","chasis","camioneta")):
+        if "chasis" in s:
+            if "pick" in s:
+                return "Pickup"
+            return "Chasis Cabina"
+        if any(x in s for x in ("pick", "pickup", "pick-up")):
+            return "Pickup"
+        if "camioneta" in s and "pick" in s:
             return "Pickup"
         if any(x in s for x in ("todo terreno","suv","suvs","crossover","sport utility")):
             return "SUV'S"
-        if "van" in s:
+        if "van" in s or "panel" in s:
             return "Van"
         if any(x in s for x in ("hatch","hb")):
             return "Hatchback"
         if any(x in s for x in ("sedan","sedán","saloon")):
             return "Sedán"
-        return s.title()
+        return s_raw.title()
 
     base_seg_fixed: Optional[str] = None
     if same_segment and md:
@@ -6367,7 +6376,7 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
             base_rows = df0_loc[(df0_loc["model"].str.upper() == md) | (df0_loc.get("__mdc") == _compact(md))]
             if yr is not None and "ano" in df0_loc.columns:
                 base_rows = base_rows[base_rows["ano"] == yr] if not base_rows.empty else df0_loc[(df0_loc.get("__mdc") == _compact(md))]
-            base_seg: Optional[str] = None
+            base_seg: Optional[str] = _norm_segment(own.get("segment") or own.get("segmento_ventas") or own.get("body_style"))
             if not base_rows.empty:
                 # try any non-null across potential duplicates
                 try:
@@ -6402,15 +6411,12 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 break
             # Apply filter if we could resolve a segment
             if base_seg:
-                # Build candidate segment column from available sources
+                # Build candidate segment column preferring body_style over generic segment tags
                 cand_seg = None
-                if "segmento_ventas" in df.columns:
-                    cand_seg = df["segmento_ventas"].astype(str).map(_norm_segment)
-                if cand_seg is None and "segmento_ventas" in df.columns:
-                    # ensure cand_seg initialized; map handles but keep for safety
-                    cand_seg = df["segmento_ventas"].astype(str).map(_norm_segment)
-                if (cand_seg is None) and "body_style" in df.columns:
+                if "body_style" in df.columns:
                     cand_seg = df["body_style"].astype(str).map(_norm_segment)
+                if (cand_seg is None or cand_seg.isna().all()) and "segmento_ventas" in df.columns:
+                    cand_seg = df["segmento_ventas"].astype(str).map(_norm_segment)
                 if cand_seg is not None:
                     # Compare as text ignoring case; drop rows without segment
                     m = cand_seg.fillna("").str.upper()
@@ -6420,15 +6426,16 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
             pass
 
     # optional: filter by same propulsion bucket
+    propulsion_bucket: Optional[str] = None
     def _prop_bucket(s: str) -> str:
-        s = (s or "").lower()
+        s = str(s or "").lower()
         if any(k in s for k in ("bev", "eléctrico", "electrico")):
             return "bev"
         if any(k in s for k in ("phev", "enchuf")):
             return "phev"
         if any(k in s for k in ("hev", "híbrido", "hibrido")):
             return "hev"
-        if any(k in s for k in ("diesel", "gasolina", "nafta", "petrol")):
+        if any(k in s for k in ("diesel", "gasolina", "nafta", "petrol", "magna", "premium", "regular", "gas lp", "gas glp", "gas natural")):
             return "ice"
         return "other"
 
@@ -6437,10 +6444,14 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
     if same_propulsion and "categoria_combustible_final" in df.columns and md:
         try:
             base = df0[(df0["model"].str.upper() == md) & ((df0["ano"] == yr) if yr is not None and "ano" in df0.columns else True)]
+            bucket = None
             if not base.empty:
                 bucket = _prop_bucket(str(base.iloc[0].get("categoria_combustible_final", "")))
-                if bucket:
-                    df = df[df["categoria_combustible_final"].map(lambda v: _prop_bucket(str(v))) == bucket]
+            if not bucket:
+                bucket = _prop_bucket(str(own.get("categoria_combustible_final"))) or _prop_bucket(str(own.get("tipo_de_combustible_original")))
+            if bucket:
+                propulsion_bucket = bucket
+                df = df[df["categoria_combustible_final"].map(lambda v: _prop_bucket(str(v))) == bucket]
         except Exception:
             pass
 
@@ -6534,14 +6545,21 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
             if base_seg_fixed:
                 try:
                     def _seg_series(frame):
+                        if "body_style" in frame.columns:
+                            SERIES = frame["body_style"].astype(str).map(_norm_segment)
+                            if not SERIES.isna().all():
+                                return SERIES
                         if "segmento_ventas" in frame.columns:
                             return frame["segmento_ventas"].astype(str).map(_norm_segment)
-                        if "body_style" in frame.columns:
-                            return frame["body_style"].astype(str).map(_norm_segment)
                         return None
                     cs = _seg_series(base)
                     if cs is not None:
                         base = base[cs.fillna("").str.upper() == str(base_seg_fixed).upper()]
+                except Exception:
+                    pass
+            if propulsion_bucket and "categoria_combustible_final" in base.columns and same_propulsion:
+                try:
+                    base = base[base["categoria_combustible_final"].map(lambda v: _prop_bucket(str(v))) == propulsion_bucket]
                 except Exception:
                     pass
             out2 = _rank(base)
@@ -6553,14 +6571,22 @@ def auto_competitors(payload: Dict[str, Any]) -> Dict[str, Any]:
     if same_segment and base_seg_fixed:
         try:
             def _seg_series(frame):
+                if "body_style" in frame.columns:
+                    SERIES = frame["body_style"].astype(str).map(_norm_segment)
+                    if not SERIES.isna().all():
+                        return SERIES
                 if "segmento_ventas" in frame.columns:
                     return frame["segmento_ventas"].astype(str).map(_norm_segment)
-                if "body_style" in frame.columns:
-                    return frame["body_style"].astype(str).map(_norm_segment)
                 return None
             cand = _seg_series(out)
             if cand is not None:
                 out = out[cand.fillna("").str.upper() == str(base_seg_fixed).upper()]
+        except Exception:
+            pass
+    if same_propulsion and propulsion_bucket:
+        try:
+            if "categoria_combustible_final" in out.columns:
+                out = out[out["categoria_combustible_final"].map(lambda v: _prop_bucket(str(v))) == propulsion_bucket]
         except Exception:
             pass
     # Overall match percentage (price, length, score)

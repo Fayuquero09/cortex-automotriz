@@ -31,6 +31,7 @@ export default function MarketPulse() {
     return endpoints.dashboard(segName2 ? { segment: segName2 } : undefined);
   });
   const segRaw = (baseRow?.segmento_ventas || baseRow?.body_style || '').toString().trim();
+  const segmentScore = Number(baseRow?.segment_score ?? NaN);
   function normalizeSegTitle(s: string): string {
     const v = (s || '').toLowerCase();
     if (!v) return '';
@@ -90,6 +91,9 @@ export default function MarketPulse() {
         <StatCard label="Modelos" value={stats?.models_count} />
         <StatCard label="Versiones" value={stats?.versions_count} />
         <StatCard label="Con bono" value={stats?.with_bonus_count} sub={formatBonusByYear(stats?.with_bonus_by_year, stats?.versions_by_year)} />
+        {Number.isFinite(segmentScore) ? (
+          <StatCard label="Score segmento" value={Number(segmentScore.toFixed(1))} sub={segName ? segName.toUpperCase() : undefined} />
+        ) : null}
       </div>
       <div style={{ marginTop:12 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
