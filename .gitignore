@@ -4,15 +4,36 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.venv/**
 
 # macOS
 .DS_Store
 
 # Logs and runtime
 .run-logs/
+logs/
+tmp/
+
+# Generated data/backups
+data/enriched/
+data/tmp/
+data/*backup*.json
+data/*.bak
+data/*.raw.json
+
+# Local config
+.env
+*/.env
+cortex_frontend/.env.local
+cortex_frontend/.env.local.example
 
 # Node/Next
 cortex_frontend/node_modules/
 cortex_frontend/.next/
 frontend/node_modules/
+frontend/.next/
 
+# IDE/editor
+.idea/
+.vscode/
+*.swp

@@ -8,6 +8,7 @@ import { useAppState } from '@/lib/state';
 import { useI18n } from '@/lib/i18n';
 import { endpoints } from '@/lib/api';
 import { renderStruct } from '@/lib/insightsTemplates';
+import { brandLabel, vehicleLabel } from '@/lib/vehicleLabels';
 
 type Row = Record<string, any>;
 
@@ -103,7 +104,7 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
         <div style={{ display:'grid', gap:4, marginBottom:6 }}>
           {list.map((r: any, idx: number) => (
             <button key={idx} tabIndex={-1} onMouseDown={(ev)=>{ ev.preventDefault(); addManual(undefined, r); }} onClick={(ev)=>ev.preventDefault()} title="Agregar" style={{ textAlign:'left', border:'1px solid #e5e7eb', background:(idx===hi?'#eef2ff':'#f8fafc'), padding:'6px 8px', borderRadius:8, cursor:'pointer' }}>
-              {String(r.make||'') + ' ' + String(r.model||'') + ' ' + (r.ano||'') + (r.version ? (' – ' + r.version) : '')}
+              {vehicleLabel(r)}
             </button>
           ))}
         </div>
@@ -118,7 +119,7 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
       {manual.length > 0 && (
         <div style={{ marginTop:4, color:'#64748b' }}>Manuales: {manual.map((m: any,i: number)=> (
           <span key={i} style={{ marginRight:8 }}>
-            {m.make} {m.model} {m.version||''} <button onClick={()=>removeManual(i)} title="Quitar">×</button>
+            {vehicleLabel(m)} <button onClick={()=>removeManual(i)} title="Quitar">×</button>
           </span>
         ))}</div>
       )}
@@ -319,6 +320,20 @@ export default function ComparePanel() {
     exterior: 'Exterior',
     energia: 'Energía',
     llantas_y_rines: 'Llantas y rines',
+  };
+  const PILLAR_LEGACY_FIELDS: Record<string, string[]> = {
+    audio_y_entretenimiento: ['equip_p_infotainment'],
+    climatizacion: ['equip_p_comfort'],
+    confort: ['equip_p_comfort'],
+    seguridad: ['equip_p_safety', 'equip_p_adas'],
+    motor: ['equip_p_performance'],
+    dimensiones: ['equip_p_utility'],
+    transmision: ['equip_p_traction'],
+    suspension: ['equip_p_traction', 'equip_p_utility'],
+    frenos: ['equip_p_safety'],
+    exterior: ['equip_p_value', 'equip_p_utility'],
+    energia: ['equip_p_electrification', 'equip_p_efficiency'],
+    llantas_y_rines: ['equip_p_utility'],
   };
   const autoFilterLabels: Record<string, string> = {
     k: 'Cantidad',
@@ -1044,18 +1059,26 @@ export default function ComparePanel() {
   }
 
   const FALLBACK_PILLAR_FIELDS: Array<{ id: string; label: string }> = [
-    { id: 'equip_p_adas', label: 'ADAS' },
-    { id: 'equip_p_safety', label: 'Seguridad' },
-    { id: 'equip_p_comfort', label: 'Confort' },
-    { id: 'equip_p_infotainment', label: 'Info' },
-    { id: 'equip_p_utility', label: 'Utilidad' },
-    { id: 'equip_p_performance', label: 'Performance' },
-    { id: 'equip_p_efficiency', label: 'Eficiencia' },
-    { id: 'equip_p_traction', label: 'Tracción' },
-    { id: 'equip_p_value', label: 'Valor' },
-    { id: 'equip_p_electrification', label: 'Electrificación' },
+    ...Object.entries(PILLAR_LABELS).map(([id, label]) => ({ id, label })),
     { id: 'warranty_score', label: 'Garantía' },
+    { id: 'equip_score', label: 'Score equipo' },
   ];
+  function getPillarValue(row: any, key: string): number | null {
+    if (!row) return null;
+    const direct = num(row?.pillar_scores?.[key]);
+    if (direct != null && direct > 0) return direct;
+    const raw = num(row?.pillar_scores_raw?.[key]);
+    if (raw != null && raw > 0) return raw;
+    const sameKey = num((row as any)?.[key]);
+    if (sameKey != null && sameKey > 0) return sameKey;
+    const legacyList = PILLAR_LEGACY_FIELDS[key] || [];
+    for (const legacyKey of legacyList) {
+      const legacyVal = num((row as any)?.[legacyKey]);
+      if (legacyVal != null && legacyVal > 0) return legacyVal;
+    }
+    return null;
+  }
+
   function pillarEntries(row: any): Array<{ id: string; label: string; value: number }> {
     if (!row) return [];
     const list: Array<{ id: string; label: string; value: number }> = [];
@@ -1070,7 +1093,7 @@ export default function ComparePanel() {
     }
     if (list.length) return list;
     FALLBACK_PILLAR_FIELDS.forEach(({ id, label }) => {
-      const val = num((row as any)?.[id]);
+      const val = getPillarValue(row, id);
       if (val != null) list.push({ id, label, value: val });
     });
     return list;
@@ -1088,7 +1111,7 @@ export default function ComparePanel() {
     const baseMap: Record<string, number> = {};
     baseEntries.forEach(({ id, value }) => { baseMap[id] = value; });
     const headerBlock = (row: Row | null | undefined) => {
-      const make = String(row?.make || '').trim() || '—';
+      const make = brandLabel(row || {} as Row) || '—';
       const model = String(row?.model || '').trim() || '—';
       const version = normalizeVersion(String(row?.version || '').trim());
       const year = row?.ano || row?.year || '';
@@ -1265,7 +1288,7 @@ export default function ComparePanel() {
   }
   // Etiqueta consistente para todas las gráficas
   function vehLabel(r: any): string {
-    const mk = String(r.make || '').trim();
+    const mk = brandLabel(r);
     const md = String(r.model || '').trim();
     const vr = normalizeVersion(String(r.version || '').trim());
     const yr = r.ano || r.year || '';
@@ -1490,72 +1513,53 @@ export default function ComparePanel() {
     if (s.includes('sedan') || s.includes('saloon') || s.includes('berlina')) return 'sedan';
     return '';
   }
+  const SEGMENT_PRIMARY_PILLARS: Record<string, string[]> = {
+    suv: ['seguridad', 'motor'],
+    pickup: ['motor', 'transmision'],
+    sedan: ['seguridad', 'audio_y_entretenimiento'],
+    hatch: ['seguridad', 'audio_y_entretenimiento'],
+    van: ['confort', 'dimensiones'],
+  };
+
   function topPillarsForSegment(seg: string): Array<{key:string,label:string}> {
-    const maps: Record<string, Array<{key:string,label:string}>> = {
-      suv: [ {key:'equip_p_adas',label:'ADAS'}, {key:'equip_p_safety',label:'Seguridad'} ],
-      pickup: [ {key:'equip_p_traction',label:'Tracción'}, {key:'equip_p_safety',label:'Seguridad'} ],
-      sedan: [ {key:'equip_p_adas',label:'ADAS'}, {key:'equip_p_infotainment',label:'Info‑entretenimiento'} ],
-      hatch: [ {key:'equip_p_adas',label:'ADAS'}, {key:'equip_p_infotainment',label:'Info‑entretenimiento'} ],
-      van: [ {key:'equip_p_comfort',label:'Confort'}, {key:'equip_p_utility',label:'Utilidad'} ],
-    };
-    return maps[seg] || maps['sedan'];
+    const keys = SEGMENT_PRIMARY_PILLARS[seg] || SEGMENT_PRIMARY_PILLARS['sedan'];
+    return keys.map((key) => ({ key, label: PILLAR_LABELS[key] || key }));
   }
+
+  const SEGMENT_RADAR_PILLARS: Record<string, string[]> = {
+    suv: ['seguridad', 'motor', 'suspension', 'transmision', 'exterior', 'energia'],
+    pickup: ['motor', 'transmision', 'suspension', 'frenos', 'dimensiones', 'seguridad'],
+    sedan: ['seguridad', 'audio_y_entretenimiento', 'confort', 'motor', 'climatizacion', 'energia'],
+    hatch: ['seguridad', 'audio_y_entretenimiento', 'confort', 'motor', 'energia', 'llantas_y_rines'],
+    van: ['confort', 'dimensiones', 'seguridad', 'climatizacion', 'motor', 'energia'],
+  };
 
   // Radar: keys por segmento (hasta 6 ejes)
   function radarKeysForSegment(seg: string): Array<{key:string,label:string}> {
-    const m: Record<string, Array<{key:string,label:string}>> = {
-      suv: [
-        {key:'equip_p_adas',label:'ADAS'},
-        {key:'equip_p_safety',label:'Seguridad'},
-        {key:'equip_p_comfort',label:'Confort'},
-        {key:'equip_p_infotainment',label:'Info'},
-        {key:'equip_p_traction',label:'Tracción'},
-        {key:'warranty_score',label:'Garantía'},
-      ],
-      pickup: [
-        {key:'equip_p_traction',label:'Tracción'},
-        {key:'equip_p_utility',label:'Utilidad'},
-        {key:'equip_p_safety',label:'Seguridad'},
-        {key:'equip_p_adas',label:'ADAS'},
-        {key:'equip_p_comfort',label:'Confort'},
-        {key:'equip_p_infotainment',label:'Info'},
-      ],
-      sedan: [
-        {key:'equip_p_adas',label:'ADAS'},
-        {key:'equip_p_safety',label:'Seguridad'},
-        {key:'equip_p_comfort',label:'Confort'},
-        {key:'equip_p_infotainment',label:'Info'},
-        {key:'equip_p_performance',label:'Performance'},
-        {key:'warranty_score',label:'Garantía'},
-      ],
-      hatch: [
-        {key:'equip_p_adas',label:'ADAS'},
-        {key:'equip_p_safety',label:'Seguridad'},
-        {key:'equip_p_comfort',label:'Confort'},
-        {key:'equip_p_infotainment',label:'Info'},
-        {key:'equip_p_performance',label:'Performance'},
-        {key:'warranty_score',label:'Garantía'},
-      ],
-      van: [
-        {key:'equip_p_comfort',label:'Confort'},
-        {key:'equip_p_utility',label:'Utilidad'},
-        {key:'equip_p_safety',label:'Seguridad'},
-        {key:'equip_p_adas',label:'ADAS'},
-        {key:'equip_p_infotainment',label:'Info'},
-        {key:'equip_p_traction',label:'Tracción'},
-      ],
-    };
-    return m[seg] || m['sedan'];
+    const keys = SEGMENT_RADAR_PILLARS[seg] || SEGMENT_RADAR_PILLARS['sedan'];
+    return keys.map((key) => ({ key, label: PILLAR_LABELS[key] || key }));
   }
 
   // Elegir dinámicamente los 2 pilares con más cobertura de datos para el segmento
   function bestPillarsForSegment(seg: string): Array<{key:string,label:string}> {
     const cand = topPillarsForSegment(seg);
+    const additionalSlugs = [
+      'motor',
+      'seguridad',
+      'confort',
+      'audio_y_entretenimiento',
+      'transmision',
+      'suspension',
+      'dimensiones',
+      'exterior',
+      'energia',
+      'climatizacion',
+      'frenos',
+      'llantas_y_rines',
+    ];
     const allCand: Array<{key:string,label:string}> = [
       ...cand,
-      {key:'equip_p_performance',label:'Performance'},
-      {key:'equip_p_efficiency',label:'Eficiencia'},
-      {key:'equip_p_electrification',label:'Electrificación'},
+      ...additionalSlugs.map((key) => ({ key, label: PILLAR_LABELS[key] || key })),
       {key:'warranty_score',label:'Garantía'},
       {key:'equip_score',label:'Score equipo'},
     ];
@@ -1590,9 +1594,8 @@ export default function ComparePanel() {
   }
 
   function pillarValue(row:any, key:string): number | null {
-    const v = Number((row as any)?.[key] ?? NaN);
-    // Trata 0 o valores no numéricos como sin dato (evita puntos en X=0 que suelen ser faltantes)
-    if (!Number.isFinite(v) || v <= 0) return null;
+    const v = getPillarValue(row, key);
+    if (v == null || v <= 0) return null;
     return v;
   }
 
@@ -2265,47 +2268,37 @@ const segData: any[] = [];
     } as any;
   }, [chartRows]);
 
-  // Adopción de ADAS: cuenta de features activas por vehículo
+  // Seguridad (antes adopción de ADAS): usar pilar seguridad 0-100
   const adasAdoptionOption = React.useMemo(() => {
     if (!chartRows.length) return null;
     const list = chartRows.map((r:any) => {
-      const active: string[] = [];
-      let hasData = false;
-      ADAS_FEATURE_DEFS.forEach((def) => {
-        const raw = (r as any)?.[def.key];
-        if (raw != null && String(raw).trim() !== '') hasData = true;
-        if (truthyFeature(raw)) active.push(def.label);
-      });
-      if (!hasData) return null;
+      const val = getPillarValue(r, 'seguridad');
+      if (val == null) return null;
       return {
         label: vehLabel(r),
-        count: active.length,
-        active,
+        value: Number(val.toFixed(1)),
         isBase: !!r.__isBase,
         color: colorForVersion(r),
       };
-    }).filter(Boolean) as Array<{ label: string; count: number; active: string[]; isBase: boolean; color: string }>;
+    }).filter(Boolean) as Array<{ label: string; value: number; isBase: boolean; color: string }>;
     if (!list.length) return null;
-    const maxCount = Math.max(...list.map((d) => d.count), 0);
+    const maxVal = Math.max(...list.map((d) => d.value), 0);
     return {
-      title: { text: 'Adopción de ADAS (conteo de features)', left: 'center', top: 6 },
+      title: { text: `${PILLAR_LABELS['seguridad']} (0-100)`, left: 'center', top: 6 },
       grid: { left: 140, right: 40, top: 60, bottom: 60, containLabel: true },
       tooltip: {
         trigger: 'item',
-        formatter: (p: any) => {
-          const active = Array.isArray(p?.data?.active) && p.data.active.length ? `<br/>${p.data.active.join(', ')}` : '';
-          return `${p.name}<br/>ADAS activos: ${p.value}${active}`;
-        },
+        formatter: (p: any) => `${p.name}<br/>${PILLAR_LABELS['seguridad']}: ${Number(p.value).toFixed(1)}`,
       },
-      xAxis: { type: 'value', min: 0, max: Math.max(1, maxCount + 1), name: 'Features ADAS', axisLabel: { formatter: (v:any) => Math.round(v) } },
+      xAxis: { type: 'value', min: 0, max: Math.max(50, Math.ceil(maxVal / 5) * 5), name: 'Score', axisLabel: { formatter: (v:any) => Number(v).toFixed(0) } },
       yAxis: { type: 'category', data: list.map((d) => d.label), axisLabel: { interval: 0 } },
       series: [{
         type: 'bar',
-        data: list.map((d) => ({ value: d.count, name: d.label, active: d.active, itemStyle: { color: d.isBase ? '#1d4ed8' : d.color } })),
-        label: { show: true, position: 'right', formatter: (p:any) => `${p.value}` },
+        data: list.map((d) => ({ value: d.value, name: d.label, itemStyle: { color: d.isBase ? '#1d4ed8' : d.color } })),
+        label: { show: true, position: 'right', formatter: (p:any) => `${Number(p.value).toFixed(1)}` },
       }],
     } as any;
-  }, [chartRows, truthyFeature, versionColorMap]);
+  }, [chartRows, versionColorMap]);
 
   return (
     <>
@@ -2313,7 +2306,7 @@ const segData: any[] = [];
       <div style={{ fontWeight:700, marginBottom:8 }}>Comparar versiones</div>
       <div style={{ marginBottom:10, color:'#64748b', display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
         {ownRow ? (
-          <span>Base: <strong>{String(ownRow.make||'')} {String(ownRow.model||'')} {ownRow.ano||''} {ownRow.version?`– ${ownRow.version}`:''}</strong></span>
+          <span>Base: <strong>{vehicleLabel(ownRow)}</strong></span>
         ) : <span>Base: —</span>}
         <span style={{ fontSize:12 }}>k = {k}</span>
         <span style={{ opacity:0.8 }}>
@@ -2703,12 +2696,12 @@ const segData: any[] = [];
           if (!baseRow || !comps.length) return null;
           const toNum = (x:any)=> { const v = Number(x); return Number.isFinite(v)? v : null; };
           const pillarKeys = [
-            {key:'equip_p_adas', label:'ADAS'},
-            {key:'equip_p_safety', label:'Seguridad'},
-            {key:'equip_p_infotainment', label:'Info'},
-            {key:'equip_p_comfort', label:'Confort'},
-            {key:'equip_p_traction', label:'Tracción'},
-            {key:'equip_p_utility', label:'Utilidad'},
+            {key:'seguridad', label:PILLAR_LABELS['seguridad']},
+            {key:'motor', label:PILLAR_LABELS['motor']},
+            {key:'audio_y_entretenimiento', label:PILLAR_LABELS['audio_y_entretenimiento']},
+            {key:'confort', label:PILLAR_LABELS['confort']},
+            {key:'transmision', label:PILLAR_LABELS['transmision']},
+            {key:'energia', label:PILLAR_LABELS['energia']},
           ];
           // 1) Gaps por pilar repetidos
           const gaps: Array<{label:string, count:number, avg:number}> = [];
@@ -2722,12 +2715,12 @@ const segData: any[] = [];
           gaps.sort((a,b)=> b.count===a.count ? b.avg-a.avg : b.count-a.count);
           const topGaps = gaps.slice(0,3);
           const pillarToFeatures: Record<string,string[]> = {
-            'ADAS': ['Frenado de emergencia','Punto ciego','Cámara 360'],
-            'Seguridad': ['Control de estabilidad','Bolsas cortina'],
-            'Info': ['Android Auto','Apple CarPlay','Pantalla táctil'],
-            'Confort': ['Llave inteligente','Portón eléctrico'],
-            'Tracción': ['Control de tracción'],
-            'Utilidad': ['Rieles de techo','Enganche remolque'],
+            [PILLAR_LABELS['seguridad']]: ['Frenado de emergencia','Punto ciego','Cámara 360'],
+            [PILLAR_LABELS['motor']]: ['Modos de manejo','Launch control'],
+            [PILLAR_LABELS['audio_y_entretenimiento']]: ['Android Auto','Apple CarPlay','Pantalla táctil'],
+            [PILLAR_LABELS['confort']]: ['Llave inteligente','Portón eléctrico'],
+            [PILLAR_LABELS['transmision']]: ['Control de tracción','Selector de terreno'],
+            [PILLAR_LABELS['energia']]: ['Motor eléctrico','Recuperación de energía'],
           };
           // 2) Features recurrentes (ellos sí / nosotros no)
           const freq: Record<string,number> = {};
@@ -2983,7 +2976,7 @@ const segData: any[] = [];
                 });
                 return arr.map((it:any, idx:number)=>{
                   const ex = it.explain||{}; const c = it.comp||{};
-                  const name = `${c.make||''} ${c.model||''}${c.version?` – ${c.version}`:''}${c.ano?` (${c.ano})`:''}`;
+                  const name = vehicleLabel(c);
                   const a2a = ex?.apples_to_apples||{}; const ok = !!a2a.ok;
                   const decomp = Array.isArray(ex?.decomposition)? ex.decomposition: [];
                   const bon = ex?.recommended_bonus?.mxn; const nota = Array.isArray(ex?.notas)? ex.notas.join(' • '): '';

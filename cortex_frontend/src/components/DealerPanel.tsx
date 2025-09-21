@@ -7,6 +7,7 @@ import useSWR from 'swr';
 import { useAppState } from '@/lib/state';
 import { endpoints } from '@/lib/api';
 import { renderStruct } from '@/lib/insightsTemplates';
+import { brandLabel, vehicleLabel } from '@/lib/vehicleLabels';
 
 type Row = Record<string, any>;
 
@@ -14,6 +15,52 @@ function num(x: any): number | null {
   if (x === null || x === undefined || (typeof x === 'string' && x.trim() === '')) return null;
   const v = Number(x);
   return Number.isFinite(v) ? v : null;
+}
+
+const PILLAR_LABELS: Record<string, string> = {
+  audio_y_entretenimiento: 'Audio & entretenimiento',
+  climatizacion: 'Climatización',
+  confort: 'Confort',
+  seguridad: 'Seguridad',
+  motor: 'Motor',
+  dimensiones: 'Dimensiones',
+  transmision: 'Tracción / transmisión',
+  suspension: 'Suspensión',
+  frenos: 'Frenos',
+  exterior: 'Exterior',
+  energia: 'Energía',
+  llantas_y_rines: 'Llantas y rines',
+};
+
+const PILLAR_LEGACY_FIELDS: Record<string, string[]> = {
+  audio_y_entretenimiento: ['equip_p_infotainment'],
+  climatizacion: ['equip_p_comfort'],
+  confort: ['equip_p_comfort'],
+  seguridad: ['equip_p_safety', 'equip_p_adas'],
+  motor: ['equip_p_performance'],
+  dimensiones: ['equip_p_utility'],
+  transmision: ['equip_p_traction'],
+  suspension: ['equip_p_traction', 'equip_p_utility'],
+  frenos: ['equip_p_safety'],
+  exterior: ['equip_p_value', 'equip_p_utility'],
+  energia: ['equip_p_electrification', 'equip_p_efficiency'],
+  llantas_y_rines: ['equip_p_utility'],
+};
+
+function getPillarValue(row: any, key: string): number | null {
+  if (!row) return null;
+  const direct = num(row?.pillar_scores?.[key]);
+  if (direct != null && direct > 0) return direct;
+  const raw = num(row?.pillar_scores_raw?.[key]);
+  if (raw != null && raw > 0) return raw;
+  const same = num((row as any)?.[key]);
+  if (same != null && same > 0) return same;
+  const legacy = PILLAR_LEGACY_FIELDS[key] || [];
+  for (const legacyKey of legacy) {
+    const legacyVal = num((row as any)?.[legacyKey]);
+    if (legacyVal != null && legacyVal > 0) return legacyVal;
+  }
+  return null;
 }
 
 // Bloque para agregar competidores (versión ligera del que existe en ComparePanel)
@@ -36,8 +83,12 @@ function DealerManualBlock({ onAdd, year, allowDifferentYears }: { onAdd: (r: Ro
       {list.length>0 ? (
         <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:6 }}>
           {list.map((r:Row, i:number)=> (
-            <button key={i} onClick={()=> onAdd(r)} style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'4px 8px', borderRadius:6, cursor:'pointer' }}>
-              {String(r.make||'')} {String(r.model||'')}{r.version?` – ${r.version}`:''}{r.ano?` (${r.ano})`:''}
+            <button
+              key={i}
+              onClick={()=> onAdd(r)}
+              style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'4px 8px', borderRadius:6, cursor:'pointer' }}
+            >
+              {vehicleLabel(r)}
             </button>
           ))}
         </div>
@@ -235,7 +286,7 @@ export default function DealerPanel(){
     hp: number | null;
     length: number | null;
     screen: number | null;
-    adas: number | null;
+    safety: number | null;
     isBase: boolean;
   };
 
@@ -247,9 +298,9 @@ export default function DealerPanel(){
       const hp = num(row?.caballos_fuerza);
       const length = num(row?.longitud_mm);
       const screen = num(row?.screen_main_in);
-      const adas = num(row?.equip_p_adas);
-      const name = `${row?.make || ''} ${row?.model || ''}${row?.version ? ` – ${row.version}` : ''}`.trim();
-      return { name: name || 'Vehículo', price, hp, length, screen, adas, isBase: !!row?.__isBase };
+      const safety = getPillarValue(row, 'seguridad');
+      const name = `${brandLabel(row)} ${row?.model || ''}${row?.version ? ` – ${row.version}` : ''}`.trim();
+      return { name: name || 'Vehículo', price, hp, length, screen, safety, isBase: !!row?.__isBase };
     }) as ChartRow[];
   }, [baseRow, comps]);
 
@@ -270,7 +321,7 @@ export default function DealerPanel(){
     const seriesData = data.map(d => ({
       name: d.name,
       value: [d.price as number, d.hp as number],
-      itemStyle: { color: d.isBase ? '#1d4ed8' : '#0f766e' },
+      itemStyle: { color: d.isBase ? '#0fa968' : '#0c5840' },
       symbolSize: d.isBase ? 18 : 14,
     }));
     return {
@@ -308,7 +359,7 @@ export default function DealerPanel(){
     const categories = data.map(d => d.name);
     const values = data.map(d => ({
       value: d.length,
-      itemStyle: { color: d.isBase ? '#1d4ed8' : '#0f172a' },
+      itemStyle: { color: d.isBase ? '#0fa968' : '#0c4a30' },
       label: { show: true, position: 'right', formatter: ({ value }: any) => `${Intl.NumberFormat('es-MX').format(value)} mm` },
     }));
     return {
@@ -351,22 +402,22 @@ export default function DealerPanel(){
     } as any;
   }, [chartsRows]);
 
-  const adasOption = React.useMemo(() => {
-    const data = chartsRows.filter(d => d.adas !== null);
+  const safetyOption = React.useMemo(() => {
+    const data = chartsRows.filter(d => d.safety !== null);
     if (!data.length) return {} as any;
     return {
-      title: { text: 'Score ADAS (0-100)', left: 'center', top: 6 },
+      title: { text: `${PILLAR_LABELS['seguridad']} (0-100)`, left: 'center', top: 6 },
       tooltip: {
         trigger: 'item',
         formatter: (params: any) => {
-          const adasVal = Number(params.value);
-          return `<strong>${params.name}</strong><br/>ADAS: ${adasVal.toFixed(1)}`;
+          const safetyVal = Number(params.value);
+          return `<strong>${params.name}</strong><br/>${PILLAR_LABELS['seguridad']}: ${safetyVal.toFixed(1)}`;
         },
       },
       grid: { left: 50, right: 20, top: 60, bottom: 50 },
       xAxis: {
         type: 'value',
-        name: 'ADAS',
+        name: PILLAR_LABELS['seguridad'],
         min: 0,
         max: 100,
       },
@@ -377,8 +428,8 @@ export default function DealerPanel(){
       series: [{
         type: 'bar',
         data: data.map(d => ({
-          value: d.adas,
-          itemStyle: { color: d.isBase ? '#1d4ed8' : '#0ea5e9' },
+          value: d.safety,
+          itemStyle: { color: d.isBase ? '#0fa968' : '#14b8a6' },
           label: { show: true, position: 'right', formatter: ({ value }: any) => `${Number(value).toFixed(0)}` },
         })),
       }],
@@ -388,17 +439,16 @@ export default function DealerPanel(){
   // Radar simple (6 pilares)
   const radarOption = React.useMemo(() => {
     if (!baseRow) return {} as any;
-    const keys = [
-      {k:'equip_p_adas', l:'ADAS'},
-      {k:'equip_p_safety', l:'Seguridad'},
-      {k:'equip_p_infotainment', l:'Info'},
-      {k:'equip_p_comfort', l:'Confort'},
-      {k:'equip_p_traction', l:'Tracción'},
-      {k:'equip_p_utility', l:'Utilidad'},
-    ];
-    const ind = keys.map(x => ({ name: x.l, max: 100 }));
+    const keys = ['seguridad','motor','confort','audio_y_entretenimiento','transmision','energia'];
+    const ind = keys.map(k => ({ name: PILLAR_LABELS[k] || k, max: 100 }));
     const rows = [ { ...baseRow, __isBase: true }, ...comps ];
-    const series = rows.map((r:any) => ({ name: `${r.make||''} ${r.model||''}${r.version?` – ${r.version}`:''}`, value: keys.map(x => Number(r?.[x.k]||0)) }));
+    const series = rows.map((r:any) => ({
+      name: `${brandLabel(r)} ${r.model||''}${r.version?` – ${r.version}`:''}`,
+      value: keys.map(k => {
+        const val = getPillarValue(r, k);
+        return val != null ? Number(val.toFixed(1)) : 0;
+      })
+    }));
     if (!series.length) return {} as any;
     return {
       title: { text: 'Pilares de equipamiento', left:'center', top:6 },
@@ -451,7 +501,7 @@ export default function DealerPanel(){
               <tr>
                 <td></td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-                  <div style={{ fontWeight:700 }}>{String(baseRow.make||'')} {String(baseRow.model||'')}</div>
+          <div style={{ fontWeight:700 }}>{brandLabel(baseRow)} {String(baseRow.model||'')}</div>
                   <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
                   <div style={{ fontWeight:500 }}>{String(baseRow.version||'')}</div>
                 </td>
@@ -477,7 +527,7 @@ export default function DealerPanel(){
                       <button className="no-print" onClick={()=>removeComp(i)} title="Quitar" style={{ border:'1px solid #e5e7eb', background:'#fff', borderRadius:6, padding:'2px 6px' }}>×</button>
                     </td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-                      <div style={{ fontWeight:600 }}>{String(r.make||'')} {String(r.model||'')}</div>
+                      <div style={{ fontWeight:600 }}>{brandLabel(r)} {String(r.model||'')}</div>
                       <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano||''}</div>
                       <div style={{ fontWeight:500 }}>{String(r.version||'')}</div>
                     </td>
@@ -510,7 +560,7 @@ export default function DealerPanel(){
               const minus: string[] = Array.isArray(diffs.features_minus)? diffs.features_minus as string[] : [];
               return (
                 <div key={idx} style={{ border:'1px solid #f1f5f9', borderRadius:8, padding:10 }}>
-                  <div style={{ fontWeight:600, marginBottom:6, color:'#334155' }}>{`${r.make||''} ${r.model||''}${r.version?` – ${r.version}`:''}${r.ano?` (${r.ano})`:''}`}</div>
+                  <div style={{ fontWeight:600, marginBottom:6, color:'#334155' }}>{vehicleLabel(r)}</div>
                   <div style={{ display:'flex', gap:12 }}>
                     <div style={{ flex:1 }}>
                       <div style={{ fontSize:12, color:'#16a34a', marginBottom:4 }}>Ellos no tienen (nosotros sí)</div>
@@ -589,10 +639,10 @@ export default function DealerPanel(){
           )}
         </div>
         <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
-          {EChart && Object.keys(adasOption).length ? (
-            <EChart echarts={echarts} option={adasOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
+          {EChart && Object.keys(safetyOption).length ? (
+            <EChart echarts={echarts} option={safetyOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
           ) : (
-            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos ADAS para graficar.</div>
+            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos de seguridad para graficar.</div>
           )}
         </div>
       </div>
