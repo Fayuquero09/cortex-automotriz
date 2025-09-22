@@ -848,6 +848,45 @@ export default function ComparePanel() {
     if (lc.includes('gas') || lc.includes('nafta') || lc.includes('petrol')) return Number(fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? NaN);
     return null;
   }
+  function featureNumber(row: any, category: string, keyword: string): number | null {
+    const list = (row?.features && row.features[category]) || [];
+    if (!Array.isArray(list)) return null;
+    const kw = keyword.toLowerCase();
+    for (const item of list) {
+      const label = String(item?.feature || item?.name || '').toLowerCase();
+      if (!label.includes(kw)) continue;
+      const raw = item?.content ?? item?.value ?? '';
+      const v = parseNumberLike(raw);
+      if (Number.isFinite(v)) return Number(v);
+    }
+    return null;
+  }
+
+  function lengthMm(row: any): number | null {
+    if (!row) return null;
+    const directFields = [
+      row?.longitud_mm,
+      row?.dim_largo_mm,
+      row?.length_mm,
+      row?.longitud,
+      row?.length,
+    ];
+    for (const value of directFields) {
+      const parsed = parseNumberLike(value);
+      if (Number.isFinite(parsed) && parsed as number > 0) return Number(parsed);
+    }
+    const specs = row?.specs;
+    if (specs && typeof specs === 'object') {
+      for (const key of ['longitud_mm','length_mm','dim_largo_mm','longitud']) {
+        const parsed = parseNumberLike(specs[key]);
+        if (Number.isFinite(parsed) && parsed as number > 0) return Number(parsed);
+      }
+    }
+    const featureLen = featureNumber(row, 'Dimensiones', 'longitud');
+    if (Number.isFinite(featureLen) && featureLen as number > 0) return Number(featureLen);
+    return null;
+  }
+
   function ensureFuel60(row: any): any {
     if (row == null) return row;
     const out = { ...row } as any;
@@ -873,6 +912,8 @@ export default function ComparePanel() {
         out.__calc_kwh_100km = Number(kwh100);
       }
     }
+    const len = lengthMm(out);
+    if (len != null) out.longitud_mm = len;
     return out;
   }
 
@@ -1885,14 +1926,14 @@ const segData: any[] = [];
   // Δ Longitud vs base (mm) (barras)
   const deltaLenOption = React.useMemo(() => {
     if (!baseRow) return null;
-    const base = Number(baseRow?.longitud_mm ?? NaN);
+    const base = lengthMm(baseRow);
     const items: Array<{name:string, val:number, color:string}> = [];
     comps.forEach((r:any) => {
-      const L = Number(r?.longitud_mm ?? NaN);
-      if (!Number.isFinite(L) || !Number.isFinite(base)) return;
+      const L = lengthMm(r);
+      if (L == null || base == null) return;
       items.push({ name: versionShortLabel(r), val: Math.round(L - base), color: colorForVersion(r) });
     });
-    if (!Number.isFinite(base) || !items.length) return null;
+    if (base == null || !items.length) return null;
     return {
       title: { text: 'Δ Longitud (mm) vs base', left: 'center', top: 6 },
       grid: { left: 70, right: 20, top: 40, bottom: 40, containLabel: true },
