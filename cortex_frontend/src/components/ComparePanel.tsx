@@ -2678,34 +2678,43 @@ const segData: any[] = [];
               <div style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', fontWeight:600 }}>Equipo: diferencias vs base</div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:12, padding:10 }}>
                 {comps.map((r:any, idx:number) => {
-                  const { plus: rawPlus, minus: rawMinus } = getFeatureDiffs(r);
-                  const plus = rawPlus.slice(0, 12);
-                  const minus = rawMinus.slice(0, 12);
-                  const color = colorForVersion(r);
-                  return (
-                    <div key={idx} style={{ border:'1px solid #f1f5f9', borderRadius:8, padding:10 }}>
-                      <div style={{ fontWeight:600, marginBottom:6, color:'#334155' }}>{vehLabel(r)}</div>
-                      <div style={{ display:'flex', gap:12 }}>
-                        <div style={{ flex:1 }}>
-                          {/* Verde = Nosotros mejor: ellos NO tienen y nosotros SÍ (features_minus) */}
-                          <div style={{ fontSize:12, color:'#16a34a', marginBottom:4 }}>Ellos no tienen (nosotros sí)</div>
-                          <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                            {minus.length ? minus.map((p,i)=>(<span key={i} style={{ fontSize:11, background:'rgba(22,163,74,0.08)', color:'#166534', border:`1px solid rgba(22,163,74,0.25)`, borderRadius:6, padding:'2px 6px' }}>{p}</span>)) : (
-                              baseHasAny ? <span style={{ fontSize:11, color:'#64748b' }}>—</span> : <span style={{ fontSize:11, color:'#64748b' }}>La base no declara equipamiento</span>
-                            )}
-                          </div>
-                        </div>
-                        <div style={{ flex:1 }}>
-                          {/* Rojo = Ellos mejor: ellos SÍ tienen y nosotros NO (features_plus) */}
-                          <div style={{ fontSize:12, color:'#dc2626', marginBottom:4 }}>Ellos sí tienen (nosotros no)</div>
-                          <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                            {plus.length ? plus.map((p,i)=>(<span key={i} style={{ fontSize:11, background:'rgba(220,38,38,0.06)', color:'#991b1b', border:`1px solid rgba(220,38,38,0.25)`, borderRadius:6, padding:'2px 6px' }}>{p}</span>)) : <span style={{ fontSize:11, color:'#64748b' }}>—</span>}
-                          </div>
-                        </div>
-                      </div>
+          const { plus: rawPlus, minus: rawMinus } = getFeatureDiffs(r);
+          const plus = rawPlus.slice(0, 12);
+          const minus = rawMinus.slice(0, 12);
+          const baseLabel = vehLabel(baseRow);
+          const color = colorForVersion(r);
+          return (
+            <div key={idx} style={{ border:'1px solid #f1f5f9', borderRadius:8, padding:10 }}>
+              <div style={{ fontWeight:600, marginBottom:6, color:'#334155' }}>{vehLabel(r)}</div>
+              <div style={{ display:'flex', gap:12 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, color:'#16a34a', marginBottom:4 }}>Ellos no tienen (nosotros sí)</div>
+                  {minus.length ? (
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                      {minus.map((p,i)=>(<span key={i} style={{ fontSize:11, background:'rgba(22,163,74,0.08)', color:'#166534', border:`1px solid rgba(22,163,74,0.25)`, borderRadius:6, padding:'2px 6px' }}>{p}</span>))}
                     </div>
-                  );
-                })}
+                  ) : (
+                    <div style={{ fontSize:11, color:'#15803d', background:'rgba(22,163,74,0.08)', border:'1px solid rgba(22,163,74,0.25)', borderRadius:6, padding:'4px 6px' }}>
+                      No encontramos gaps verdes relevantes; {baseLabel} ya cubre los features priorizados.
+                    </div>
+                  )}
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, color:'#dc2626', marginBottom:4 }}>Ellos sí tienen (nosotros no)</div>
+                  {plus.length ? (
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                      {plus.map((p,i)=>(<span key={i} style={{ fontSize:11, background:'rgba(220,38,38,0.06)', color:'#991b1b', border:`1px solid rgba(220,38,38,0.25)`, borderRadius:6, padding:'2px 6px' }}>{p}</span>))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize:11, color:'#991b1b', background:'rgba(220,38,38,0.06)', border:'1px solid rgba(220,38,38,0.25)', borderRadius:6, padding:'4px 6px' }}>
+                      No detectamos equipamiento rojo prioritario; {vehLabel(r)} no añade features clave frente a {baseLabel}.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
               </div>
             </div>
           );
