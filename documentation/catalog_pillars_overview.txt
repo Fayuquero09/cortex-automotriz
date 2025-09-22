@@ -1,0 +1,74 @@
+# Catálogo MY 2024-2026 — Metodología y Lógica
+
+## 1. Alcance y Objetivo
+Trabajamos con los años modelo 2024, 2025 y 2026, apoyándonos en el historial de versiones desde 1995 (`equipo_veh_limpio_enriquecido.csv`). El objetivo es entregar un catálogo "frontend ready" con pilares de equipamiento completos, precios actualizados y un plan de monitoreo.
+
+## 2. Datos y Fuentes
+- **Histórico 1995-2026** (`equipo_veh_limpio_enriquecido.csv` / `equipo_veh_limpio.csv`): columnas por marca, modelo, versión, año, equipamiento, atributos booleanos/numéricos, precios (`msrp`, `precio_transaccion`).
+- **Catálogo normalizado** (`vehiculos-todos-augmented.normalized.raw.json`): base sin pilares.
+- **Catálogo enriquecido y escorado** (`vehiculos-todos-augmented.normalized.enriched.scored.json`).
+- **Scripts de auditoría/ingesta** (`scripts/audit_pillars.py`, `process_raw_catalog.py`, `enrich_catalog.py`, `run_daily_refresh.sh`).
+
+## 3. Pipeline
+1. Normalización inicial con `process_raw_catalog.py`.
+2. Inventario y detección de huecos (recalcular `pillar_scores` y correr auditoría).
+3. Reconstrucción de categorías desde `equipo_veh_limpio_enriquecido.csv` (mapa columna→categoría).
+4. Recalcular pilares y scores (`calc_scores`).
+5. Auditoría y validación (`audit_pillars.py`).
+
+## 4. Pilares y Familias
+- Audio y entretenimiento: Android Auto/CarPlay, pantalla, audio, cámara 360, cargador inalámbrico.
+- Climatización: zonas HVAC, controles traseros, calefacción/ventilación de asientos, purificador.
+- Confort: ajustes eléctricos/memoria, techo panorámico, cortinillas, volante, iluminación ambiental.
+- Dimensiones: capacidad de carga, piso ajustable, rieles, puntos de anclaje, tercera fila.
+- Exterior: iluminación, lavafaros, sensores, techo panorámico, spoiler, pintura especial.
+- Frenos: discos, ABS, asistencias, EBD, hill assist.
+- Llantas y rines: medidas, rines, runflat, monitoreo, kit inflado.
+- Motor: tipo/cilindraje, potencia, torque.
+- Seguridad: ADAS (AEB, ACC, LKA, BSM, RCTA), bolsas de aire, ESC.
+- Suspensión: arquitectura (independiente, air), adaptiva, elevación.
+- Transmisión: tren motriz, reductora, modos off-road, bloqueos.
+- Energía: categoría híbrido/EV, batería, autonomía, carga AC/DC, consumo kWh.
+
+## 5. Ponderación por Segmento
+| Segmento | Pesos principales |
+|----------|-------------------|
+| Sedan | Seguridad 0.20, motor 0.20, confort 0.15, clima 0.10, audio 0.10, dimensiones 0.10, suspensión 0.05, frenos 0.10 |
+| SUV | Seguridad 0.18, motor 0.18, confort 0.15, energía* 0.10, dimensiones 0.15, suspensión 0.08, frenos 0.08, audio 0.08 |
+| Pickup | Dimensiones 0.30, tracción 0.20, seguridad 0.10, motor 0.15, confort 0.05, clima 0.05, audio 0.05, suspensión/frenos 0.10 |
+| Van | Seguridad 0.25, confort 0.15, clima 0.15, dimensiones 0.20, motor 0.10, audio 0.10, frenos 0.05 |
+| Sports | Motor 0.35, frenos 0.20, suspensión 0.15, seguridad 0.15, confort 0.05, audio 0.05, exterior 0.05 |
+
+*Vehículos electrificados: se redistribuye peso de motor→energía (suma +0.15).
+
+## 6. Cobertura y Auditoría
+- MY 2026: ≥97 % en todos los pilares (dimensiones, exterior, transmisión, frenos, motor, seguridad = 100 %).
+- MY 2025: ≥90 % (energía 91.6 %, climatización 90.7 %, suspensión 90.3 %).
+- MY 2024: casi todos ≥99 %, salvo confort (92.5 %).
+- Auditoría (`audit_pillars.py`): 3 224 vehículos con `pillar_scores`; 14 versiones 2025-2026 pendientes de equipamiento estructurado (`only_general_missing_ids.txt`).
+
+## 7. Incremento de Precio por Año Modelo
+- 2024→2025 (730 pares):
+  - MSRP +$25.5k (media, +2.3 %), mediana +$12.1k (+1.8 %).
+  - Precio transacción +$36.7k (media, +3.1 %), mediana +$10.1k (+1.6 %).
+  - 90 % de los casos: < +5.7 % (MSRP), < +10.8 % (transacción).
+- 2025→2026 (169 pares):
+  - MSRP +$27.3k (media, +1.6 %), mediana +$10.5k (+1.3 %).
+  - Precio transacción +$40.8k (media, +3.1 %), mediana +$35.0k (+2.2 %).
+  - 90 % de los casos: < +4.3 % (MSRP), < +6.5 % (transacción).
+
+## 8. Costo/Beneficio (Equipamiento vs Precio)
+- Indicador: `equip_score / precio_transaccion` (puntos por millón MXN).
+- Mejor relación actual: Geely GX3 Pro GC 2025 (~149 puntos por millón). Siguen Chevrolet Aveo 2025, etc.
+
+## 9. Monitoreo Continuo
+- Refrescar catálogo vía `scripts/run_daily_refresh.sh`.
+- Reprocesar y recalcular pilares (`process_raw_catalog.py`, `enrich_catalog.py`, `calc_scores`).
+- Auditoría recurrente (`scripts/audit_pillars.py`).
+- Revisar `only_general_missing_ids.txt` para completar equipamiento cuando lleguen datos JATO/OEM.
+- Validar nuevas versiones/marcas y variaciones de precio.
+
+## 10. Resultado Final
+Archivo recomendado: `data/vehiculos-todos-augmented.normalized.enriched.scored.json`.
+- Incluye `pillar_scores`, `equip_score`, `segment_score`, `equipment_breakdown`, con metadata (`pillar_source = "v2_scoring"`, `equipment_enriched = True`).
+- Cobertura casi total MY 2025-2026; listo para consumo por el frontend.
