@@ -951,7 +951,6 @@ export default function ComparePanel() {
     { key: 'tco_60k_mxn', label: t('tco60k'), minWidth: 130 },
     { key: 'cost_per_hp_mxn', label: t('price_per_hp'), minWidth: 130 },
     { key: 'segment_score', label: 'Score', minWidth: 120 },
-    { key: 'equip_over_under_pct', label: t('equip_rel'), minWidth: 140 },
     { key: 'segmento', label: t('segment'), minWidth: 160 },
   ];
 
@@ -1155,8 +1154,9 @@ export default function ComparePanel() {
                       const compVal = fmtScoreValue(compValRaw);
                       const deltaObj = (comp.__pillar_deltas || {})[id];
                       const fallbackDelta = (compValRaw != null && baseMap[id] != null) ? (compValRaw - baseMap[id]) : null;
-                      const delta = (deltaObj && typeof deltaObj.delta === 'number') ? deltaObj.delta : fallbackDelta;
-                      const deltaColor = delta == null ? '#64748b' : (delta > 0 ? '#dc2626' : '#16a34a');
+                      const rawDelta = (deltaObj && typeof deltaObj.delta === 'number') ? deltaObj.delta : fallbackDelta;
+                      const delta = rawDelta == null ? null : -rawDelta; // own perspective (positivo = mejor que el competidor)
+                      const deltaColor = delta == null ? '#64748b' : (delta >= 0 ? '#16a34a' : '#dc2626');
                       return (
                         <td key={idx} style={{ padding:'6px 8px', borderBottom:'1px solid #e2e8f0' }}>
                           <div style={{ fontWeight:600 }}>{compVal}</div>
@@ -1218,26 +1218,63 @@ export default function ComparePanel() {
       if (raw.includes('magna')) return 'Gasolina Magna';
       return 'Gasolina Magna';
     }
-    return raw.toUpperCase();
+    if (!raw) {
+      if (kwhPer100FromRow(row) != null) return 'Eléctrico';
+      if (kmlFromRow(row) != null) return 'Gasolina Magna';
+    }
+    return raw ? raw.toUpperCase() : '';
   }
   function fuelPriceLabel(row: any): string {
     const raw = _fuelRaw(row);
-    const p = propulsionLabel(row).toLowerCase();
-    if (!p) return '';
+    let p = propulsionLabel(row).toLowerCase();
+    if (!p) {
+      if (raw.includes('gas')) p = 'gasolina magna';
+      else if (raw.includes('diesel')) p = 'diésel';
+      else if (raw.includes('elé')) p = 'eléctrico';
+    }
     const asOf = cfg?.fuel_prices_meta?.as_of ? ` • ${cfg.fuel_prices_meta.as_of}` : '';
     const src = cfg?.fuel_prices_meta?.source ? ' • CRE' : '';
     if (p === 'diésel' || p === 'diesel') {
       const v = fuelPrices?.diesel_litro; return v?`• $${Number(v).toFixed(2)}/L${asOf}${src}`:'';
+    }
+    if (p === 'eléctrico') {
+      const v = fuelPrices?.electricidad_kwh; return v?`• $${Number(v).toFixed(2)}/kWh${asOf}${src}`:'';
     }
     if (p.startsWith('gasolina')) {
       const isPrem = raw.includes('premium');
       const v = isPrem ? (fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro) : (fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro);
       return v ? `• $${Number(v).toFixed(2)}/L${asOf}${src}` : '';
     }
-    if (p === 'eléctrico') {
-      const v = fuelPrices?.electricidad_kwh; return v?`• $${Number(v).toFixed(2)}/kWh${asOf}${src}`:'';
+    const fallback = fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? fuelPrices?.diesel_litro;
+    return fallback ? `• $${Number(fallback).toFixed(2)}${raw.includes('elé')?'/kWh':'/L'}${asOf}${src}` : '';
+  }
+  function fuelPriceFor(row: any): number | null {
+    const raw = _fuelRaw(row);
+    const lc = raw.toLowerCase();
+    if (lc) {
+      if (/bev|eléctr|elect/.test(lc) && !/phev|hibrid/.test(lc)) {
+        const v = Number(fuelPrices?.electricidad_kwh ?? NaN);
+        if (Number.isFinite(v)) return v;
+      }
+      if (/phev|enchuf/.test(lc)) {
+        const v = Number(fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro ?? NaN);
+        if (Number.isFinite(v)) return v;
+      }
+      if (lc.includes('diesel')) {
+        const v = Number(fuelPrices?.diesel_litro ?? NaN);
+        if (Number.isFinite(v)) return v;
+      }
+      if (lc.includes('premium')) {
+        const v = Number(fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro ?? NaN);
+        if (Number.isFinite(v)) return v;
+      }
+      if (lc.includes('gas') || lc.includes('nafta') || lc.includes('petrol')) {
+        const v = Number(fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? NaN);
+        if (Number.isFinite(v)) return v;
+      }
     }
-    return '';
+    const fallback = Number(fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? fuelPrices?.diesel_litro ?? fuelPrices?.electricidad_kwh ?? NaN);
+    return Number.isFinite(fallback) ? fallback : null;
   }
   function energyConsumptionKwh100(row: any): number | null {
     if (!row) return null;
@@ -1249,9 +1286,17 @@ export default function ComparePanel() {
     return Number.isFinite(deduced) && (deduced as number) > 0 ? Number(deduced) : null;
   }
   function energyConsumptionLabel(row: any): string {
-    const val = energyConsumptionKwh100(row);
-    if (val == null) return '';
-    return `${val.toFixed(1)} kWh/100 km`;
+    if (isElectric(row)) {
+      const val = energyConsumptionKwh100(row);
+      return val == null ? '' : `${val.toFixed(1)} kWh/100 km`;
+    }
+    const kml = kmlFromRow(row);
+    if (kml != null) {
+      const l100 = kml > 0 ? (100 / kml) : null;
+      const extra = l100 != null ? ` • ${l100.toFixed(1)} L/100 km` : '';
+      return `${kml.toFixed(1)} km/L${extra}`;
+    }
+    return '';
   }
 
   function segLabel(row: any): string {
@@ -2417,9 +2462,7 @@ const segData: any[] = [];
               return (
               <th key={h.key} style={thStyle}>
                 {h.label}
-                {h.key==='equip_over_under_pct' ? (
-                  <InfoIcon title={'Equipo relativo al vehículo base. Positivo = más equipo; negativo = menos. Calculado por pilares o, si faltan, por score.'} />
-                ) : h.key==='segment_score' ? (
+                {h.key==='segment_score' ? (
                   <InfoIcon title={'Score ponderado (0–100) considerando los pilares clave del segmento del vehículo.'} />
                 ) : h.key==='segmento' ? (
                   (() => {
@@ -2489,8 +2532,6 @@ const segData: any[] = [];
                 const seg = segmentMain(baseRow) || (baseRow.segment_category ? String(baseRow.segment_category) : '');
                 return seg ? <div style={{ fontSize:12, color:'#64748b' }}>{seg.toUpperCase()}</div> : null;
               })()}
-            </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>              <div>100%</div><div style={{ fontSize:11, color:'#64748b' }}>Base</div>
             </td>
                 {/* Segmento base */}
             <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600, minWidth: 200 }}>
@@ -2590,27 +2631,6 @@ const segData: any[] = [];
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                   <div>{fmtScoreValue(r.segment_score)} pts</div>
                   <div style={{ fontSize:12, opacity:0.9, color: segDelta!=null ? (segDelta>0?'#16a34a':'#dc2626'):'#64748b' }}>{segDelta==null?'-':`${tri(segDelta)} ${fmtScoreDelta(segDelta)} pts`}</div>
-                </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-                  {(() => {
-                    const val = num((r as any)?.equip_over_under_pct);
-                    const src = String((r as any)?.equip_over_under_source || '').toLowerCase();
-                    const brk = Array.isArray((r as any)?.equip_over_under_breakdown) ? (r as any).equip_over_under_breakdown as any[] : [];
-                    // Color del porcentaje: rojo si el competidor es mejor (>0), verde si nosotros mejor (<0)
-                    const detailColor = (val==null)?'#64748b': (val>0?'#dc2626': (val<0?'#16a34a':'#334155'));
-                    const label = src==='pillars' ? 'pilares' : (src==='score' ? 'score' : '');
-                    const tip = brk.length ? brk.map((b:any)=> `${b.label}: ${b.delta_pct>0?'+':''}${Number(b.delta_pct).toFixed(1)}%`).join('\n') : (label?`Calculado por ${label}`:undefined);
-                    const n = Number(val);
-                    const phrase = (n==null || !Number.isFinite(n)) ? '-' : (n>0 ? 'Mejor que nosotros' : (n<0 ? 'Nosotros mejor' : 'Igual'));
-                    const phraseColor = '#111827'; // frase en negro
-                    const details = (n==null || !Number.isFinite(n)) ? '' : `${Math.abs(n).toFixed(0)}%${label?` (${label})`:''}`;
-                    return (
-                      <div title={tip}>
-                        {details ? <div style={{ fontWeight:600, color: detailColor }}>{details}</div> : <div style={{ fontWeight:600, color:'#64748b' }}>-</div>}
-                        <div style={{ fontSize:11, color: phraseColor }}>{phrase}</div>
-                      </div>
-                    );
-                  })()}
                 </td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 200 }}>
                   <div>{segLabel(r)}</div>
