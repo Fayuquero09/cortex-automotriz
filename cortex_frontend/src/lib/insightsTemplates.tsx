@@ -137,12 +137,12 @@ const renderItem = (item: InsightItem, lang: Lang): React.ReactNode => {
   }
   if (key.startsWith('accion_')) {
     return (
-      <div style={cardStyle('#0f172a')}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <strong>{text}</strong>
+      <div style={{ display: 'grid', gap: 6, padding: '4px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <strong style={{ fontSize: 14 }}>{text}</strong>
           {args.urgencia ? badge(fmt(args.urgencia), 'warning') : null}
         </div>
-        <div style={{ fontSize: 13, color: '#475569', display: 'grid', gap: 4 }}>
+        <div style={{ fontSize: 13, color: '#475569', display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           {args.owner ? <span><strong>Owner:</strong> {fmt(args.owner)}</span> : null}
           {args.cuando ? <span><strong>Cuándo:</strong> {fmt(args.cuando)}</span> : null}
           {args.kpi ? <span><strong>KPI:</strong> {fmt(args.kpi)}</span> : null}
@@ -152,13 +152,13 @@ const renderItem = (item: InsightItem, lang: Lang): React.ReactNode => {
   }
   if (key === 'oportunidad') {
     return (
-      <div style={cardStyle('#1d4ed8')}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-          <strong>{fmt(args.palanca) || text}</strong>
+      <div style={{ display: 'grid', gap: 6, padding: '4px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <strong style={{ fontSize: 14 }}>{fmt(args.palanca) || text}</strong>
           {args.impacto ? badge(fmt(args.impacto), 'success') : null}
         </div>
-        {args.accion ? <p style={cardParagraph}>{fmt(args.accion)}</p> : null}
-        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
+        {args.accion ? <p style={{ margin: 0, fontSize: 13, color: '#475569' }}>{fmt(args.accion)}</p> : null}
+        <div style={{ fontSize: 12, color: '#64748b' }}>
           {args.urgencia ? `${fmt(args.urgencia)} • ` : ''}{text && text !== fmt(args.palanca) ? text : ''}
         </div>
       </div>
@@ -166,9 +166,9 @@ const renderItem = (item: InsightItem, lang: Lang): React.ReactNode => {
   }
   if (key === 'riesgo') {
     return (
-      <div style={cardStyle('#b91c1c')}>
-        <strong style={{ display: 'block', marginBottom: 6 }}>{text}</strong>
-        {args.mitigacion ? <p style={cardParagraph}>{fmt(args.mitigacion)}</p> : null}
+      <div style={{ display: 'grid', gap: 6, padding: '4px 0' }}>
+        <strong style={{ fontSize: 14 }}>{text}</strong>
+        {args.mitigacion ? <p style={{ margin: 0, fontSize: 13, color: '#475569' }}>{fmt(args.mitigacion)}</p> : null}
       </div>
     );
   }
@@ -183,9 +183,9 @@ const renderItem = (item: InsightItem, lang: Lang): React.ReactNode => {
   }
   if (Object.keys(args).length) {
     return (
-      <div style={cardStyle('#0f172a')}>
+      <div style={{ display: 'grid', gap: 4, padding: '4px 0', fontSize: 13, color: '#334155' }}>
         {Object.entries(args).map(([k, v]) => (
-          <div key={k} style={{ fontSize: 13, color: '#334155' }}>
+          <div key={k}>
             <strong>{k}:</strong> {fmt(v)}
           </div>
         ))}
@@ -193,23 +193,6 @@ const renderItem = (item: InsightItem, lang: Lang): React.ReactNode => {
     );
   }
   return null;
-};
-
-const cardStyle = (color: string): React.CSSProperties => ({
-  border: `1px solid ${color}22`,
-  background: '#ffffff',
-  borderRadius: 12,
-  padding: '12px 16px',
-  boxShadow: '0 8px 18px -12px rgba(15, 23, 42, 0.6)',
-  display: 'grid',
-  gap: 6,
-});
-
-const cardParagraph: React.CSSProperties = {
-  margin: 0,
-  fontSize: 14,
-  color: '#1f2937',
-  lineHeight: 1.5,
 };
 
 const sectionHeading = (section: InsightSection, lang: Lang): string => {
