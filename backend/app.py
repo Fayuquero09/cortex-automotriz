@@ -6566,15 +6566,39 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
                     return _json2.loads(s[i:j+1])
             except Exception:
                 pass
+            # Intento extra: coerción de JSON-like (comillas simples, keys sin comillas, args como lista)
+            try:
+                import re as _re
+                ss = s
+                # Recorta basura posterior típica
+                ss = ss.replace('Insights generados.', '')
+                # Extrae el bloque más grande entre llaves
+                i = ss.find('{'); j = ss.rfind('}')
+                if i != -1 and j != -1 and j > i:
+                    ss = ss[i:j+1]
+                # Reemplaza comillas simples por dobles (sencillo, puede fallar en casos con apóstrofes)
+                ss = ss.replace("'", '"')
+                # Asegura que las claves tengan comillas: token: → "token":
+                ss = _re.sub(r'([,{\s])([A-Za-z_][A-Za-z0-9_\-]*)\s*:', r'\1"\2":', ss)
+                # Normaliza booleanos/Null JS→JSON ya son válidos (true/false/null)
+                import json as _json2
+                return _json2.loads(ss)
+            except Exception:
+                pass
             return None
         parsed = _parse_any(text)
 
         narrative_text: Optional[str] = None
         try:
             if parsed is None and isinstance(text, str):
-                stripped = text.strip()
-                if stripped:
-                    narrative_text = stripped
+                # Reintenta con coerción antes de rendirse a narrativa
+                coerced = _parse_any(text)
+                if coerced is not None:
+                    parsed = coerced
+                else:
+                    stripped = text.strip()
+                    if stripped:
+                        narrative_text = stripped
         except Exception:
             narrative_text = text if isinstance(text, str) else None
 
