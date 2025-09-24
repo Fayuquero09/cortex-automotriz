@@ -4,10 +4,10 @@ import dynamic from 'next/dynamic';
 import * as echarts from 'echarts';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
 import useSWR from 'swr';
+
 import { useAppState } from '@/lib/state';
 import { useI18n } from '@/lib/i18n';
 import { endpoints } from '@/lib/api';
-import { renderStruct } from '@/lib/insightsTemplates';
 import { brandLabel, vehicleLabel } from '@/lib/vehicleLabels';
 
 type Row = Record<string, any>;
@@ -57,6 +57,7 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
           onChange={(e)=> setManModel(e.target.value)}
           onKeyDown={onKeyDown}
           style={{ minWidth:260 }}
+          suppressHydrationWarning
         />
         <button
           type="button"
@@ -133,23 +134,83 @@ function num(x: any): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
+const FALSE_STRINGS = new Set([
+  '0','false','no','none','n/a','na','-','null','no disponible','ninguno','sin dato','sin datos'
+]);
+const TRUE_STRINGS = new Set([
+  'true','1','si','sí','estandar','estándar','incluido','standard','std','present','x','y','yes','serie','incluida','incluido'
+]);
+
+function normalizeBoolean(value: any): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.some(normalizeBoolean);
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+  const str = String(value).trim().toLowerCase();
+  if (!str) return false;
+  if (FALSE_STRINGS.has(str)) return false;
+  if (TRUE_STRINGS.has(str)) return true;
+  const numeric = Number(str);
+  if (Number.isFinite(numeric)) return numeric > 0;
+  return true;
+}
+
+function textIncludes(value: any, token: string): boolean {
+  if (value == null) return false;
+  const str = String(value).toLowerCase();
+  return str.includes(token.toLowerCase());
+}
+
+function augmentFeatureFlags(row: any): void {
+  if (!row || typeof row !== 'object') return;
+  const has = (...keys: string[]) => keys.some((key) => normalizeBoolean(row?.[key]));
+  const fromText = (key: string, token: string) => textIncludes(row?.[key], token);
+  const assign = (key: string, value: boolean) => {
+    if (value) row[key] = true;
+    else if (key in row) delete row[key];
+  };
+
+  assign('feature_aeb', has('adas_aeb', 'alerta_colision', 'alerta_colision_original'));
+  assign('feature_hill_assist', has('adas_hill_assist'));
+  assign('feature_lane_keep', has('adas_lane_mode', 'adas_lka', 'asistente_mantenimiento_carril') || fromText('header_description', 'lane') || fromText('header_description', 'carril'));
+  assign('feature_blind_spot', has('adas_blind_spot', 'sensor_punto_ciego', 'sensor_punto_ciego_original', 'tiene_camara_punto_ciego'));
+  assign('feature_acc', has('control_crucero_adaptativo', 'crucero_adaptativo') || fromText('control_crucero_original', 'adapt'));
+  assign('feature_cam_360', has('adas_360_camera', 'camara_360'));
+  assign('feature_rain_sensor', has('limpiaparabrisas_lluvia', 'sensor_lluvia', 'exterior_rain_sensing_wipers'));
+  assign('feature_park_sensors_front', has('adas_front_parking_sensors', 'asistente_estac_frontal', 'comfort_parking_sensors', 'comfort_parking_assist_auto'));
+  assign('feature_park_sensors_rear', has('adas_rear_parking_sensors', 'asistente_estac_trasero', 'comfort_parking_sensors', 'comfort_parking_assist_auto'));
+  assign('feature_park_sensors_side', has('adas_side_parking_sensors', 'comfort_parking_space_info'));
+  assign('feature_power_tailgate', has('cierre_automatico_maletero', 'comfort_power_tailgate'));
+  assign('feature_auto_door_close', has('comfort_auto_door_close'));
+  assign('feature_memory', has('comfort_memory_settings'));
+  assign('feature_wireless_charging', has('comfort_wireless_charging'));
+}
+
 const FEATURE_FIELD_DEFS: Array<{ key: string; label: string; group?: string }> = [
-  { key: 'alerta_colision', label: 'Alerta de colisión', group: 'ADAS' },
-  { key: 'sensor_punto_ciego', label: 'Monitor de punto ciego', group: 'ADAS' },
-  { key: 'tiene_camara_punto_ciego', label: 'Cámara punto ciego', group: 'ADAS' },
-  { key: 'camara_360', label: 'Cámara 360°', group: 'ADAS' },
+  { key: 'feature_aeb', label: 'Frenado autónomo (AEB)', group: 'ADAS' },
+  { key: 'feature_hill_assist', label: 'Asistente en pendientes (HSA)', group: 'ADAS' },
+  { key: 'feature_lane_keep', label: 'Mantenimiento de carril (LKA)', group: 'ADAS' },
+  { key: 'feature_blind_spot', label: 'Alerta de punto ciego (BSM)', group: 'ADAS' },
+  { key: 'feature_acc', label: 'Control crucero adaptativo', group: 'ADAS' },
+  { key: 'feature_cam_360', label: 'Cámara 360°', group: 'ADAS' },
+  { key: 'feature_rain_sensor', label: 'Sensor de lluvia', group: 'ADAS' },
+  { key: 'feature_park_sensors_front', label: 'Sensores de estacionamiento frontales', group: 'ADAS' },
+  { key: 'feature_park_sensors_rear', label: 'Sensores de estacionamiento traseros', group: 'ADAS' },
+  { key: 'feature_park_sensors_side', label: 'Sensores de estacionamiento laterales', group: 'ADAS' },
+  { key: 'feature_power_tailgate', label: 'Cierre eléctrico de portón', group: 'Confort' },
+  { key: 'feature_auto_door_close', label: 'Cierre automático de puertas', group: 'Confort' },
+  { key: 'feature_memory', label: 'Memorias asiento/volante', group: 'Confort' },
+  { key: 'feature_wireless_charging', label: 'Cargador inalámbrico', group: 'Confort' },
+  { key: 'comfort_parking_assist_auto', label: 'Estacionamiento automático', group: 'ADAS' },
   { key: 'asistente_estac_frontal', label: 'Asistente de estacionamiento frontal', group: 'ADAS' },
   { key: 'asistente_estac_trasero', label: 'Asistente de estacionamiento trasero', group: 'ADAS' },
-  { key: 'limpiaparabrisas_lluvia', label: 'Sensor de lluvia', group: 'ADAS' },
-  { key: 'control_crucero_adaptativo', label: 'Control crucero adaptativo', group: 'ADAS' },
-  { key: 'asistente_mantenimiento_carril', label: 'Asistente de carril', group: 'ADAS' },
   { key: 'llave_inteligente', label: 'Llave inteligente', group: 'Confort' },
   { key: 'tiene_pantalla_tactil', label: 'Pantalla táctil', group: 'Info' },
   { key: 'android_auto', label: 'Android Auto', group: 'Info' },
   { key: 'apple_carplay', label: 'Apple CarPlay', group: 'Info' },
   { key: 'techo_corredizo', label: 'Techo corredizo', group: 'Confort' },
+  { key: 'control_frenado_curvas', label: 'Frenado en curvas', group: 'ADAS' },
   { key: 'apertura_remota_maletero', label: 'Apertura remota maletero', group: 'Utilidad' },
-  { key: 'cierre_automatico_maletero', label: 'Cierre automático maletero', group: 'Utilidad' },
   { key: 'rieles_techo', label: 'Rieles de techo', group: 'Utilidad' },
   { key: 'tercera_fila', label: 'Tercera fila de asientos', group: 'Utilidad' },
   { key: 'enganche_remolque', label: 'Enganche para remolque', group: 'Utilidad' },
@@ -163,146 +224,8 @@ const FEATURE_LABELS: Record<string, string> = FEATURE_FIELD_DEFS.reduce((acc, d
 
 const ADAS_FEATURE_DEFS = FEATURE_FIELD_DEFS.filter((def) => def.group === 'ADAS');
 
-// Render helper: intenta parsear JSON y mostrar secciones en orden; si falla, muestra texto plano
-const renderInsights = (raw: string) => {
-  try {
-    const obj = JSON.parse(raw as any);
-    const header = (s:string) => (<div style={{ fontWeight:700, marginTop:8 }}>{s}</div>);
-    const list = (arr:any[]) => (
-      <ul style={{ margin:'4px 0 8px 18px' }}>
-        {(arr||[]).map((x:any,i:number)=>(<li key={i} style={{ fontSize:13 }}>{String(x)}</li>))}
-      </ul>
-    );
-    return (
-      <div style={{ fontSize:13 }}>
-        {obj.introduccion ? (<div style={{ marginBottom:6 }}>{obj.introduccion}</div>) : null}
-        {obj.resumen_base ? (<>{header('Resumen del vehículo')}<div>{obj.resumen_base.resumen}</div></>) : null}
-        {obj.precio_posicionamiento ? (
-          <>
-            {header('Precio y posicionamiento')}
-            {list(obj.precio_posicionamiento.hallazgos)}
-            {obj.precio_posicionamiento.acciones?.length ? (
-              <div><em>Acciones</em>{list(obj.precio_posicionamiento.acciones)}</div>
-            ) : null}
-          </>
-        ) : null}
-        {obj.tco_costos ? (
-          <>
-            {header('Costos y TCO 60k')}
-            {list(obj.tco_costos.hallazgos)}
-            {obj.tco_costos.acciones?.length ? (
-              <div><em>Acciones</em>{list(obj.tco_costos.acciones)}</div>
-            ) : null}
-          </>
-        ) : null}
-        {obj.equipamiento_deltas ? (
-          <>
-            {header('Equipamiento — diferencias')}
-            <div><strong>Ellos sí (nosotros no):</strong>{list(obj.equipamiento_deltas.ellos_tienen)}</div>
-            <div><strong>Ellos no (nosotros sí):</strong>{list(obj.equipamiento_deltas.nosotros_tenemos)}</div>
-            {obj.equipamiento_deltas.must_haves?.length ? (
-              <div><em>Must‑haves</em>{list(obj.equipamiento_deltas.must_haves)}</div>
-            ) : null}
-          </>
-        ) : null}
-        {obj.pilares_segmento ? (
-          <>
-            {header('Pilares por segmento')}
-            {list(obj.pilares_segmento.radar)}
-            {list(obj.pilares_segmento.precio_vs_pilares)}
-          </>
-        ) : null}
-        {obj.ventas ? (
-          <>
-            {header('Ventas')}
-            {obj.ventas.ytd ? <div>{obj.ventas.ytd}</div> : null}
-            {list(obj.ventas.mensual)}
-            {obj.ventas.forecast?.length ? (
-              <div><em>Forecast</em>{list(obj.ventas.forecast)}</div>
-            ) : null}
-          </>
-        ) : null}
-        {obj.recomendaciones?.length ? (<>{header('Recomendaciones')}{list(obj.recomendaciones)}</>) : null}
-        {obj.riesgos?.length ? (<>{header('Riesgos')}{list(obj.riesgos)}</>) : null}
-        {obj.siguientes_pasos?.length ? (<>{header('Siguientes pasos')}{list(obj.siguientes_pasos)}</>) : null}
-      </div>
-    );
-  } catch {
-    return (<pre style={{ whiteSpace:'pre-wrap', fontSize:13 }}>{raw}</pre>);
-  }
-};
-
-// Render helper para objeto ya parseado (insights_json)
-const renderInsightsObj = (obj: any) => {
-  try {
-    const header = (s:string) => (<div style={{ fontWeight:700, marginTop:8 }}>{s}</div>);
-    const list = (arr:any[]) => (
-      <ul style={{ margin:'4px 0 8px 18px' }}>
-        {(arr||[]).map((x:any,i:number)=>(<li key={i} style={{ fontSize:13 }}>{String(x)}</li>))}
-      </ul>
-    );
-    return (
-      <div style={{ fontSize:13 }}>
-        {obj.introduccion ? (<div style={{ marginBottom:6 }}>{obj.introduccion}</div>) : null}
-        {obj.resumen_base ? (<>{header('Resumen del vehículo')}<div>{obj.resumen_base.resumen}</div></>) : null}
-        {obj.precio_posicionamiento ? (
-          <>
-            {header('Precio y posicionamiento')}
-            {list(obj.precio_posicionamiento.hallazgos)}
-            {obj.precio_posicionamiento.acciones?.length ? (
-              <div><em>Acciones</em>{list(obj.precio_posicionamiento.acciones)}</div>
-            ) : null}
-          </>
-        ) : null}
-        {obj.tco_costos ? (
-          <>
-            {header('Costos y TCO 60k')}
-            {list(obj.tco_costos.hallazgos)}
-            {obj.tco_costos.acciones?.length ? (
-              <div><em>Acciones</em>{list(obj.tco_costos.acciones)}</div>
-            ) : null}
-          </>
-        ) : null}
-        {obj.equipamiento_deltas ? (
-          <>
-            {header('Equipamiento — diferencias')}
-            <div><strong>Ellos sí (nosotros no):</strong>{list(obj.equipamiento_deltas.ellos_tienen)}</div>
-            <div><strong>Ellos no (nosotros sí):</strong>{list(obj.equipamiento_deltas.nosotros_tenemos)}</div>
-            {obj.equipamiento_deltas.must_haves?.length ? (
-              <div><em>Must‑haves</em>{list(obj.equipamiento_deltas.must_haves)}</div>
-            ) : null}
-          </>
-        ) : null}
-        {obj.pilares_segmento ? (
-          <>
-            {header('Pilares por segmento')}
-            {list(obj.pilares_segmento.radar)}
-            {list(obj.pilares_segmento.precio_vs_pilares)}
-          </>
-        ) : null}
-        {obj.ventas ? (
-          <>
-            {header('Ventas')}
-            {obj.ventas.ytd ? <div>{obj.ventas.ytd}</div> : null}
-            {list(obj.ventas.mensual)}
-            {obj.ventas.forecast?.length ? (
-              <div><em>Forecast</em>{list(obj.ventas.forecast)}</div>
-            ) : null}
-          </>
-        ) : null}
-        {obj.recomendaciones?.length ? (<>{header('Recomendaciones')}{list(obj.recomendaciones)}</>) : null}
-        {obj.riesgos?.length ? (<>{header('Riesgos')}{list(obj.riesgos)}</>) : null}
-        {obj.siguientes_pasos?.length ? (<>{header('Siguientes pasos')}{list(obj.siguientes_pasos)}</>) : null}
-      </div>
-    );
-  } catch {
-    return (<pre style={{ whiteSpace:'pre-wrap', fontSize:13 }}>{JSON.stringify(obj, null, 2)}</pre>);
-  }
-};
-
-
 export default function ComparePanel() {
-  const { t, lang } = useI18n() as any;
+  const { t } = useI18n() as any;
   const { own, filters, autoGenSeq, autoGenerate, triggerAutoGen } = useAppState();
   const ready = !!own.model && !!own.make && !!own.year;
   const { data: cfg } = useSWR<any>('cfg', () => endpoints.config());
@@ -350,11 +273,6 @@ export default function ComparePanel() {
   };
   const [hoverRow, setHoverRow] = React.useState<number | null>(null);
   const hoverStyle = (idx: number) => (hoverRow === idx ? { background:'#f8fafc' } : {});
-  const [insights, setInsights] = React.useState<string>('');
-  const [loading, setLoading] = React.useState<boolean>(false);
-  const [insightsObj, setInsightsObj] = React.useState<any | null>(null);
-  const [insightsStruct, setInsightsStruct] = React.useState<any | null>(null);
-  const [priceExplainList, setPriceExplainList] = React.useState<any[]>([]);
 
   const { data: ownRows } = useSWR<Row[]>(ready ? ['own_row', own.make, own.model, own.year, own.version] : null, async () => {
     const params: Record<string, any> = { make: own.make, model: own.model, year: own.year, limit: 50 };
@@ -429,18 +347,47 @@ export default function ComparePanel() {
   const [manualNotice, setManualNotice] = React.useState<string>('');
   const [autoGenerateNotice, setAutoGenerateNotice] = React.useState<string>('Pulsa “Generar competidores (IA)” para iniciar la auto-selección.');
   const autoGenTriggeredRef = React.useRef<boolean>(false);
+  const [dismissedKeys, setDismissedKeys] = React.useState<Set<string>>(() => new Set());
 
-  const truthyFeature = React.useCallback((value: any): boolean => {
-    if (value == null) return false;
-    if (Array.isArray(value)) return value.some(truthyFeature);
-    const normalized = String(value).trim().toLowerCase();
-    if (!normalized) return false;
-    if (['0','false','no','none','n/a','na','-','null','no disponible','ninguno','sin dato','sin datos'].includes(normalized)) return false;
-    if (['true','1','si','sí','estandar','estándar','incluido','standard','std','present','x','y','yes','serie','incluida','incluido'].includes(normalized)) return true;
-    const numVal = Number(value);
-    if (Number.isFinite(numVal)) return numVal > 0;
-    return true;
+  const keyForRow = React.useCallback((row: any) => {
+    if (!row) return '';
+    const mk = String(row?.make ?? row?.brand ?? '').trim().toUpperCase();
+    const md = String(row?.model ?? '').trim().toUpperCase();
+    const vr = String(row?.version ?? '').trim().toUpperCase();
+    const yrRaw = row?.ano ?? row?.year ?? '';
+    const yr = typeof yrRaw === 'number' ? String(yrRaw) : String(yrRaw || '').trim();
+    return `${mk}|${md}|${vr}|${yr}`;
   }, []);
+
+  const restoreDismissed = React.useCallback((key: string) => {
+    setDismissedKeys(prev => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const removeCompetitor = React.useCallback((row: any) => {
+    const key = keyForRow(row);
+    setDismissedKeys(prev => {
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    setManual(prev => prev.filter(r => keyForRow(r) !== key));
+  }, [keyForRow]);
+
+  const resetDismissed = React.useCallback(() => {
+    setDismissedKeys(() => new Set());
+  }, []);
+
+  React.useEffect(() => {
+    // Reset descartados cuando cambia el vehículo base
+    setDismissedKeys(() => new Set());
+  }, [own.make, own.model, own.year, own.version]);
+
+  const truthyFeature = React.useCallback((value: any): boolean => normalizeBoolean(value), []);
 
   const renderNoData = (message: string) => (
     <div style={{ padding:'12px 10px', border:'1px dashed #e5e7eb', borderRadius:8, color:'#64748b', fontSize:12, textAlign:'center' }}>{message}</div>
@@ -588,9 +535,12 @@ export default function ComparePanel() {
         setManualNotice(`Tu base es ${own.year}; habilita "Incluir años modelo diferentes" para comparar con ${candYear || 'otro año'}.`);
         return;
       }
-      const key = `${cand.make}|${cand.model}|${cand.version||''}|${cand.ano||''}`;
-      const exists = manual.some(r => `${r.make}|${r.model}|${r.version||''}|${r.ano||''}` === key);
-      if (!exists) setManual(prev => [...prev, cand]);
+      const key = keyForRow(cand);
+      const exists = manual.some(r => keyForRow(r) === key);
+      if (!exists) {
+        setManual(prev => [...prev, cand]);
+        restoreDismissed(key);
+      }
       return;
     }
     if (!filters.includeDifferentYears && own.year && manYear === '') {
@@ -619,9 +569,12 @@ export default function ComparePanel() {
       setManualNotice(`Tu base es ${own.year}; habilita "Incluir años modelo diferentes" para traer ${candYear || 'otro año'}.`);
       return;
     }
-    const key = `${cand.make}|${cand.model}|${cand.version||''}|${cand.ano||''}`;
-    const exists = manual.some(r => `${r.make}|${r.model}|${r.version||''}|${r.ano||''}` === key);
-    if (!exists) setManual(prev => [...prev, cand]);
+    const key = keyForRow(cand);
+    const exists = manual.some(r => keyForRow(r) === key);
+    if (!exists) {
+      setManual(prev => [...prev, cand]);
+      restoreDismissed(key);
+    }
   };
   const removeManual = (idx: number) => setManual(prev => prev.filter((_,i)=>i!==idx));
 
@@ -726,6 +679,16 @@ export default function ComparePanel() {
     if (Array.isArray(auto?.items)) return auto.items as Row[];
     return [];
   }, [auto]);
+  const autoVisibleItems: Row[] = React.useMemo(() => {
+    const seen = new Set<string>();
+    return autoItems.filter((row) => {
+      const key = keyForRow(row);
+      if (dismissedKeys.has(key)) return false;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [autoItems, dismissedKeys, keyForRow]);
   const usedFilters = auto?.used_filters || null;
 
   // Nota: competidores automáticos solo se generan al pulsar el botón.
@@ -914,16 +877,19 @@ export default function ComparePanel() {
     }
     const len = lengthMm(out);
     if (len != null) out.longitud_mm = len;
+    augmentFeatureFlags(out);
     return out;
   }
 
-  const { data: compared } = useSWR(ownRow ? ['compare', ownRow?.id || ownRow?.model, ownRow?.ano, sig((auto?.items||[]) as Row[]), sig(manual), !!cfg] : null, async () => {
+  const dismissedSignature = React.useMemo(() => Array.from(dismissedKeys).sort().join(','), [dismissedKeys]);
+  const { data: compared } = useSWR(ownRow ? ['compare', ownRow?.id || ownRow?.model, ownRow?.ano, sig((auto?.items||[]) as Row[]), sig(manual), dismissedSignature, !!cfg] : null, async () => {
     const autoRows: Row[] = (auto?.items || []) as Row[];
     // merge unique (auto + manual)
     const seen = new Set<string>();
     const items: Row[] = [];
     for (const r of [...autoRows, ...manual]){
-      const key = `${r.make}|${r.model}|${r.version||''}|${r.ano||''}`;
+      const key = keyForRow(r);
+      if (dismissedKeys.has(key)) continue;
       if (!seen.has(key)) { seen.add(key); items.push(r); }
     }
     // Incluir fuel_cost_60k si falta (se usa para deltas en /compare)
@@ -939,7 +905,7 @@ export default function ComparePanel() {
     const src = (compared?.own || ownRow) as Row;
     return ensureFuel60(src);
   }, [compared, ownRow]);
-  const comps = React.useMemo(() => (compared?.competitors || []).map((c: any) => {
+  const rawComps = React.useMemo(() => (compared?.competitors || []).map((c: any) => {
     const enriched = ensureFuel60(c.item || {});
     return {
       ...enriched,
@@ -949,6 +915,7 @@ export default function ComparePanel() {
       __segment_delta: c.segment_delta || null,
     };
   }), [compared]);
+  const comps = React.useMemo(() => rawComps.filter((r:any) => !dismissedKeys.has(keyForRow(r))), [rawComps, dismissedKeys, keyForRow]);
 
   const getFeatureDiffs = React.useCallback((comp: any) => {
     const diffs = comp?.__diffs || {};
@@ -964,17 +931,23 @@ export default function ComparePanel() {
     if (baseRow) {
       const fallbackPlus = new Set<string>();
       const fallbackMinus = new Set<string>();
-      if (!plus.length || !minus.length) {
-        FEATURE_FIELD_DEFS.forEach((def) => {
-          const baseHas = truthyFeature((baseRow as any)?.[def.key]);
-          const compHas = truthyFeature((comp as any)?.[def.key]);
-          const label = FEATURE_LABELS[def.key] || def.label || def.key;
-          if (compHas && !baseHas) fallbackPlus.add(label);
-          if (baseHas && !compHas) fallbackMinus.add(label);
-        });
+      FEATURE_FIELD_DEFS.forEach((def) => {
+        const baseHas = truthyFeature((baseRow as any)?.[def.key]);
+        const compHas = truthyFeature((comp as any)?.[def.key]);
+        const label = FEATURE_LABELS[def.key] || def.label || def.key;
+        if (compHas && !baseHas) fallbackPlus.add(label);
+        if (baseHas && !compHas) fallbackMinus.add(label);
+      });
+      if (fallbackPlus.size) {
+        const merged = new Set<string>(plus);
+        fallbackPlus.forEach((item) => merged.add(item));
+        plus = Array.from(merged);
       }
-      if (!plus.length && fallbackPlus.size) plus = Array.from(fallbackPlus);
-      if (!minus.length && fallbackMinus.size) minus = Array.from(fallbackMinus);
+      if (fallbackMinus.size) {
+        const merged = new Set<string>(minus);
+        fallbackMinus.forEach((item) => merged.add(item));
+        minus = Array.from(merged);
+      }
     }
     return {
       plus,
@@ -982,17 +955,13 @@ export default function ComparePanel() {
     };
   }, [baseRow, truthyFeature]);
   const headers = [
-    { key: 'foto', label: '', minWidth: 80 },
-    { key: 'vehiculo', label: t('vehicle'), minWidth: 220 },
+    { key: 'vehiculo', label: t('vehicle'), minWidth: 200 },
     { key: 'msrp', label: t('msrp'), minWidth: 120 },
     { key: 'precio_transaccion', label: t('tx_price'), minWidth: 120 },
     { key: 'bono', label: t('bonus'), minWidth: 110 },
     { key: 'fuel_cost_60k_mxn', label: t('energy60k'), minWidth: 150 },
     { key: 'service_cost_60k_mxn', label: t('service60k'), minWidth: 150 },
     { key: 'tco_60k_mxn', label: t('tco60k'), minWidth: 130 },
-    { key: 'cost_per_hp_mxn', label: t('price_per_hp'), minWidth: 130 },
-    { key: 'segment_score', label: 'Score', minWidth: 120 },
-    { key: 'segmento', label: t('segment'), minWidth: 160 },
   ];
 
   // Small info icon with tooltip
@@ -1002,107 +971,6 @@ export default function ComparePanel() {
     );
   }
 
-  // -------- Diferencias de versión (mismo modelo) --------
-  const { data: diffs } = useSWR<any>(own.model ? ['version_diffs', own.make, own.model, own.year, own.version] : null, () => endpoints.versionDiffs({ make: own.make, model: own.model, year: own.year, base_version: own.version || undefined }));
-
-  function renderVersionDiffs() {
-    const base = diffs?.base || {};
-    if (!diffs || !Array.isArray(diffs.items) || !diffs.items.length) {
-      const title = `Diferencias de versión — ${String(own.make||'')} ${String(own.model||'')}${own.year?` (${own.year})`:''}`;
-      const baseLabel = String(base.version || own.version || '—') || '—';
-      return (
-        <div style={{ marginTop: 20, border:'1px solid #e5e7eb', borderRadius:10 }}>
-          <div style={{ padding:'10px 12px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <div style={{ fontWeight:700 }}>{title}</div>
-            <div style={{ fontSize:12, color:'#475569' }}>Base: {baseLabel}</div>
-          </div>
-          <div style={{ padding:'12px', fontSize:12, color:'#64748b' }}>Sin datos para versión base.</div>
-        </div>
-      );
-    }
-    const items = (diffs.items as any[]) || [];
-    const fmtDeltaMoney = (n: any) => {
-      const v = Number(n); if (!Number.isFinite(v)) return '-';
-      const s = v>=0?'+':''; return `${s}${fmtMoney(v)}`;
-    };
-    const moneyCols = [
-      { k:'msrp', label:'Δ MSRP' },
-      { k:'precio_transaccion', label:'Δ Precio tx' },
-    ];
-    return (
-      <div style={{ marginTop: 20, border:'1px solid #e5e7eb', borderRadius:10 }}>
-        <div style={{ padding:'10px 12px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div style={{ fontWeight:700 }}>Diferencias de versión — {String(own.make||'')} {String(own.model||'')}{own.year?` (${own.year})`:''}</div>
-          <div style={{ fontSize:12, color:'#475569' }}>Base: {String(base.version||'–')}</div>
-        </div>
-        <div style={{ overflowX:'auto' }}>
-          <table style={{ width:'100%', borderCollapse:'collapse' }}>
-            <thead>
-              <tr style={{ background:'#f8fafc' }}>
-                <th style={{ textAlign:'left', padding:'8px 10px', borderBottom:'1px solid #e5e7eb', minWidth:160 }}>Versión</th>
-                {moneyCols.map(col => (
-                  <th key={col.k} style={{ textAlign:'left', padding:'8px 10px', borderBottom:'1px solid #e5e7eb', minWidth:120 }}>{col.label}</th>
-                ))}
-                <th style={{ textAlign:'left', padding:'8px 10px', borderBottom:'1px solid #e5e7eb', minWidth:260 }}>Features +</th>
-                <th style={{ textAlign:'left', padding:'8px 10px', borderBottom:'1px solid #e5e7eb', minWidth:260 }}>Features −</th>
-                <th style={{ textAlign:'left', padding:'8px 10px', borderBottom:'1px solid #e5e7eb', minWidth:260 }}>Cambios cuantitativos</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((it:any, idx:number) => {
-                const r = it.item || {};
-                const d = it.deltas || {};
-                const plus: string[] = Array.isArray(it.diffs?.features_plus)? it.diffs.features_plus.slice(0,12): [];
-                const minus: string[] = Array.isArray(it.diffs?.features_minus)? it.diffs.features_minus.slice(0,12): [];
-                const nums: any[] = Array.isArray(it.diffs?.numeric_diffs)? it.diffs.numeric_diffs.slice(0,8): [];
-                const rowBg = idx%2===0? '#ffffff':'#fafafa';
-                return (
-                  <tr key={idx} style={{ background: rowBg }}>
-                    <td style={{ padding:'8px 10px', borderBottom:'1px solid #eef2f7' }}>
-                      <div style={{ fontWeight:600 }}>{String(r.version||'')}</div>
-                    </td>
-                    {moneyCols.map(col => {
-                      const dv = d?.[col.k]?.delta ?? null;
-                      return (
-                        <td key={col.k} style={{ padding:'8px 10px', borderBottom:'1px solid #eef2f7', color: dv!=null ? (dv>0?'#dc2626':'#16a34a'):'#334155' }}>
-                          {dv==null?'-':fmtDeltaMoney(dv)}
-                        </td>
-                      );
-                    })}
-                    <td style={{ padding:'8px 10px', borderBottom:'1px solid #eef2f7' }}>
-                      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                        {plus.length? plus.map((t,i)=> <span key={i} style={{ fontSize:12, background:'#ecfdf5', color:'#065f46', border:'1px solid #a7f3d0', borderRadius:12, padding:'2px 8px' }}>{t}</span>) : <span style={{ fontSize:12, color:'#64748b' }}>—</span>}
-                      </div>
-                    </td>
-                    <td style={{ padding:'8px 10px', borderBottom:'1px solid #eef2f7' }}>
-                      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                        {minus.length? minus.map((t,i)=> <span key={i} style={{ fontSize:12, background:'#fef2f2', color:'#991b1b', border:'1px solid #fecaca', borderRadius:12, padding:'2px 8px' }}>{t}</span>) : <span style={{ fontSize:12, color:'#64748b' }}>—</span>}
-                      </div>
-                    </td>
-                    <td style={{ padding:'8px 10px', borderBottom:'1px solid #eef2f7' }}>
-                      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                        {nums.length? nums.map((n:any, i:number)=> {
-                          const vOwn = (n?.own!=null? String(n.own):'-');
-                          const vComp = (n?.comp!=null? String(n.comp):'-');
-                          return <span key={i} style={{ fontSize:12, background:'#eff6ff', color:'#1e40af', border:'1px solid #bfdbfe', borderRadius:12, padding:'2px 8px' }}>{n.label}: {vOwn} → {vComp}</span>;
-                        }) : <span style={{ fontSize:12, color:'#64748b' }}>—</span>}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
-
-  const FALLBACK_PILLAR_FIELDS: Array<{ id: string; label: string }> = [
-    ...Object.entries(PILLAR_LABELS).map(([id, label]) => ({ id, label })),
-    { id: 'warranty_score', label: 'Garantía' },
-    { id: 'equip_score', label: 'Score equipo' },
-  ];
   function getPillarValue(row: any, key: string): number | null {
     if (!row) return null;
     const direct = num(row?.pillar_scores?.[key]);
@@ -1119,104 +987,6 @@ export default function ComparePanel() {
     return null;
   }
 
-  function pillarEntries(row: any): Array<{ id: string; label: string; value: number }> {
-    if (!row) return [];
-    const list: Array<{ id: string; label: string; value: number }> = [];
-    const direct = row?.pillar_scores as Record<string, any> | undefined;
-    if (direct && typeof direct === 'object') {
-      Object.entries(direct).forEach(([key, value]) => {
-        const v = num(value);
-        if (v == null) return;
-        const label = PILLAR_LABELS[key] || key.replace(/_/g, ' ');
-        list.push({ id: key, label, value: v });
-      });
-    }
-    if (list.length) return list;
-    FALLBACK_PILLAR_FIELDS.forEach(({ id, label }) => {
-      const val = getPillarValue(row, id);
-      if (val != null) list.push({ id, label, value: val });
-    });
-    return list;
-  }
-  function renderPillarScoreboard() {
-    if (!baseRow) return null;
-    const baseEntries = pillarEntries(baseRow);
-    if (!baseEntries.length) return null;
-    const sorted = baseEntries
-      .slice()
-      .sort((a, b) => (b.value || 0) - (a.value || 0));
-    const topEntries = sorted.slice(0, 6);
-    if (!topEntries.length) return null;
-    const competitorCols: Row[] = comps.slice(0, Math.min(3, comps.length)) as Row[];
-    const baseMap: Record<string, number> = {};
-    baseEntries.forEach(({ id, value }) => { baseMap[id] = value; });
-    const headerBlock = (row: Row | null | undefined) => {
-      const make = brandLabel(row || {} as Row) || '—';
-      const model = String(row?.model || '').trim() || '—';
-      const version = normalizeVersion(String(row?.version || '').trim());
-      const year = row?.ano || row?.year || '';
-      const versionLine = version || year ? `${version || ''}${year ? (version ? ` (${year})` : `${year}`) : ''}` : '';
-      return (
-        <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
-          <span style={{ fontWeight:600 }}>{make}</span>
-          <span style={{ fontSize:12 }}>{model || '—'}</span>
-          <span style={{ fontSize:11, color:'#64748b' }}>{versionLine || '—'}</span>
-        </div>
-      );
-    };
-    const compPillarMaps = competitorCols.map((comp) => {
-      const map: Record<string, number> = {};
-      pillarEntries(comp).forEach(({ id, value }) => { map[id] = value; });
-      return map;
-    });
-    return (
-      <div style={{ margin:'12px 0', padding:'12px', border:'1px solid #e2e8f0', borderRadius:10, background:'#f8fafc' }}>
-        <div style={{ fontWeight:700, marginBottom:6 }}>Score por pilar (0–100)</div>
-        <div style={{ overflowX:'auto' }}>
-          <table style={{ width:'100%', minWidth:(2 + competitorCols.length) * 140, borderCollapse:'collapse' }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e2e8f0' }}>Pilar</th>
-                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e2e8f0' }}>{headerBlock(baseRow)}</th>
-                {competitorCols.map((comp: Row, idx: number) => (
-                  <th key={idx} style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e2e8f0' }}>{headerBlock(comp)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {topEntries.map(({ id, label, value }) => {
-                const baseVal = fmtScoreValue(value);
-                return (
-                  <tr key={id}>
-                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #e2e8f0', fontSize:12, color:'#1f2937' }}>{label}</td>
-                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #e2e8f0', fontWeight:600 }}>{baseVal}</td>
-                    {competitorCols.map((comp, idx) => {
-                      const compValRaw = (compPillarMaps[idx] || {})[id];
-                      const compVal = fmtScoreValue(compValRaw);
-                      const deltaObj = (comp.__pillar_deltas || {})[id];
-                      const fallbackDelta = (compValRaw != null && baseMap[id] != null) ? (compValRaw - baseMap[id]) : null;
-                      const rawDelta = (deltaObj && typeof deltaObj.delta === 'number') ? deltaObj.delta : fallbackDelta;
-                      const delta = rawDelta == null ? null : -rawDelta; // own perspective (positivo = mejor que el competidor)
-                      const deltaColor = delta == null ? '#64748b' : (delta >= 0 ? '#16a34a' : '#dc2626');
-                      return (
-                        <td key={idx} style={{ padding:'6px 8px', borderBottom:'1px solid #e2e8f0' }}>
-                          <div style={{ fontWeight:600 }}>{compVal}</div>
-                          <div style={{ fontSize:11, color: deltaColor }}>
-                            {delta == null ? '-' : `${tri(delta)} ${fmtScoreDelta(delta)} pts`}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
-
   // -------- Price Explain Modal & actions --------
   // Eliminados estados del modal de explicación; se integrará a Insights
 
@@ -1227,15 +997,6 @@ export default function ComparePanel() {
   function fmtPct(v: any) { const n = num(v); return n==null?'-':`${Number(n).toFixed(0)}%`; }
   function fmtDeltaPct(v: any) { const n = num(v); if (n==null) return '-'; const s = n>0?'+':''; return `${s}${Number(n).toFixed(0)}%`; }
   const tri = (n: number) => (n >= 0 ? '▲' : '▼');
-  function fmtScoreValue(v: any): string {
-    const n = num(v);
-    if (n == null) return '-';
-    return n.toFixed(1);
-  }
-  function fmtScoreDelta(v: any): string {
-    if (typeof v !== 'number' || !Number.isFinite(v)) return '-';
-    return `${v > 0 ? '+' : ''}${v.toFixed(1)}`;
-  }
 
   function _fuelRaw(row: any): string {
     return String(
@@ -1447,7 +1208,7 @@ export default function ComparePanel() {
   const versionColorMap = React.useMemo(() => {
     // Paleta con alto contraste (Tableau10 + extras)
     const palette = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf',
-                     '#0ea5e9','#16a34a','#f59e0b','#ef4444','#8b5cf6','#a855f7','#22c55e','#f97316','#14b8a6','#e11d48'];
+                     '#3b82f6','#16a34a','#f59e0b','#ef4444','#8b5cf6','#a855f7','#22c55e','#f97316','#14b8a6','#e11d48'];
     const vers = Array.from(new Set(chartRows.map((r:any)=> String(r?.version||'').toUpperCase())));
     const map: Record<string,string> = {};
     vers.forEach((v, i)=> { map[v] = palette[i % palette.length]; });
@@ -1458,131 +1219,136 @@ export default function ComparePanel() {
   // Ventas mensuales 2025 (líneas) — depende de colorForVersion
   salesLineOption = React.useMemo(() => {
     const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-    const rows = [ ...(baseRow?[baseRow]:[]), ...comps ];
+    const rows = [ ...(baseRow ? [baseRow] : []), ...comps ];
     const series: any[] = [];
+    const ytdByName: Record<string, number | null> = {};
     let usedForecast = false;
-    let monthlyTotals: number[] = new Array(12).fill(0);
-    const applyForecast = (vals: (number|null)[]): (number|null)[] => {
-      // Si faltan meses 10–12, usa último valor conocido (carry‑forward) como placeholder
-      const out = [...vals];
-      // último valor observado hasta septiembre
-      let last: number | null = null;
-      for (let i=0;i<9;i++) {
-        const v = out[i];
-        if (typeof v === 'number' && isFinite(v)) last = v;
-      }
-      for (let i=9;i<12;i++) {
-        if (out[i] == null) {
-          if (last != null) { out[i] = last; usedForecast = true; }
-        }
-      }
-      return out;
-    };
-    rows.forEach((r:any, idx:number) => {
+    const monthlyTotals: number[] = new Array(12).fill(0);
+    const yearRef = 2025;
+    const formatInt = (value: number) => Intl.NumberFormat('es-MX').format(Math.round(value));
+
+    rows.forEach((r: any, idx: number) => {
       const name = vehLabel(r);
       const color = colorForVersion(r);
-      const vals: (number|null)[] = [];
-      // lee meses
-      for (let m=1;m<=12;m++) {
-        const k = `ventas_2025_${String(m).padStart(2,'0')}`;
+      const vals: (number | null)[] = [];
+      for (let m = 1; m <= 12; m++) {
+        const k = `ventas_${yearRef}_${String(m).padStart(2,'0')}`;
         const v = Number((r as any)?.[k] ?? NaN);
         vals.push(Number.isFinite(v) ? v : null);
       }
-      // pronóstico: trata null o 0 como faltante en Sep–Dic si hubo ventas previas
-      const observed = vals.slice(0,9).some(v => (v??0) > 0);
-      const valsWithForecast = (()=>{
-        if (!observed) return vals; // nada que pronosticar
+      const observed = vals.slice(0, 9).some(v => (v ?? 0) > 0);
+      const valsWithForecast = (() => {
+        if (!observed) return vals;
         const out = [...vals];
         let last: number | null = null;
-        for (let i=0;i<9;i++) { const v = out[i]; if (typeof v==='number' && isFinite(v) && v>0) last = v; }
-        for (let i=8;i<12;i++) {
+        for (let i = 0; i < 9; i++) {
           const v = out[i];
-          if ((v==null || v===0) && last!=null) { out[i]=last; usedForecast = true; }
+          if (typeof v === 'number' && isFinite(v) && v > 0) last = v;
+        }
+        for (let i = 8; i < 12; i++) {
+          const v = out[i];
+          if ((v == null || v === 0) && last != null) {
+            out[i] = last;
+            usedForecast = true;
+          }
         }
         return out;
       })();
-      // acumula totales (incluyendo forecast si lo hubo)
-      for (let i=0;i<12;i++) { const v = valsWithForecast[i]; if (typeof v==='number' && isFinite(v)) monthlyTotals[i]+=v; }
-      if (vals.some(v=> (v??0)>0)) {
-        series.push({ type:'line', name, data: valsWithForecast, smooth: true, showSymbol: false, itemStyle:{ color }, lineStyle:{ color, width: (idx===0?3:2) } });
+
+      const manualYtd = Number((r as any)?.ventas_model_ytd ?? NaN);
+      const ytdComputed = Number.isFinite(manualYtd) ? manualYtd : ytdUnits(r, yearRef);
+      ytdByName[name] = (ytdComputed != null && Number.isFinite(ytdComputed)) ? Number(ytdComputed) : null;
+
+      const dataPoints = valsWithForecast.map((val, dataIdx) => ({ value: val, original: vals[dataIdx] }));
+      for (let i = 0; i < 12; i++) {
+        const pointVal = dataPoints[i].value;
+        if (typeof pointVal === 'number' && isFinite(pointVal)) {
+          monthlyTotals[i] += pointVal;
+        }
+      }
+
+      const hasAny = vals.some(v => (v ?? 0) > 0);
+      if (hasAny) {
+        series.push({
+          type: 'line',
+          name,
+          data: dataPoints,
+          smooth: true,
+          showSymbol: true,
+          symbolSize: 6,
+          itemStyle: { color },
+          lineStyle: { color, width: (idx === 0 ? 3 : 2) },
+          label: {
+            show: true,
+            position: 'top',
+            color,
+            fontSize: 10,
+            formatter: (params: any) => {
+              const dataObj = (params?.data && typeof params.data === 'object') ? params.data : { value: params.value };
+              const val = Number(dataObj?.value ?? NaN);
+              if (!Number.isFinite(val)) return '';
+              return formatInt(val);
+            }
+          },
+          emphasis: { focus: 'series' },
+        });
+      }
+
+      if (ytdByName[name] == null) {
+        const sumYtd = dataPoints.reduce((acc: number, point: any) => {
+          const rawVal = Number(point.original ?? point.value ?? NaN);
+          if (Number.isFinite(rawVal)) return acc + rawVal;
+          return acc;
+        }, 0);
+        ytdByName[name] = sumYtd > 0 ? sumYtd : null;
       }
     });
+
     if (!series.length) return null;
+
+    const legendFormatter = (seriesName: string) => {
+      const ytd = ytdByName[seriesName];
+      return ytd != null ? `${seriesName} · YTD ${formatInt(ytd)} u` : seriesName;
+    };
+
     const option: any = {
-      title: { text: 'Ventas mensuales 2025 (unidades)', left: 'center', top: 6 },
+      title: { text: `Ventas mensuales ${yearRef} (unidades)`, left: 'center', top: 6 },
       grid: { left: 60, right: 20, top: 50, bottom: 50, containLabel: true },
       tooltip: {
-        trigger: 'axis', axisPointer: { type: 'line' },
-        formatter: (p:any) => {
+        trigger: 'axis',
+        axisPointer: { type: 'line' },
+        formatter: (p: any) => {
           const idx = Array.isArray(p) && p.length ? p[0].dataIndex : 0;
           const tot = monthlyTotals[idx] || 0;
-          const lines = (Array.isArray(p)?p:[]).map((it:any)=>{
-            const u = Number(it.data||0);
-            const share = tot>0 ? (u/tot*100).toFixed(1) : '0.0';
-            return `${it.marker} ${it.seriesName}: ${Intl.NumberFormat('es-MX').format(u)} u (${share}%)`;
+          const lines = (Array.isArray(p) ? p : []).map((it: any) => {
+            const dataObj = (it.data && typeof it.data === 'object') ? it.data : { value: it.data };
+            const u = Number(dataObj?.value ?? NaN);
+            const safeU = Number.isFinite(u) ? u : 0;
+            const share = tot > 0 ? ((safeU / tot) * 100).toFixed(1) : '0.0';
+            const ytd = ytdByName[it.seriesName];
+            const ytdText = ytd != null ? ` — YTD ${formatInt(ytd)} u` : '';
+            return `${it.marker} ${it.seriesName}: ${formatInt(safeU)} u (${share}%)${ytdText}`;
           });
           return `<strong>${months[idx]}</strong><br/>${lines.join('<br/>')}`;
         }
       },
-      legend: { bottom: 0, left: 'center' },
+      legend: { bottom: 0, left: 'center', formatter: legendFormatter },
       xAxis: { type: 'category', data: months },
       yAxis: { type: 'value', name: 'Unidades', min: 0 },
       series
     };
-    // Watermark y sombreado de pronóstico Sep–Dic si se aplicó forecast
-    if (usedForecast) {
-      // sombrear región de pronóstico en la primera serie, con etiqueta dentro del área
-      if (option.series && option.series.length) {
-        option.series[0].markArea = {
-          silent: true,
-          itemStyle: { color: 'rgba(148,163,184,0.12)' },
-          label: { show: true, formatter: 'Work in progress — pronóstico Sep–Dic', position: 'insideTop', color: '#64748b', fontSize: 12, fontWeight: 'bold' },
-          data: [[{ xAxis: 'Sep' }, { xAxis: 'Dic' }]]
-        };
-      }
+
+    if (usedForecast && option.series && option.series.length) {
+      option.series[0].markArea = {
+        silent: true,
+        itemStyle: { color: 'rgba(148,163,184,0.12)' },
+        label: { show: true, formatter: 'Trabajo en progreso — pronóstico Sep–Dic', position: 'insideTop', color: '#64748b', fontSize: 12, fontWeight: 'bold' },
+        data: [[{ xAxis: 'Sep' }, { xAxis: 'Dic' }]]
+      };
     }
+
     return option as any;
   }, [baseRow, comps, versionColorMap]);
-
-  // Reusable legend block used under each chart row
-  function renderLegend() {
-    if (!chartRows.length) return null;
-    const uniq: Record<string, any> = {};
-    chartRows.forEach((r:any)=> { const key = vehLabel(r); if (!uniq[key]) uniq[key]=r; });
-    const entries = Object.keys(uniq).map(k=> ({ r: uniq[k], label: vehLabel(uniq[k]), symbol: symbolMap[vehLabel(uniq[k])], color: colorForVersion(uniq[k]) }));
-    const Icon = ({symbol, color, filled}:{symbol:string;color:string;filled:boolean}) => {
-      const sz = 20;
-      const stroke = filled ? 'none' : color;
-      const fill = filled ? color : 'transparent';
-      const common = { stroke: stroke, strokeWidth: 2, fill: fill } as any;
-      const s = symbol;
-      return (
-        <svg width={sz} height={sz} viewBox="0 0 20 20" style={{ display:'inline-block' }}>
-          {s==='diamond' ? <path d="M10 2 L18 10 L10 18 L2 10 Z" {...common} />
-           : s==='triangle' ? <path d="M10 2 L18 18 L2 18 Z" {...common} />
-           : s==='rect' ? <rect x="3" y="3" width="14" height="14" {...common} />
-           : s==='roundRect' ? <rect x="3" y="3" width="14" height="14" rx="3" {...common} />
-           : s==='pin' ? <path d="M10 2 C6 2 4 5 4 7.5 C4 10 10 18 10 18 C10 18 16 10 16 7.5 C16 5 14 2 10 2 Z" {...common} />
-           : s==='arrow' ? <path d="M3 10 L13 10 L13 6 L18 12 L13 18 L13 14 L3 14 Z" {...common} />
-           : <circle cx="10" cy="10" r="7" {...common} />}
-        </svg>
-      );
-    };
-    return (
-      <div style={{ marginTop:8, borderTop:'1px solid #e5e7eb', paddingTop:8, textAlign:'center' }}>
-        <div style={{ fontSize:12, color:'#64748b', marginBottom:6 }}>Lleno = MSRP • Hueco = TX • Color por marca • Forma fija por vehículo</div>
-        <div style={{ display:'flex', gap:16, flexWrap:'wrap', justifyContent:'center' }}>
-          {entries.map((e,idx)=> (
-            <div key={idx} style={{ display:'flex', alignItems:'center', gap:8 }}>
-              <Icon symbol={e.symbol} color={e.color} filled={true} />
-              <Icon symbol={e.symbol} color={e.color} filled={false} />
-              <span style={{ fontSize:12, color:'#334155' }}>{e.label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
 
   // ---------------- Segmento y pilares ----------------
   function segmentMain(row: any): string {
@@ -1599,19 +1365,6 @@ export default function ComparePanel() {
     if (s.includes('sedan') || s.includes('saloon') || s.includes('berlina')) return 'sedan';
     return '';
   }
-  const SEGMENT_PRIMARY_PILLARS: Record<string, string[]> = {
-    suv: ['seguridad', 'motor'],
-    pickup: ['motor', 'transmision'],
-    sedan: ['seguridad', 'audio_y_entretenimiento'],
-    hatch: ['seguridad', 'audio_y_entretenimiento'],
-    van: ['confort', 'dimensiones'],
-  };
-
-  function topPillarsForSegment(seg: string): Array<{key:string,label:string}> {
-    const keys = SEGMENT_PRIMARY_PILLARS[seg] || SEGMENT_PRIMARY_PILLARS['sedan'];
-    return keys.map((key) => ({ key, label: PILLAR_LABELS[key] || key }));
-  }
-
   const SEGMENT_RADAR_PILLARS: Record<string, string[]> = {
     suv: ['seguridad', 'motor', 'suspension', 'transmision', 'exterior', 'energia'],
     pickup: ['motor', 'transmision', 'suspension', 'frenos', 'dimensiones', 'seguridad'],
@@ -1625,139 +1378,57 @@ export default function ComparePanel() {
     const keys = SEGMENT_RADAR_PILLARS[seg] || SEGMENT_RADAR_PILLARS['sedan'];
     return keys.map((key) => ({ key, label: PILLAR_LABELS[key] || key }));
   }
+  const { data: catalogForRadar } = useSWR(baseRow ? ['catalog_benchmarks_radar'] : null, async () => {
+    const res = await endpoints.catalog({ limit: 20000, format: 'json' });
+    const items = Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
+    return items.map((row: any) => {
+      if (row && typeof row === 'object') {
+        if (typeof row.pillar_scores === 'string') {
+          try { row.pillar_scores = JSON.parse(row.pillar_scores); } catch (err) { /* ignore parse errors */ }
+        }
+        if (typeof row.pillar_scores_raw === 'string') {
+          try { row.pillar_scores_raw = JSON.parse(row.pillar_scores_raw); } catch (err) { /* ignore parse errors */ }
+        }
+      }
+      return row;
+    });
+  });
 
-  // Elegir dinámicamente los 2 pilares con más cobertura de datos para el segmento
-  function bestPillarsForSegment(seg: string): Array<{key:string,label:string}> {
-    const cand = topPillarsForSegment(seg);
-    const additionalSlugs = [
-      'motor',
-      'seguridad',
-      'confort',
-      'audio_y_entretenimiento',
-      'transmision',
-      'suspension',
-      'dimensiones',
-      'exterior',
-      'energia',
-      'climatizacion',
-      'frenos',
-      'llantas_y_rines',
-    ];
-    const allCand: Array<{key:string,label:string}> = [
-      ...cand,
-      ...additionalSlugs.map((key) => ({ key, label: PILLAR_LABELS[key] || key })),
-      {key:'warranty_score',label:'Garantía'},
-      {key:'equip_score',label:'Score equipo'},
-    ];
-    const seen = new Set<string>();
-    const uniq = allCand.filter(it => { const k = it.key; if (seen.has(k)) return false; seen.add(k); return true; });
-    function coverage(key: string): number {
-      let cnt = 0;
-      chartRows.forEach((r:any) => {
-        if (seg && segmentMain(r) !== seg) return;
-        const x = pillarValue(r, key);
-        const price = priceTxOrMsrp(r);
-        if (x != null && Number.isFinite(Number(price))) cnt++;
+  const radarBenchmarks = React.useMemo(() => {
+    if (!catalogForRadar || !baseRow) return null;
+    const seg = segmentMain(baseRow) || '';
+    const axes = radarKeysForSegment(seg);
+    if (!axes.length) return null;
+    const rows = catalogForRadar.filter(Boolean);
+    if (!rows.length) return null;
+
+    const collectStats = (subset: any[]) => {
+      if (!subset.length) return null;
+      const stats: Record<string, number> = {};
+      axes.forEach(({ key }) => {
+        const values = subset
+          .map((r) => pillarValue(r, key))
+          .filter((val): val is number => typeof val === 'number' && Number.isFinite(val));
+        if (!values.length) return;
+        values.sort((a, b) => a - b);
+        const mid = Math.floor(values.length / 2);
+        const median = values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+        stats[key] = Number(median.toFixed(1));
       });
-      return cnt;
-    }
-    const sorted = uniq
-      .map(it => ({ ...it, _cov: coverage(it.key) }))
-      .sort((a,b) => b._cov - a._cov);
-    const picks = sorted.filter(it => it._cov >= 2).slice(0,2);
-    if (picks.length >= 2) return picks.map(({key,label})=>({key,label}));
-    // Fallback: al menos devuelve los primeros dos candidatos originales
-    const back = uniq.slice(0,2);
-    return back.length === 2 ? back : (uniq.length ? [uniq[0]] : []);
-  }
+      return Object.keys(stats).length ? stats : null;
+    };
 
-  function priceTxOrMsrp(row: any): number | null {
-    const tx = Number(row?.precio_transaccion ?? NaN);
-    const ms = Number(row?.msrp ?? NaN);
-    if (Number.isFinite(tx)) return tx;
-    if (Number.isFinite(ms)) return ms;
-    return null;
-  }
+    const industryStats = collectStats(rows);
+    const segRows = seg ? rows.filter((r) => segmentMain(r) === seg) : rows;
+    const segmentStats = collectStats(segRows);
+    if (!industryStats && !segmentStats) return null;
+    return { industry: industryStats, segment: segmentStats };
+  }, [catalogForRadar, baseRow]);
 
   function pillarValue(row:any, key:string): number | null {
     const v = getPillarValue(row, key);
     if (v == null || v <= 0) return null;
     return v;
-  }
-
-  function buildPillarVsPriceOption(pillarKey: string, pillarLabel: string) {
-    const ptsMsrp: any[] = [];
-    const ptsTx: any[] = [];
-    const seg = baseRow ? segmentMain(baseRow) : '';
-    chartRows.forEach((r:any) => {
-      if (seg && segmentMain(r) !== seg) return;
-      const x = pillarValue(r, pillarKey);
-      const ms = Number(r?.msrp ?? NaN);
-      const tx = Number(r?.precio_transaccion ?? NaN);
-      const name = vehLabel(r);
-      if (!Number.isFinite(x)) return;
-      if (Number.isFinite(ms)) ptsMsrp.push({ value: [x, ms], name, base: !!r.__isBase, symbol: symbolMap[name], itemStyle: { color: colorForVersion(r) } });
-      if (Number.isFinite(tx) && tx !== ms) ptsTx.push({ value: [x, tx], name, base: !!r.__isBase, symbol: symbolMap[name], itemStyle: { color: 'transparent', borderColor: colorForVersion(r), borderWidth: 2 } });
-    });
-    // Bigger markers: base version highlighted
-    const sym = (_: any, p: any) => (p?.data?.base ? 20 : 14);
-    // Vertical dashed segments to show MSRP vs TX difference at same pillar value
-const segData: any[] = [];
-    chartRows.forEach((r:any) => {
-      if (seg && segmentMain(r) !== seg) return;
-      const x = pillarValue(r, pillarKey);
-      const ms = Number(r?.msrp ?? NaN);
-      const tx = Number(r?.precio_transaccion ?? NaN);
-      if (Number.isFinite(x) && Number.isFinite(ms) && Number.isFinite(tx) && ms !== tx) {
-        const y1 = Math.min(ms, tx);
-        const y2 = Math.max(ms, tx);
-        segData.push([Number(x), y1, y2]);
-      }
-    });
-    const verticalDiffSeries = segData.length ? [{
-      name: 'Δ TX vs MSRP', type: 'custom', renderItem: function(params: any, api: any) {
-        const xVal = api.value(0);
-        const yLow = api.value(1);
-        const yHigh = api.value(2);
-        const p1 = api.coord([xVal, yLow]);
-        const p2 = api.coord([xVal, yHigh]);
-        return { type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] }, style: api.style({ stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4] }) } as any;
-      }, data: segData, tooltip: { show: false }
-    }] : [];
-    // Compute nicer Y scale
-    const allY = [
-      ...ptsMsrp.map((d:any)=> Number(d?.value?.[1] ?? NaN)).filter(Number.isFinite),
-      ...ptsTx.map((d:any)=> Number(d?.value?.[1] ?? NaN)).filter(Number.isFinite)
-    ];
-    const yMin = allY.length ? Math.max(0, Math.floor(Math.min(...allY)*0.95)) : 0;
-    const yMax = allY.length ? Math.ceil(Math.max(...allY)*1.05) : 1;
-
-    // Autoscale X with sensible bounds (0..100) and minimum span
-    const allX = [
-      ...ptsMsrp.map((d:any)=> Number(d?.value?.[0] ?? NaN)).filter(Number.isFinite),
-      ...ptsTx.map((d:any)=> Number(d?.value?.[0] ?? NaN)).filter(Number.isFinite)
-    ];
-    let minX = allX.length ? Math.min(...allX) : 0;
-    let maxX = allX.length ? Math.max(...allX) : 1;
-    const xSpan = maxX - minX;
-    if (xSpan < 10) { const mid = (minX+maxX)/2; minX = mid-5; maxX = mid+5; }
-    minX = Math.max(0, Math.floor(minX));
-    maxX = Math.min(100, Math.ceil(maxX));
-
-    if (!ptsMsrp.length && !ptsTx.length) return null;
-    return {
-      title: { text: `${pillarLabel} vs Precio (${seg.toUpperCase()||'todos'})`, left: 'center', top: 6 },
-      grid: { left: 80, right: 80, top: 60, bottom: 60, containLabel: true },
-      tooltip: { trigger: 'item', formatter: (p:any)=> `${p.seriesName}<br/>${p.data.name}<br/>${pillarLabel}: ${p.data.value[0]}<br/>Precio: $ ${Intl.NumberFormat('es-MX').format(p.data.value[1])}` },
-      xAxis: { name: pillarLabel, nameLocation: 'middle', nameGap: 26, type: 'value', min: minX, max: maxX },
-      yAxis: { name: 'Precio (MXN)', nameGap: 34, type: 'value', min: yMin, max: yMax, axisLabel: { formatter: (v:any)=> Intl.NumberFormat('es-MX',{maximumFractionDigits:0}).format(v) } },
-      legend: { bottom: 0, left: 'center', data: ['MSRP','TX'] },
-      series: [
-        { name: 'MSRP', type: 'scatter', data: ptsMsrp, symbol: (v:any,p:any)=> (p?.data?.symbol||'circle'), symbolSize: sym },
-        { name: 'TX', type: 'scatter', data: ptsTx, symbol: (v:any,p:any)=> (p?.data?.symbol||'circle'), symbolSize: sym },
-        ...verticalDiffSeries,
-      ]
-    } as any;
   }
 
   const scoreVsPriceOption = React.useMemo(() => {
@@ -1809,7 +1480,7 @@ const segData: any[] = [];
         const yHigh = api.value(2);
         const p1 = api.coord([xVal, yLow]);
         const p2 = api.coord([xVal, yHigh]);
-        return { type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] }, style: api.style({ stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4] }) } as any;
+        return { type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] }, style: { stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4], fill: 'none' } } as any;
       }, data: segData, tooltip: { show: false }
     }] : [];
     // Rango X: expandimos alrededor de los datos y garantizamos un ancho mínimo
@@ -1857,39 +1528,96 @@ const segData: any[] = [];
     if (!baseRow) return {} as any;
     const seg = segmentMain(baseRow) || 'sedan';
     const axes = radarKeysForSegment(seg);
-    const indicator = axes.map(a => ({ name: a.label, max: 100 }));
+    if (!axes.length) return null;
+
     const toVals = (r: any) => axes.map(a => {
-      const v = Number((r as any)?.[a.key] ?? NaN);
-      return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 0;
+      const v = pillarValue(r, a.key);
+      return Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Number(v))) : 0;
+    });
+    const fromStats = (stats?: Record<string, number> | null) => axes.map(a => {
+      const val = stats ? stats[a.key] : null;
+      return Number.isFinite(Number(val)) ? Math.max(0, Math.min(100, Number(val))) : 0;
     });
     const nonZeroCount = (vals: number[]) => vals.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
+
     const baseVals = toVals(baseRow);
-    const baseHas = nonZeroCount(baseVals) >= 2;
-    const compSeries: any[] = [];
-    comps.forEach((r:any) => {
-      const vals = toVals(r);
-      if (nonZeroCount(vals) < 2) return;
-      const color = colorForVersion(r);
-      compSeries.push({ value: vals, name: vehLabel(r), areaStyle: { color: 'rgba(0,0,0,0.02)' }, lineStyle: { color, width: 1.5, opacity: 0.9 }, symbol: 'none' });
-    });
-    if (!baseHas && !compSeries.length) return null;
+    const baseHas = nonZeroCount(baseVals) >= 1;
+    const industryStats = radarBenchmarks?.industry || null;
+    const segmentStats = radarBenchmarks?.segment || null;
+
+    const indicator = axes.map(axis => ({ name: axis.label, max: 100 }));
+
+    const benchmarkSeries: any[] = [];
     const seriesData: any[] = [];
+
+    const pushBenchmark = (label: string, stats?: Record<string, number> | null, opts?: { color: string; dashed?: boolean }) => {
+      if (!stats) return;
+      const vals = fromStats(stats);
+      if (nonZeroCount(vals) < 1) return;
+      benchmarkSeries.push({
+        value: vals,
+        name: label,
+        areaStyle: { opacity: 0 },
+        lineStyle: { color: opts?.color || '#475569', width: 2.5, type: opts?.dashed ? 'dashed' : 'solid', opacity: 0.95 },
+        symbol: 'circle',
+        symbolSize: 7,
+        itemStyle: { color: opts?.color || '#475569' },
+        z: 2,
+      });
+    };
+
+    pushBenchmark('Benchmark industria', industryStats, { color: '#475569', dashed: true });
+    pushBenchmark('Benchmark segmento', segmentStats, { color: '#0ea5e9' });
+
+    const compSeries: any[] = [];
+    comps.forEach((r: any) => {
+      const vals = toVals(r);
+      if (nonZeroCount(vals) < 1) return;
+      const color = colorForVersion(r);
+      compSeries.push({
+        value: vals,
+        name: vehLabel(r),
+        areaStyle: { color: 'rgba(0,0,0,0.02)' },
+        lineStyle: { color, width: 1.5, opacity: 0.9 },
+        symbol: 'circle',
+        symbolSize: 6,
+        itemStyle: { color },
+        z: 4,
+      });
+    });
+
+    if (!baseHas && !compSeries.length && !benchmarkSeries.length) return null;
+
+    seriesData.push(...benchmarkSeries);
     seriesData.push({
       value: baseVals,
       name: vehLabel(baseRow),
       areaStyle: { color: 'rgba(30,58,138,0.12)' },
       lineStyle: { color: '#1e3a8a', width: baseHas ? 2 : 1, opacity: baseHas ? 1 : 0.5 },
-      symbol: 'none'
+      symbol: 'circle',
+      symbolSize: 8,
+      itemStyle: { color: '#1e3a8a' },
+      z: 5,
     });
     seriesData.push(...compSeries);
+
+    const legendData = Array.from(new Set(seriesData.map(item => item.name).filter(Boolean)));
+
     return {
-      title: { text: `Pilares por segmento (${(seg||'').toUpperCase()})`, left: 'center', top: 6 },
-      tooltip: { trigger: 'item' },
-      legend: { show: false },
+      title: { text: `Radar de pilares (${(seg || '').toUpperCase()} vs benchmark)`, left: 'center', top: 6 },
+      tooltip: {
+        trigger: 'item',
+        formatter: (params: any) => {
+          const values: number[] = Array.isArray(params.value) ? params.value : [];
+          const lines = axes.map((axis, idx) => `${axis.label}: ${Math.round(Number(values[idx] ?? 0))}`);
+          return `<strong>${params.seriesName}</strong><br/>${lines.join('<br/>')}`;
+        },
+      },
+      legend: legendData.length ? { show: true, bottom: 0, left: 'center', data: legendData, textStyle: { color: '#475569', fontSize: 11 } } : { show: false },
       radar: { indicator, center: ['50%','54%'], radius: 110, splitNumber: 4, alignTicks: false },
-      series: [{ type: 'radar', data: seriesData }]
+      series: [{ type: 'radar', data: seriesData }],
     } as any;
-  }, [baseRow, comps]);
+  }, [baseRow, comps, radarBenchmarks]);
 
   // ΔHP vs base (barras)
   const deltaHpOption = React.useMemo(() => {
@@ -2003,6 +1731,8 @@ const segData: any[] = [];
     const ys = items.map((r:any)=> Number(lengthMM(r)));
     const xMin = Math.max(0, Math.floor(Math.min(...xs)*0.95)), xMax = Math.ceil(Math.max(...xs)*1.05);
     const yMin = Math.max(0, Math.floor(Math.min(...ys)*0.95)), yMax = Math.ceil(Math.max(...ys)*1.05);
+    const xMinVal = xMin;
+    const yMinVal = yMin;
     const series = items.map((r:any, idx:number) => {
       const w = Number(widthMM(r)), l = Number(lengthMM(r));
       const color = colorForVersion(r);
@@ -2010,7 +1740,7 @@ const segData: any[] = [];
       return {
         type: 'custom', name: versionShortLabel(r),
         renderItem: function(params:any, api:any) {
-          const x0 = api.coord([0, 0]);
+          const x0 = api.coord([xMinVal, yMinVal]);
           const x1 = api.coord([w, l]);
           const left = x0[0], top = x1[1], right = x1[0], bottom = x0[1];
           const width = right - left; const height = bottom - top;
@@ -2028,57 +1758,6 @@ const segData: any[] = [];
       tooltip: { show: false },
       xAxis: { name: 'Ancho (mm)', type: 'value', min: xMin, max: xMax },
       yAxis: { name: 'Largo (mm)', type: 'value', min: yMin, max: yMax },
-      series
-    } as any;
-  }, [baseRow, comps]);
-
-  // Perfil (alto x largo) superpuesta si hay datos de altura
-  const profileOption = React.useMemo(() => {
-    const parseNum = (v:any): number | null => {
-      if (v==null) return null; const s=String(v).replace(/[^0-9\.\-]/g,'').trim(); if(!s) return null; const n=Number(s); return Number.isFinite(n)?n:null;
-    };
-    const heightMM = (row:any): number | null => {
-      const cand = [row?.altura_mm, row?.alto_mm, row?.height_mm, row?.alto];
-      for (const c of cand) { const n=parseNum(c); if (n!=null) return (n<100? n*1000 : n); }
-      return null;
-    };
-    const lengthMM = (row:any): number | null => {
-      const cand = [row?.longitud_mm, row?.length_mm, row?.largo_mm, row?.longitud];
-      for (const c of cand) { const n=parseNum(c); if (n!=null) return (n<100? n*1000 : n); }
-      return null;
-    };
-    const haveDims = (row:any) => Number.isFinite(Number(heightMM(row))) && Number.isFinite(Number(lengthMM(row)));
-    if (!baseRow || !haveDims(baseRow)) return {} as any;
-    const items = [baseRow, ...comps.filter((r:any)=> haveDims(r))];
-    const xs = items.map((r:any)=> Number(lengthMM(r)));
-    const ys = items.map((r:any)=> Number(heightMM(r)));
-    const xMin = Math.max(0, Math.floor(Math.min(...xs)*0.95)), xMax = Math.ceil(Math.max(...xs)*1.05);
-    const yMin = Math.max(0, Math.floor(Math.min(...ys)*0.95)), yMax = Math.ceil(Math.max(...ys)*1.05);
-    const series = items.map((r:any, idx:number) => {
-      const h = Number(heightMM(r)), l = Number(lengthMM(r));
-      const color = colorForVersion(r);
-      const isBase = idx===0;
-      return {
-        type: 'custom', name: versionShortLabel(r),
-        renderItem: function(params:any, api:any) {
-          const x0 = api.coord([0, 0]);
-          const x1 = api.coord([l, h]);
-          const left = x0[0], top = x1[1], right = x1[0], bottom = x0[1];
-          const width = right - left; const height = bottom - top;
-          return {
-            type: 'rect', shape: { x: left, y: top, width, height },
-            style: { fill: isBase ? color : 'transparent', stroke: color, lineWidth: isBase ? 2.5 : 2, opacity: isBase ? 0.15 : 1 }
-          } as any;
-        },
-        data: [[l,h]]
-      };
-    });
-    return {
-      title: { text: 'Perfil (alto x largo) — superposición', left: 'center', top: 6 },
-      grid: { left: 60, right: 20, top: 40, bottom: 50, containLabel: true },
-      tooltip: { show: false },
-      xAxis: { name: 'Largo (mm)', type: 'value', min: xMin, max: xMax },
-      yAxis: { name: 'Alto (mm)', type: 'value', min: yMin, max: yMax },
       series
     } as any;
   }, [baseRow, comps]);
@@ -2133,7 +1812,7 @@ const segData: any[] = [];
         return {
           type: 'line',
           shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-          style: api.style({ stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4] })
+          style: { stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4], fill: 'none' }
         } as any;
       }, data: segData, tooltip: { show: false }
     }] : [];
@@ -2256,7 +1935,7 @@ const segData: any[] = [];
         const yHigh = api.value(2);
         const p1 = api.coord([xVal, yLow]);
         const p2 = api.coord([xVal, yHigh]);
-        return { type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] }, style: api.style({ stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4] }) } as any;
+        return { type: 'line', shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] }, style: { stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4], fill: 'none' } } as any;
       }, data: segData, tooltip: { show: false }
     }] : [];
     if (!pts.length && !ptsTx.length) return null;
@@ -2329,7 +2008,7 @@ const segData: any[] = [];
         return {
           type: 'line',
           shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-          style: api.style({ stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4] })
+          style: { stroke: '#94a3b8', lineWidth: 1, lineDash: [4,4], fill: 'none' }
         } as any;
       }, data: segData, tooltip: { show: false }
     }] : [];
@@ -2458,14 +2137,14 @@ const segData: any[] = [];
         {autoGenerateNotice ? (
           <div style={{ marginTop:4 }}>{autoGenerateNotice}</div>
         ) : null}
-        {!autoLoading && autoItems.length ? (
+        {!autoLoading && autoVisibleItems.length ? (
           <div style={{ marginTop:6, display:'flex', flexWrap:'wrap', gap:6 }}>
-            {autoItems.slice(0, 6).map((r:any, idx:number) => (
+            {autoVisibleItems.slice(0, 6).map((r:any, idx:number) => (
               <span key={`${r.make}|${r.model}|${r.version||''}|${idx}`} style={{ padding:'4px 8px', borderRadius:999, background:'#e0f2fe', color:'#0369a1', fontSize:11 }}>
                 {vehLabel(r)}</span>
             ))}
-            {autoItems.length > 6 ? (
-              <span style={{ padding:'4px 8px', borderRadius:999, background:'#e2e8f0', color:'#475569', fontSize:11 }}>+{autoItems.length - 6}</span>
+            {autoVisibleItems.length > 6 ? (
+              <span style={{ padding:'4px 8px', borderRadius:999, background:'#e2e8f0', color:'#475569', fontSize:11 }}>+{autoVisibleItems.length - 6}</span>
             ) : null}
           </div>
         ) : null}
@@ -2486,8 +2165,18 @@ const segData: any[] = [];
         })() : null}
       </div>
     ) : null}
-    {renderPillarScoreboard()}
-    <table style={{ width:'100%', minWidth: 1380, borderCollapse:'collapse' }}>
+    {dismissedKeys.size > 0 ? (
+      <div className="no-print" style={{ margin:'8px 0', display:'flex', justifyContent:'flex-end' }}>
+        <button
+          type="button"
+          onClick={resetDismissed}
+          style={{ border:'1px solid #cbd5e1', background:'#fff', color:'#334155', borderRadius:8, padding:'6px 10px', fontSize:12, cursor:'pointer' }}
+        >
+          Restaurar competidores quitados ({dismissedKeys.size})
+        </button>
+      </div>
+    ) : null}
+    <table style={{ width:'100%', minWidth: 1120, borderCollapse:'collapse' }}>
         <thead>
           <tr>
             {headers.map(h => {
@@ -2503,20 +2192,6 @@ const segData: any[] = [];
               return (
               <th key={h.key} style={thStyle}>
                 {h.label}
-                {h.key==='segment_score' ? (
-                  <InfoIcon title={'Score ponderado (0–100) considerando los pilares clave del segmento del vehículo.'} />
-                ) : h.key==='segmento' ? (
-                  (() => {
-                    const rows = [ ...(ownRow?[ownRow]:[]), ...comps ];
-                    const m = lastYtdMonth(rows);
-                    const mon = m ? monthNameEs(m) : '';
-                    const share = Number((ownRow as any)?.ventas_share_seg_pct ?? NaN);
-                    const shareTxt = Number.isFinite(share) ? ` • Share base: ${share.toFixed(1)}%` : '';
-                    const y = Number(own.year || 2025);
-                    const t = `Ventas del total del modelo (YTD a ${mon || 'mes actual'} ${y}). Incluye participación dentro del segmento${shareTxt}.`;
-                    return <InfoIcon title={t} />;
-                  })()
-                ) : null}
               </th>
               );
             })}
@@ -2525,19 +2200,41 @@ const segData: any[] = [];
         <tbody>
           {/* Fila base (vehículo propio) */}
           {baseRow && (<tr>
-            {/* Foto base */}
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-              {(() => {
-                const src = String((baseRow as any)?.images_default || (baseRow as any)?.image_url || '');
-                if (!src) return null;
-                return (<img src={src} alt="foto" style={{ width:84, height:56, objectFit:'cover', borderRadius:6, background:'#f1f5f9' }} onError={(e:any)=>{ e.currentTarget.style.display='none'; }} />);
-              })()}
-            </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 220 }}>
+            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 200, maxWidth: 240, whiteSpace:'normal', wordBreak:'break-word' }}>
               <div style={{ fontWeight:700, fontSize:16 }}>{String(baseRow.make||'')}</div>
               <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
               <div style={{ fontWeight:500, fontSize:15 }}>{String(baseRow.model||'')}</div>
               <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(baseRow.version||''))}</div>
+              {(() => {
+                const y = Number(own.year || 2025);
+                const segLabelText = segLabel(baseRow);
+                const mon = (() => {
+                  const lm = Number((baseRow as any)?.ventas_model_ytd_month ?? NaN);
+                  if (Number.isFinite(lm)) return monthNameEs(lm);
+                  const m = lastYtdMonth([baseRow], y);
+                  return m ? monthNameEs(m) : '';
+                })();
+                const u = (() => {
+                  const v = Number((baseRow as any)?.ventas_model_ytd ?? NaN);
+                  return Number.isFinite(v) ? v : ytdUnits(baseRow, y);
+                })();
+                const share = (() => {
+                  const v = Number((baseRow as any)?.ventas_model_seg_share_pct ?? (baseRow as any)?.ventas_share_seg_pct ?? NaN);
+                  return Number.isFinite(v) ? v : null;
+                })();
+                if (!segLabelText && u == null && share == null) return null;
+                return (
+                  <div style={{ marginTop:6, padding:'4px 0', borderTop:'1px solid #e2e8f0' }}>
+                    {segLabelText ? <div style={{ fontSize:12, color:'#334155' }}>{segLabelText}</div> : null}
+                    {u != null ? (
+                      <div style={{ fontSize:11, color:'#475569' }}>{fmtNum(u)} u YTD{mon ? ` (${mon})` : ''}</div>
+                    ) : null}
+                    {share != null ? (
+                      <div style={{ fontSize:11, color:'#475569' }}>{share.toFixed(1)}% cuota</div>
+                    ) : null}
+                  </div>
+                );
+              })()}
             </td>
             {/* Fila base: sin deltas (es la referencia) */}
             <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
@@ -2564,38 +2261,6 @@ const segData: any[] = [];
             <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
               <div>{fmtMoney(baseRow.tco_60k_mxn)}</div>
             </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
-              <div>{fmtMoney(cph(baseRow))}</div>
-            </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
-              <div>{fmtScoreValue(baseRow.segment_score)} pts</div>
-              {(() => {
-                const seg = segmentMain(baseRow) || (baseRow.segment_category ? String(baseRow.segment_category) : '');
-                return seg ? <div style={{ fontSize:12, color:'#64748b' }}>{seg.toUpperCase()}</div> : null;
-              })()}
-            </td>
-                {/* Segmento base */}
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600, minWidth: 200 }}>
-              <div>{segLabel(baseRow)}</div>
-              {(() => {
-                const y = Number(own.year || 2025);
-                const mon = (()=>{
-                  const lm = Number((baseRow as any)?.ventas_model_ytd_month ?? NaN);
-                  if (Number.isFinite(lm)) return monthNameEs(lm);
-                  const m = lastYtdMonth([baseRow], y); return m?monthNameEs(m):'';
-                })();
-                const u = (()=>{ const v = Number((baseRow as any)?.ventas_model_ytd ?? NaN); return Number.isFinite(v)?v:ytdUnits(baseRow, y) })();
-                const share = (()=>{ const v = Number((baseRow as any)?.ventas_model_seg_share_pct ?? (baseRow as any)?.ventas_share_seg_pct ?? NaN); return Number.isFinite(v)?v:null; })();
-                return (
-                  <>
-                    <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>
-                      {u!=null ? `${fmtNum(u)} u YTD${mon?` (${mon})`:''}` : ''}
-                    </div>
-                    {share!=null ? (<div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{share.toFixed(1)}%</div>) : null}
-                  </>
-                );
-              })()}
-            </td>
           </tr>)}
           {comps.map((r: any, i: number) => {
             const dMsrp = r.__deltas?.msrp || r.__deltas?.msrp_mxn || null;
@@ -2604,7 +2269,6 @@ const segData: any[] = [];
             const dFuel = r.__deltas?.fuel_cost_60k_mxn || null;
             const dSvc  = r.__deltas?.service_cost_60k_mxn || null;
             const dTco  = r.__deltas?.tco_60k_mxn || null;
-            const dCPH  = r.__deltas?.cost_per_hp_mxn || null;
             // Mostrar delta desde la perspectiva de nuestro vehículo (own - competitor)
             const inv = (d:any) => (d && typeof d.delta === 'number') ? -d.delta : null;
             const d_msrp = inv(dMsrp);
@@ -2613,28 +2277,69 @@ const segData: any[] = [];
             const d_fuel = inv(dFuel);
             const d_svc  = inv(dSvc);
             const d_tco  = inv(dTco);
-            const d_cph  = inv(dCPH);
-            const segDeltaObj = r.__segment_delta;
-            const segDelta = (segDeltaObj && typeof segDeltaObj.delta === 'number') ? -segDeltaObj.delta : null;
             const rowBg = i % 2 === 0 ? '#ffffff' : '#fafafa';
             return (
               <tr key={i} style={{ background: rowBg, ...hoverStyle(i) }} onMouseEnter={()=>setHoverRow(i)} onMouseLeave={()=>setHoverRow(null)}>
-                {/* Foto */}
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 200, maxWidth: 240, whiteSpace:'normal', wordBreak:'break-word' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontWeight:600, fontSize:14 }}>{String(r.make||'')}</div>
+                      <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano || ''}</div>
+                      <div style={{ fontWeight:500, fontSize:13.5 }}>{String(r.model||'')}</div>
+                      <div style={{ fontWeight:500, fontSize:12.5 }}>{normalizeVersion(String(r.version||''))}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={()=>removeCompetitor(r)}
+                      title="Quitar competidor"
+                      style={{ border:'1px solid #e2e8f0', background:'#fff', color:'#475569', borderRadius:999, width:24, height:24, lineHeight:'21px', textAlign:'center', cursor:'pointer' }}
+                    >
+                      ×
+                    </button>
+                  </div>
                   {(() => {
-                    const src = String((r as any)?.images_default || (r as any)?.image_url || '');
-                    if (!src) return null;
-                    return (<img src={src} alt="foto" style={{ width:84, height:56, objectFit:'cover', borderRadius:6, background:'#f1f5f9' }} onError={(e:any)=>{ e.currentTarget.style.display='none'; }} />);
+                    const y = Number(own.year || 2025);
+                    const seg = segLabel(r);
+                    const rowsAll = [ ...(ownRow ? [ownRow] : []), ...comps ];
+                    const mon = (() => {
+                      const lm = Number((r as any)?.ventas_model_ytd_month ?? NaN);
+                      if (Number.isFinite(lm)) return monthNameEs(lm);
+                      const m = lastYtdMonth(rowsAll, y);
+                      return m ? monthNameEs(m) : '';
+                    })();
+                    const u = (() => {
+                      const v = Number((r as any)?.ventas_model_ytd ?? NaN);
+                      return Number.isFinite(v) ? v : ytdUnits(r, y);
+                    })();
+                    const ub = (() => {
+                      const v = Number((baseRow as any)?.ventas_model_ytd ?? NaN);
+                      return Number.isFinite(v) ? v : ytdUnits(baseRow, y);
+                    })();
+                    const share = (() => {
+                      const v = Number((r as any)?.ventas_model_seg_share_pct ?? (r as any)?.ventas_share_seg_pct ?? NaN);
+                      return Number.isFinite(v) ? v : null;
+                    })();
+                    const deltaUnits = (u != null && ub != null) ? (u - ub) : null;
+                    if (!seg && u == null && share == null) return null;
+                    return (
+                      <div style={{ marginTop:6, padding:'4px 0', borderTop:'1px solid #e2e8f0' }}>
+                        {seg ? <div style={{ fontSize:12, color:'#334155' }}>{seg}</div> : null}
+                        {u != null ? (
+                          <div style={{ fontSize:11, color:'#475569' }}>{fmtNum(u)} u YTD{mon ? ` (${mon})` : ''}</div>
+                        ) : null}
+                        {share != null ? (
+                          <div style={{ fontSize:11, color:'#475569' }}>{share.toFixed(1)}% cuota</div>
+                        ) : null}
+                        {deltaUnits != null ? (
+                          <div style={{ fontSize:11, color: deltaUnits>0 ? '#16a34a' : '#dc2626' }}>
+                            {tri(deltaUnits)} {fmtNum(Math.abs(deltaUnits))} u vs base
+                          </div>
+                        ) : null}
+                      </div>
+                    );
                   })()}
                 </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 220 }}>
-                  <div style={{ fontWeight:600, fontSize:14 }}>{String(r.make||'')}</div>
-                  <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano || ''}</div>
-                  <div style={{ fontWeight:500, fontSize:13.5 }}>{String(r.model||'')}</div>
-                  <div style={{ fontWeight:500, fontSize:12.5 }}>{normalizeVersion(String(r.version||''))}</div>
-                </td>
-                
-                {/* Segmento al final: se renderiza más abajo */}
+
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                   <div>{fmtMoney(r.msrp)}</div>
                   <div style={{ fontSize:12, opacity:0.9, color: d_msrp!=null ? (d_msrp<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_msrp==null?'-':`${tri(d_msrp)} ${fmtMoney(Math.abs(d_msrp))}`}</div>
@@ -2664,43 +2369,6 @@ const segData: any[] = [];
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                   <div>{fmtMoney(r.tco_60k_mxn)}</div>
                   <div style={{ fontSize:12, opacity:0.9, color: d_tco!=null ? (d_tco<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_tco==null?'-':`${tri(d_tco)} ${fmtMoney(Math.abs(d_tco))}`}</div>
-                </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-                  <div>{fmtMoney(cph(r))}</div>
-                  <div style={{ fontSize:12, opacity:0.9, color: d_cph!=null ? (d_cph<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_cph==null?'-':`${tri(d_cph)} ${fmtMoney(Math.abs(d_cph))}`}</div>
-                </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-                  <div>{fmtScoreValue(r.segment_score)} pts</div>
-                  <div style={{ fontSize:12, opacity:0.9, color: segDelta!=null ? (segDelta>0?'#16a34a':'#dc2626'):'#64748b' }}>{segDelta==null?'-':`${tri(segDelta)} ${fmtScoreDelta(segDelta)} pts`}</div>
-                </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 200 }}>
-                  <div>{segLabel(r)}</div>
-                  {(() => {
-                    const y = Number(own.year || 2025);
-                    const mon = (()=>{
-                      const lm = Number((r as any)?.ventas_model_ytd_month ?? NaN);
-                      if (Number.isFinite(lm)) return monthNameEs(lm);
-                      const rowsAll = [ ...(ownRow?[ownRow]:[]), ...comps ];
-                      const m = lastYtdMonth(rowsAll, y); return m?monthNameEs(m):'';
-                    })();
-                    const u = (()=>{ const v = Number((r as any)?.ventas_model_ytd ?? NaN); return Number.isFinite(v)?v:ytdUnits(r, y) })();
-                    const ub = (()=>{ const v = Number((baseRow as any)?.ventas_model_ytd ?? NaN); return Number.isFinite(v)?v:ytdUnits(baseRow, y) })();
-                    const share = (()=>{ const v = Number((r as any)?.ventas_model_seg_share_pct ?? (r as any)?.ventas_share_seg_pct ?? NaN); return Number.isFinite(v)?v:null; })();
-                    const d_units = (u!=null && ub!=null) ? (u - ub) : null;
-                    return (
-                      <>
-                        <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>
-                          {u!=null ? `${fmtNum(u)} u YTD${mon?` (${mon})`:''}` : ''}
-                        </div>
-                        {share!=null ? (
-                          <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{share.toFixed(1)}%</div>
-                        ) : null}
-                        <div style={{ fontSize:12, opacity:0.9, color: d_units!=null ? (d_units>0?'#16a34a':'#dc2626'):'#64748b' }}>
-                          {d_units==null?'-':`${tri(d_units)} ${fmtNum(Math.abs(d_units))} u`}
-                        </div>
-                      </>
-                    );
-                  })()}
                 </td>
               </tr>
             );
@@ -2761,76 +2429,6 @@ const segData: any[] = [];
           );
         })()}
 
-        {/* Acciones transversales (consolidadas sobre competidores seleccionados) */}
-        {(() => {
-          if (!baseRow || !comps.length) return null;
-          const toNum = (x:any)=> { const v = Number(x); return Number.isFinite(v)? v : null; };
-          const pillarKeys = [
-            {key:'seguridad', label:PILLAR_LABELS['seguridad']},
-            {key:'motor', label:PILLAR_LABELS['motor']},
-            {key:'audio_y_entretenimiento', label:PILLAR_LABELS['audio_y_entretenimiento']},
-            {key:'confort', label:PILLAR_LABELS['confort']},
-            {key:'transmision', label:PILLAR_LABELS['transmision']},
-            {key:'energia', label:PILLAR_LABELS['energia']},
-          ];
-          // 1) Gaps por pilar repetidos
-          const gaps: Array<{label:string, count:number, avg:number}> = [];
-          for (const pk of pillarKeys) {
-            const b = toNum((baseRow as any)?.[pk.key]);
-            if (b==null || b<=0) continue;
-            let cnt=0, sum=0; 
-            comps.forEach((r:any)=>{ const v=toNum((r as any)?.[pk.key]); if (v!=null && v>0 && v>b){ cnt++; sum += (v-b); }});
-            if (cnt>0) gaps.push({ label: pk.label, count: cnt, avg: sum/cnt });
-          }
-          gaps.sort((a,b)=> b.count===a.count ? b.avg-a.avg : b.count-a.count);
-          const topGaps = gaps.slice(0,3);
-          const pillarToFeatures: Record<string,string[]> = {
-            [PILLAR_LABELS['seguridad']]: ['Frenado de emergencia','Punto ciego','Cámara 360'],
-            [PILLAR_LABELS['motor']]: ['Modos de manejo','Launch control'],
-            [PILLAR_LABELS['audio_y_entretenimiento']]: ['Android Auto','Apple CarPlay','Pantalla táctil'],
-            [PILLAR_LABELS['confort']]: ['Llave inteligente','Portón eléctrico'],
-            [PILLAR_LABELS['transmision']]: ['Control de tracción','Selector de terreno'],
-            [PILLAR_LABELS['energia']]: ['Motor eléctrico','Recuperación de energía'],
-          };
-          // 2) Features recurrentes (ellos sí / nosotros no)
-          const freq: Record<string,number> = {};
-          comps.forEach((r:any)=>{
-            const { plus } = getFeatureDiffs(r);
-            plus.forEach((f)=>{ const key = String(f).trim(); if (!key) return; freq[key] = (freq[key] || 0) + 1; });
-          });
-          const topFeatures = Object.entries(freq).sort((a,b)=> b[1]-a[1]).slice(0,4);
-          // 3) Precio transversal (mediana ΔTX cuando comp es más barato)
-          const negatives: number[] = comps.map((r:any)=> toNum((r as any)?.__deltas?.precio_transaccion?.delta)).filter((v:any)=> typeof v==='number' && v<0) as number[];
-          const pos: number[] = comps.map((r:any)=> toNum((r as any)?.__deltas?.precio_transaccion?.delta)).filter((v:any)=> typeof v==='number' && v>0) as number[];
-          const median = (arr:number[]) => { const a=[...arr].sort((x,y)=>x-y); const n=a.length; if(!n) return 0; const m=Math.floor(n/2); return n%2? a[m] : (a[m-1]+a[m])/2; };
-          const medNeg = Math.abs(Math.round(median(negatives))); // MXN que nos separa cuando quedamos arriba
-          const shareNeg = (negatives.length / Math.max(1,comps.length));
-          // 4) $/HP ventaja
-          const cphBase = toNum((baseRow as any)?.cost_per_hp_mxn);
-          let betterCphCount=0; let totalCph=0;
-          if (cphBase!=null && cphBase>0){
-            comps.forEach((r:any)=>{ const v=toNum((r as any)?.cost_per_hp_mxn); if(v!=null && v>0){ totalCph++; if (cphBase < v) betterCphCount++; }});
-          }
-          const bullets: string[] = [];
-          // pricing
-          if (shareNeg >= 0.5 && medNeg>0) bullets.push(`Bono transversal orientativo: $ ${Intl.NumberFormat('es-MX').format(medNeg)} (mediana del gap vs ${Math.round(shareNeg*100)}% de rivales)`);
-          // pillars
-          topGaps.forEach(g=> bullets.push(`Cerrar gap en ${g.label} (prom. +${Math.round(g.avg)} pts) • añadir ${ (pillarToFeatures[g.label]||[]).slice(0,2).join(', ') }`));
-          // features recurrentes
-          if (topFeatures.length) bullets.push(`Paquete rápido: ${topFeatures.map(([f,c])=> `${f} (${c})`).slice(0,3).join(' · ')}`);
-          // value message
-          if (totalCph>0 && betterCphCount/totalCph >= 0.6) bullets.push(`Mensajería: ventaja en $/HP frente a ${Math.round((betterCphCount/totalCph)*100)}% de competidores`);
-
-          if (!bullets.length) return null;
-          return (
-            <div style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
-              <div style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', fontWeight:700 }}>Acciones transversales</div>
-              <ul style={{ margin:'8px 0 10px 18px' }}>
-                {bullets.map((b,i)=>(<li key={i} style={{ fontSize:13 }}>{b}</li>))}
-              </ul>
-            </div>
-          );
-        })()}
         {/* Fila 1: Score vs Precio (con tendencia) y MSRP vs HP (con líneas $/HP) */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
           {(() => {
@@ -2838,7 +2436,7 @@ const segData: any[] = [];
             if (!hasScore) {
               return (
                 <div style={{ padding:'12px 10px', border:'1px dashed #e5e7eb', borderRadius:8, color:'#64748b' }}>
-                  No hay datos de "score de equipo" para graficar. (campo equip_score)
+                  No hay datos de &quot;score de equipo&quot; para graficar. (campo equip_score)
                 </div>
               );
             }
@@ -2860,7 +2458,7 @@ const segData: any[] = [];
             {renderChart(msrpVsHpWithLinesOption, 380, 'Sin datos suficientes de MSRP/HP para graficar.')}
           </div>
         </div>
-        {renderLegend()}
+
         {/* Fila 2: HP vs Precio y $/HP (detalle) y Waterfall ΔTX */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
           <div>
@@ -2878,7 +2476,7 @@ const segData: any[] = [];
             {renderChart(adasAdoptionOption, 380, 'Sin datos suficientes de features ADAS para graficar.')}
           </div>
         </div>
-        {renderLegend()}
+
 
         {/* Δ vs base: HP y Longitud (y aceleración si existe) */}
         <div style={{ display:'grid', gridTemplateColumns: hasDeltaAccel ? '1fr 1fr 1fr' : '1fr 1fr', gap:16 }}>
@@ -2906,7 +2504,7 @@ const segData: any[] = [];
             </div>
           ) : null}
         </div>
-        {renderLegend()}
+
 
         {(() => {
           // Huella superpuesta: ocultar si falta ancho en base o en todos los competidores
@@ -2920,259 +2518,24 @@ const segData: any[] = [];
                 <InfoIcon title={'Rectángulos representan ancho y largo de cada versión. La base aparece rellena; competidores en contorno.'} />
               </div>
               <div>{EChart ? <EChart echarts={echarts} option={footprintOption} opts={{ renderer: 'svg' }} style={{ height: 320 }} /> : null}</div>
-              {renderLegend()}
+
             </>
           );
         })()}
-
-        {(() => {
-          // Perfil alto x largo: ocultar si falta altura en base o en todos los competidores
-          const baseHas = Number.isFinite(Number((baseRow as any)?.altura_mm)) || Number.isFinite(Number((baseRow as any)?.alto_mm));
-          const anyCompHas = comps.some((r:any)=> Number.isFinite(Number((r as any)?.altura_mm)) || Number.isFinite(Number((r as any)?.alto_mm)));
-          if (!baseHas || !anyCompHas) return null;
-          return (
-            <>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:12, marginBottom:6 }}>
-                <div style={{ fontSize:12, color:'#64748b' }}>Perfil (alto × largo)</div>
-                <InfoIcon title={'Rectángulos representan altura y largo de cada versión. La base aparece rellena; competidores en contorno.'} />
-              </div>
-              <div>{EChart ? <EChart echarts={echarts} option={profileOption} opts={{ renderer: 'svg' }} style={{ height: 320 }} /> : null}</div>
-              {renderLegend()}
-            </>
-          );
-        })()}
-
-        {/* Diferencias de versión (mismo modelo) */}
-        {renderVersionDiffs()}
-
-        {(() => {
-          // Perfil alto x largo (si hay altura)
-          const ok = Number.isFinite(Number((baseRow as any)?.altura_mm)) || Number.isFinite(Number((baseRow as any)?.alto_mm));
-          if (!ok) return null;
-          return (
-            <>
-              <div style={{ marginTop:12 }}>{EChart ? <EChart echarts={echarts} option={profileOption} opts={{ renderer: 'svg' }} style={{ height: 320 }} /> : null}</div>
-              {renderLegend()}
-            </>
-          );
-        })()}
-
-        {/* Tira de fotos de los vehículos (debajo de la tabla) */}
-        <div style={{ marginTop:4, display:'flex', gap:12, flexWrap:'wrap', alignItems:'stretch' }}>
-          {[...(baseRow?[baseRow]:[]), ...comps].map((r:any, idx:number) => {
-            const src = String((r as any)?.images_default || (r as any)?.image_url || '');
-            if (!src) return null;
-            const color = colorForVersion(r);
-            return (
-              <div key={idx} style={{ width:180 }}>
-                <div style={{ border:`2px solid ${color}`, borderRadius:8, overflow:'hidden', background:'#f8fafc' }}>
-                  <img src={src} alt="foto" style={{ width:'100%', height:108, objectFit:'cover', display:'block' }} onError={(e:any)=>{ e.currentTarget.style.display='none'; }} />
-                </div>
-                <div style={{ marginTop:6, fontSize:12, color:'#334155', textAlign:'center' }}>{vehLabel(r)}</div>
-              </div>
-            );
-          })}
-        </div>
-        {renderLegend()}
 
         {/* Línea: ventas mensuales 2025 (si hay datos) */}
         <div>
           {renderChart(salesLineOption, 340, 'Sin datos de ventas mensuales.')}
         </div>
-        {renderLegend()}
 
-        {/* Gráficas por segmento (pilares principales) */}
-        {(() => {
-          if (!baseRow) return null;
-          const seg = segmentMain(baseRow);
-          const tops = bestPillarsForSegment(seg);
-          if (!tops || tops.length === 0) return null;
-          const opt1 = buildPillarVsPriceOption(tops[0].key, tops[0].label);
-          const opt2 = tops[1] ? buildPillarVsPriceOption(tops[1].key, tops[1].label) : null;
-          const hasOpt1 = !!opt1;
-          const hasOpt2 = !!opt2;
-          if (!hasOpt1 && !hasOpt2) return (
-            <div style={{ padding:'12px 10px', border:'1px dashed #e5e7eb', borderRadius:8, color:'#64748b', marginTop:12 }}>
-              Sin datos suficientes para graficar pilares vs precio.
-            </div>
-          );
-          return (
-            <>
-              <div style={{ marginTop:12, display:'grid', gridTemplateColumns: hasOpt2 ? '1fr 1fr' : '1fr', gap:16 }}>
-                {hasOpt1 ? (
-                  <div>{renderChart(opt1, 360, `Sin datos suficientes para ${tops[0].label}.`)}</div>
-                ) : null}
-                {hasOpt2 ? (
-                  <div>{renderChart(opt2, 360, `Sin datos suficientes para ${tops[1]!.label}.`)}</div>
-                ) : null}
-              </div>
-              {renderLegend()}
-            </>
-          );
-        })()}
 
         {/* Radar por segmento (pilares) */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:16 }}>
           {renderChart(radarPillarsOption, 360, 'Sin datos suficientes de pilares para graficar.')}
         </div>
-        {renderLegend()}
-
-        {/* Precio — explicación (todos los competidores), colocado ANTES del bloque de insights */}
-        {(!loading && priceExplainList && priceExplainList.length>0) && (
-              <div style={{ marginTop:16, border:'1px solid #e5e7eb', borderRadius:10, padding:10 }}>
-            <div style={{ fontWeight:700, marginBottom:2 }}>Precio — explicación</div>
-            <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Ordenado por cercanía de precio (ΔTX). Priorizamos rivales con precio más cercano; en empates, primero apples‑to‑apples ✓ y luego menor ΔHP.</div>
-            <div style={{ fontSize:12, color:'#475569', marginBottom:8 }}>Convención de signos: positivo = a favor del propio; negativo = a favor del competidor.</div>
-            <div style={{ display:'grid', gap:10 }}>
-              {(() => {
-                // Orden: |ΔTX| asc, luego apples ✓ primero, luego |ΔHP| asc
-                const ownTx = Number((compared?.own||ownRow||{} as any)?.precio_transaccion || (compared?.own||ownRow||{} as any)?.msrp || NaN);
-                const ownHp = Number((compared?.own||ownRow||{} as any)?.caballos_fuerza || NaN);
-                const arr = [...priceExplainList].map((x:any)=>{
-                  const c = x?.comp || {};
-                  const tx = Number(c?.precio_transaccion || c?.msrp || NaN);
-                  const hp = Number(c?.caballos_fuerza || NaN);
-                  const dhpSigned = (Number.isFinite(hp) && Number.isFinite(ownHp)) ? (hp - ownHp) : NaN;
-                  const dtxSigned = (Number.isFinite(tx) && Number.isFinite(ownTx)) ? (tx - ownTx) : NaN;
-                  const dhp = Number.isFinite(dhpSigned) ? Math.abs(dhpSigned) : Number.POSITIVE_INFINITY;
-                  const dtx = Number.isFinite(dtxSigned) ? Math.abs(dtxSigned) : Number.POSITIVE_INFINITY;
-                  const ok = !!(x?.explain?.apples_to_apples?.ok);
-                  return { ...x, __dtx: dtx, __ok: ok, __dhp: dhp, __dtx_s: dtxSigned, __dhp_s: dhpSigned };
-                }).sort((a:any,b:any)=>{
-                  const d = (a.__dtx - b.__dtx);
-                  if (d !== 0) return d;
-                  if (a.__ok !== b.__ok) return (a.__ok? -1: 1);
-                  return (a.__dhp - b.__dhp);
-                });
-                return arr.map((it:any, idx:number)=>{
-                  const ex = it.explain||{}; const c = it.comp||{};
-                  const name = vehicleLabel(c);
-                  const a2a = ex?.apples_to_apples||{}; const ok = !!a2a.ok;
-                  const decomp = Array.isArray(ex?.decomposition)? ex.decomposition: [];
-                  const bon = ex?.recommended_bonus?.mxn; const nota = Array.isArray(ex?.notas)? ex.notas.join(' • '): '';
-                  const dtxS = it.__dtx_s; const dhpS = it.__dhp_s;
-                  const fmtMoney = (v:number)=> Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(v);
-                  const sign = (n:number)=> (n>0? '+': (n<0? '−':''));
-                  return (
-                    <div key={idx} style={{ border:'1px solid #e5e7eb', borderRadius:8, padding:8 }}>
-                      <div style={{ fontWeight:600, marginBottom:6 }}>{name}</div>
-                      <div style={{ fontSize:12, marginBottom:6 }}>
-                        <span style={{ padding:'2px 8px', borderRadius:999, background: ok? '#dcfce7':'#fee2e2', color: ok? '#166534':'#991b1b', fontWeight:700 }}>Apples‑to‑apples: {ok?'✓':'✕'}</span>
-                        {(!ok && a2a?.motivos_no?.length)? <span style={{ marginLeft:8, color:'#64748b' }}>{a2a.motivos_no.join(' • ')}</span>: null}
-                        {/* Badges ΔTX y ΔHP */}
-                        {Number.isFinite(dtxS) ? (
-                          <span style={{ marginLeft:8, padding:'2px 8px', borderRadius:999, background: (dtxS as number)<0? '#ecfdf5':'#fef2f2', color: (dtxS as number)<0? '#166534':'#991b1b', border:`1px solid ${(dtxS as number)<0? '#86efac':'#fecaca'}` }}>
-                            ΔTX: {sign(dtxS as number)}{fmtMoney(Math.abs(dtxS as number))}
-                          </span>
-                        ) : null}
-                        {Number.isFinite(dhpS) ? (
-                          <span style={{ marginLeft:8, padding:'2px 8px', borderRadius:999, background:'#eff6ff', color:'#1e40af', border:'1px solid #bfdbfe' }}>
-                            ΔHP: {sign(dhpS as number)}{Math.abs(dhpS as number)}
-                          </span>
-                        ) : null}
-                      </div>
-                  {decomp.length? (()=>{
-                    // Calcular driver principal (una sola vez) y resaltarlo también en la lista
-                    let topLabel: string | null = null; let topVal = 0;
-                    try {
-                      const drv = (decomp||[]).filter((d:any)=> typeof d?.monto==='number' && String(d?.componente||'').toLowerCase().indexOf('no explicada')===-1);
-                      if (drv.length){
-                        const best = drv.slice().sort((a:any,b:any)=> Math.abs(b.monto)-Math.abs(a.monto))[0];
-                        topLabel = String(best?.componente||'');
-                        topVal = Number(best?.monto||0);
-                      }
-                    } catch {}
-                    return (
-                      <>
-                        <ul style={{ margin:'0 0 6px 18px' }}>
-                          {decomp.map((d:any,i:number)=> {
-                            const comp = String(d?.componente||'');
-                            const amt = (typeof d?.monto==='number') ? Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(d.monto) : 'N/D';
-                            const tip = d?.explicacion ? String(d.explicacion) : '';
-                            const isTop = (topLabel && comp === topLabel);
-                            const isGap = comp.toLowerCase().includes('no explicada');
-                            const hint = isGap ? ' (no explicada)' : '';
-                            return (
-                              <li key={i} style={{ fontSize:13, fontWeight: isTop? 700: 400 }}>
-                                {isTop? '★ ': ''}{comp}{hint}: {amt}{isTop? ' (principal)': ''}
-                                {tip? <span style={{ marginLeft:6, verticalAlign:'middle' }}><InfoIcon title={tip} /></span> : null}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                        {topLabel ? (
-                          <div style={{ fontSize:12, color:'#334155', marginTop:4 }}>
-                            Driver principal: <strong>{topLabel}</strong> ({topVal>0? '+': (topVal<0? '−':'')}{Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(Math.abs(topVal))})
-                          </div>
-                        ) : null}
-                      </>
-                    );
-                  })() : <div style={{ color:'#64748b', fontSize:13 }}>{ex?.error ? `Error al calcular: ${String(ex.error)}` : 'Sin descomposición disponible'}</div>}
-                      <div style={{ fontSize:13, color:'#334155' }}>{(bon>0)? `Bono sugerido: ${Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(bon)}`: 'Sin bono sugerido'}</div>
-                      {nota? <div style={{ fontSize:12, color:'#64748b' }}>{nota}</div>: null}
-                    </div>
-                  );
-                });
-              })()}
-            </div>
-          </div>
-        )}
-
-        {/* Insights (IA) debajo del radar */}
-        <div style={{ marginTop:16, border:'1px solid #e5e7eb', borderRadius:10 }}>
-          <div style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <div style={{ fontWeight:700 }}>Insights (IA)</div>
-            <div className="no-print" style={{ display:'flex', gap:8 }}>
-              <button
-                onClick={async()=>{
-                  setLoading(true);
-                  setPriceExplainList([]);
-                  try{
-                    const body = { own: (compared?.own || ownRow || {}), competitors: comps, prompt_lang: 'es' } as any;
-                    const top = comps;
-                    const ownForExplain = (compared?.own || ownRow || {}) as any;
-                    // Lanzar cálculo de explicación de precio en paralelo
-                    const explPromise = Promise.all((top||[]).map(async (c:any) => {
-                      try {
-                        const ex = await endpoints.priceExplain({ own: ownForExplain, comp: c, use_regression: true, use_heuristics: true });
-                        return { comp: c, explain: ex };
-                      } catch (e:any) {
-                        return { comp: c, explain: { error: String(e?.message||e) } };
-                      }
-                    }));
-                    // Intentar insights (si falla, seguimos con explicaciones)
-                    let r: any = null;
-                    try {
-                      r = await endpoints.insights(body);
-                    } catch(e:any) {
-                      r = { ok: false, error: String(e?.message||e), insights: String(e?.message||e) };
-                    }
-                    const expls = await explPromise;
-                    setPriceExplainList(expls);
-                    const ok = r?.ok !== false;
-                    setInsights(r?.insights || r?.error || '');
-                    setInsightsObj(r?.insights_json || null);
-                    setInsightsStruct(ok ? (r?.insights_struct || null) : null);
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
-                style={{ padding:'8px 12px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor:'pointer' }}
-              >Generar insights</button>
-              <button onClick={()=>{ try{ window.print(); }catch{} }} style={{ padding:'8px 12px', background:'#374151', color:'#fff', border:'none', borderRadius:8, cursor:'pointer' }}>Exportar PDF</button>
-            </div>
-          </div>
-          <div style={{ padding:10 }}>
-            {loading ? <div style={{ color:'#64748b', fontSize:13 }}>Generando…</div> : (
-              insightsStruct ? renderStruct(insightsStruct, lang || 'es') :
-              (insightsObj ? renderInsightsObj(insightsObj) : (insights ? renderInsights(insights) : <div style={{ color:'#64748b', fontSize:13 }}>Pulsa “Generar insights” para obtener recomendaciones.</div>))
-            )}
-        </div>
-      </div>
 
       </div>
     </section>
-    {/* Integración del porqué del precio se renderiza dentro del bloque de Insights */}
     </>
   );
 }

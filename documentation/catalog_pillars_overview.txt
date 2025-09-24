@@ -16,59 +16,220 @@ Trabajamos con los años modelo 2024, 2025 y 2026, apoyándonos en el historial 
 4. Recalcular pilares y scores (`calc_scores`).
 5. Auditoría y validación (`audit_pillars.py`).
 
-## 4. Pilares y Familias
-- Audio y entretenimiento: Android Auto/CarPlay, pantalla, audio, cámara 360, cargador inalámbrico.
-- Climatización: zonas HVAC, controles traseros, calefacción/ventilación de asientos, purificador.
-- Confort: ajustes eléctricos/memoria, techo panorámico, cortinillas, volante, iluminación ambiental.
-- Dimensiones: capacidad de carga, piso ajustable, rieles, puntos de anclaje, tercera fila.
-- Exterior: iluminación, lavafaros, sensores, techo panorámico, spoiler, pintura especial.
-- Frenos: discos, ABS, asistencias, EBD, hill assist.
-- Llantas y rines: medidas, rines, runflat, monitoreo, kit inflado.
-- Motor: tipo/cilindraje, potencia, torque.
-- Seguridad: ADAS (AEB, ACC, LKA, BSM, RCTA), bolsas de aire, ESC.
-- Suspensión: arquitectura (independiente, air), adaptiva, elevación.
-- Transmisión: tren motriz, reductora, modos off-road, bloqueos.
-- Energía: categoría híbrido/EV, batería, autonomía, carga AC/DC, consumo kWh.
 
-## 5. Ponderación por Segmento
-| Segmento | Pesos principales |
-|----------|-------------------|
-| Sedan | Seguridad 0.20, motor 0.20, confort 0.15, clima 0.10, audio 0.10, dimensiones 0.10, suspensión 0.05, frenos 0.10 |
-| SUV | Seguridad 0.18, motor 0.18, confort 0.15, energía* 0.10, dimensiones 0.15, suspensión 0.08, frenos 0.08, audio 0.08 |
-| Pickup | Dimensiones 0.30, tracción 0.20, seguridad 0.10, motor 0.15, confort 0.05, clima 0.05, audio 0.05, suspensión/frenos 0.10 |
-| Van | Seguridad 0.25, confort 0.15, clima 0.15, dimensiones 0.20, motor 0.10, audio 0.10, frenos 0.05 |
-| Sports | Motor 0.35, frenos 0.20, suspensión 0.15, seguridad 0.15, confort 0.05, audio 0.05, exterior 0.05 |
+## 4. Pilares enriquecidos (campos, KPIs y casos de uso)
+El script `scripts/enrich_catalog.py` (`merge_augmented_json` + `compute_pillar_kpis`) consume directamente el catálogo JSON (`vehiculos-todos-augmented.normalized.enriched.scored.json` → `...enriched.json` → `...backup.json`) para poblar los nuevos campos y KPIs; tras refrescar con `scripts/enrich_catalog.py` los valores quedan reflejados en `data/enriched/current.csv`.
 
-*Vehículos electrificados: se redistribuye peso de motor→energía (suma +0.15).
+### 4.1 Audio & Entretenimiento
+- **Fuente JSON:** `equipment -> "Bocinas"`, `features -> "Infoentretenimiento"`.
+- **Campos calculados:**
+  - `infotainment_screen_main_in`: primer valor numérico encontrado en `"Pantalla de navegación"` (pulgadas).
+  - `infotainment_audio_speakers`: atributo `"número de"` de `"Bocinas"`.
+  - `infotainment_audio_brand`: atributo `"nombre de la marca"` (se omiten `-`/`ninguno`).
+  - `infotainment_audio_subwoofer`: atributo `"subwoofer"` (`serie/si/incluido` → `True`).
+  - `infotainment_audio_surround`: atributo `"sonido envolvente"`.
+  - `infotainment_usb_front` / `infotainment_usb_rear`: presencia en `"Conexión USB (adelante / atrás)"`.
+- **KPIs:**
+  - `infotainment_score` (0–100):
+    - Pantalla: `min(30, (pulgadas/15)*30)`.
+    - Bocinas: `min(25, (bocinas/12)*25)`.
+    - Subwoofer: +10.
+    - Sonido envolvente: +10.
+    - Marca de audio válida: +10.
+    - USBs delanteros/traseros: +5 cada uno.
+    - Carga inalámbrica (`comfort_wireless_charging`): +5.
+    - Android Auto + Apple CarPlay (ambos activos): +5.
+  - `infotainment_price_per_score = precio_transaccion / infotainment_score` (si el score es >0).
+- **Uso:** showroom y comparativos de precio, tie-in con equipo premium.
 
-## 6. Cobertura y Auditoría
-- MY 2026: ≥97 % en todos los pilares (dimensiones, exterior, transmisión, frenos, motor, seguridad = 100 %).
-- MY 2025: ≥90 % (energía 91.6 %, climatización 90.7 %, suspensión 90.3 %).
-- MY 2024: casi todos ≥99 %, salvo confort (92.5 %).
-- Auditoría (`audit_pillars.py`): 3 224 vehículos con `pillar_scores`; 14 versiones 2025-2026 pendientes de equipamiento estructurado (`only_general_missing_ids.txt`).
+### 4.2 Climatización
+- **Fuente JSON:** `equipment -> "Sistema de ventilación"`, `"Calefacción trasera"`, `"Calefacción auxiliar"`, `"Controles de ventilación secundarios"`.
+- **Campos calculados:**
+  - `hvac_filter_pollen`, `hvac_filter_active_carbon`, `hvac_ionizer`, `hvac_recirculation_auto`, `hvac_touch_controls`: atributos homónimos del `Sistema de ventilación`.
+  - `hvac_rear_controls`: disponibilidad de `"Controles de ventilación secundarios"`.
+  - `hvac_rear_heater`, `hvac_aux_heater`: banderas desde `"Calefacción trasera"` y `"Calefacción auxiliar"`.
+- **KPIs:**
+  - `comfort_hvac_score` (0–100):
+    - `zonas_clima`: `min(40, zonas * 13)`.
+    - Controles traseros: +20.
+    - Filtros (pollen o carbón activo): +10.
+    - Ionizador: +10.
+    - Recirculación automática: +5.
+    - Controles touch: +5.
+    - Calefacción trasera / auxiliar: +5 cada uno.
+  - `comfort_hvac_price_per_score` análogo al ratio de infotainment.
+- **Uso:** discurso confort vs competidores (Telluride, Explorer) y monetización de paquetes HVAC.
 
-## 7. Incremento de Precio por Año Modelo
-- 2024→2025 (730 pares):
-  - MSRP +$25.5k (media, +2.3 %), mediana +$12.1k (+1.8 %).
-  - Precio transacción +$36.7k (media, +3.1 %), mediana +$10.1k (+1.6 %).
-  - 90 % de los casos: < +5.7 % (MSRP), < +10.8 % (transacción).
-- 2025→2026 (169 pares):
-  - MSRP +$27.3k (media, +1.6 %), mediana +$10.5k (+1.3 %).
-  - Precio transacción +$40.8k (media, +3.1 %), mediana +$35.0k (+2.2 %).
-  - 90 % de los casos: < +4.3 % (MSRP), < +6.5 % (transacción).
+### 4.3 Confort & Conveniencia
+- **Fuente JSON:** `equipment -> "Cierre eléctrico de la cajuela"`, `"Cierre automático de puerta"`, `"Ajustes memorizados"`, `"Pad de carga inalámbrica"`, `"Iluminación ambiental envolvente"`, `"Asistencia de estacionamiento"`, `"Sensores de estacionamiento"`, `"Informacion Espacio para Estacionamiento"`.
+- **Campos calculados:**
+  - `comfort_power_tailgate`, `comfort_auto_door_close`, `comfort_memory_settings`, `comfort_wireless_charging`, `comfort_ambient_lighting`, `comfort_parking_assist_auto`, `comfort_parking_sensors`, `comfort_parking_space_info`.
+- **KPIs:**
+- `convenience_score` (0–100):
+    - Portón eléctrico: +20.
+    - Cierre automático de puertas: +10.
+    - Memorias: +15.
+    - Carga inalámbrica: +10.
+    - Iluminación ambiental: +10.
+    - Asistencia de estacionamiento auto: +15.
+    - Sensores (frontal/trasero) o banderas existentes: +10.
+    - Sensor de lluvia (`limpiaparabrisas_lluvia`): +5.
+    - Información de espacio de estacionamiento: +5.
+  - `convenience_price_per_score` = precio / score.
+- **Uso:** definir paquete “Confort+” y justificar precio vs rivales.
 
-## 8. Costo/Beneficio (Equipamiento vs Precio)
-- Indicador: `equip_score / precio_transaccion` (puntos por millón MXN).
-- Mejor relación actual: Geely GX3 Pro GC 2025 (~149 puntos por millón). Siguen Chevrolet Aveo 2025, etc.
 
-## 9. Monitoreo Continuo
-- Refrescar catálogo vía `scripts/run_daily_refresh.sh`.
-- Reprocesar y recalcular pilares (`process_raw_catalog.py`, `enrich_catalog.py`, `calc_scores`).
-- Auditoría recurrente (`scripts/audit_pillars.py`).
-- Revisar `only_general_missing_ids.txt` para completar equipamiento cuando lleguen datos JATO/OEM.
-- Validar nuevas versiones/marcas y variaciones de precio.
+### 4.4 Dimensiones & Configuración
+- **Fuente JSON:** `features -> "Dimensiones"`, `features -> "Interior"`.
+- **Campos calculados:**
+  - `cargo_volume_all_seats_l`, `cargo_volume_max_l` ← `Capacidad de carga (l)` y `Capacidad de carga con respaldo abatido (l)`.
+  - `cargo_area_length_mm`, `cargo_area_width_mm`, `cargo_area_height_mm` ← `Longitud/Anchura/Altura de área de carga (mm)`.
+  - `seat_layout_description` combina `Tipo de asiento trasero` y `Tipo de asiento en la tercera fila` para conservar el layout disponible.
+  - Se refuerza `capacidad_de_asientos` cuando el JSON la trae y el CSV original no.
+- **KPIs:**
+  - `price_per_seat`: precio transacción (o MSRP si falta) entre número de plazas.
+  - `tco_60k_per_seat`, `tco_total_60k_per_seat`: costo total a 60k km dividido entre plazas.
+  - `cargo_density_kg_per_l`: `peso_kg / cargo_volume_max_l` (si ambos están presentes).
+- **Uso:** relacionar precio/TCO con plazas reales y dimensionamiento de carga (ejemplo “$ por plaza” y densidad de carga para narrativa 7 plazas).
 
-## 10. Resultado Final
-Archivo recomendado: `data/vehiculos-todos-augmented.normalized.enriched.scored.json`.
-- Incluye `pillar_scores`, `equip_score`, `segment_score`, `equipment_breakdown`, con metadata (`pillar_source = "v2_scoring"`, `equipment_enriched = True`).
-- Cobertura casi total MY 2025-2026; listo para consumo por el frontend.
+### 4.5 Exterior & Iluminación
+- **Fuente JSON:** `equipment -> "Sistema de luces"`, `"Faros de niebla delanteros"`, `"Faros de niebla traseros"`, `"Encendido diurno automático"`, `"Limpiaparabrisas"`, `"Lavafaros"`, `"Spoiler"`, `"Rieles para equipaje"`, `"Pintura"`, `"Luces laterales para maniobras"`, `"Llantas"`, `"Frenos de disco"` y `features -> "Exterior"` para señales auxiliares.
+- **Campos calculados:**
+  - Iluminación: `exterior_headlight_lens`, `exterior_headlight_low`, `exterior_headlight_high`, `exterior_fog_lights_front`, `exterior_fog_lights_rear`, `exterior_daytime_running`, `exterior_rain_sensing_wipers`, `exterior_headlight_washer`, `exterior_cornering_lights`, `exterior_spoiler`, `exterior_roof_rails`, `exterior_paint_type`.
+  - Llantas/rines: `wheel_front_tire_width_mm`, `wheel_front_tire_aspect_ratio`, `wheel_front_wheel_diameter_in`, `wheel_front_wheel_width_in`, `wheel_front_tire_type`, y equivalentes traseros (`wheel_rear_*`).
+  - Frenos: `brakes_disc_count`, `brakes_vented_count`, `brakes_ceramic`, `brakes_regenerative`.
+- **KPIs:** aún sin score específico; se priorizó poblar campos base para consumo directo.
+- **Uso:** fichas técnicas y comparativos de iluminación avanzada (matrix LED, DRL, cornering), narrativa de styling y frenado.
+
+### 4.6 Motor & Performance
+- **Fuente JSON:** `equipment -> "Motor"`, `"Potencia"`, `"Desempeño"`, `"Combustible"`, `"Control de niveles de emisiones"`, `"Consumo de combustible"` y `features -> "Motor"`, `"Rendimiento de combustible"`.
+- **Campos calculados:**
+  - Especificaciones base: `engine_displacement_cc`, `engine_displacement_l`, `engine_cylinders`, `engine_configuration`.
+  - Potencia y torque: `engine_power_hp`, `engine_power_kw`, `engine_power_rpm`, `engine_torque_lbft`, `engine_torque_nm`, `engine_torque_rpm`.
+  - Desempeño: `performance_accel_0_100_s`.
+  - Combustible/emisiones: `engine_fuel_type`, `engine_octane_rating`, `engine_emissions_standard`, `engine_co2_combined_g_km`, `fuel_city_l_100km`, `fuel_highway_l_100km`, `fuel_combined_l_100km`, `range_combined_km` (cuando aplica).
+- **KPIs:** sin score nuevo; el objetivo es alimentar pricing/value (“precio/Hp”, “precio/Nm”, 0-100 estimado) con datos estructurados.
+- **Uso:** narrativa performance-value, preparación para comparativas de aceleración y emisiones.
+
+### 4.9 Seguridad & ADAS
+- **Fuente JSON:** `features -> "Asistencia para el conductor"`, `features -> "Confort y conveniencia"` (para bolsas laterales) y banderas históricas (`abs`, `control_estabilidad`, `alerta_colision`, `sensor_punto_ciego`, `camara_360`, `control_crucero`, `header_description`, etc.) provenientes del CSV base.
+- **Campos calculados:**
+  - ADAS normalizados: `adas_aeb`, `adas_curving_brake`, `adas_ebd`, `adas_hill_assist`, `adas_lane_mode`, `adas_engine_mode`, `adas_blind_spot`, `adas_360_camera`, `adas_front_parking_camera`, `adas_rear_parking_camera`, `adas_side_parking_sensors`, `adas_front_parking_sensors`, `adas_rear_parking_sensors` (todos resultan de mapear `value`/`attributes` del bloque "Asistencia para el conductor").
+  - Cobertura de airbags laterales: `safety_side_airbags_front`, `safety_side_airbags_rear` se derivan de `"Bolsas de aire laterales (adelante / atrás)"` y se convierten a números flotantes.
+- **KPIs:**
+  - `equip_p_adas` (0–100) suma ponderada: alerta de colisión (20), punto ciego (20, admite `tiene_camara_punto_ciego`), cámara 360 (15), asistente de estacionamiento frontal (10) y trasero (10), control de frenado en curvas (10), control crucero adaptativo (15, detectado en texto libre), más boosts por menciones de `lane`/`carril` (+10) y `TSR/señales` (+6) en `header_description`.
+  - `equip_p_safety` (0–100) combina ABS (20), control de estabilidad o tracción (20), número de airbags (hasta 40 con escala 0–6+), sinergia blind-spot + 360 (+10), presencia de faros LED (+6), faros matrix (+6) y luces antiniebla (+4).
+- **Uso:** habilitar un “ADAS coverage index” accionable, validar narrativas de seguridad activa/pasiva y detectar huecos críticos (p. ej. ausencia de ESC o ACC en rivales) para guiones comerciales y comparativos.
+
+### 4.10 Suspensión
+- **Fuente JSON:** `features -> "Suspensión"` y sus atributos anidados; se particionan campos `"(adelante / atrás)"` en entradas individuales.
+- **Campos calculados:**
+  - Arquitectura: `suspension_type_front`, `suspension_type_rear`.
+  - Elementos elásticos: `suspension_springs_front`, `suspension_springs_rear`.
+  - Barras estabilizadoras: `suspension_antiroll_front`, `suspension_antiroll_rear`.
+  - Dependencia (ejes sólidos vs independientes): `suspension_dependency_front`, `suspension_dependency_rear`.
+  - Tecnología avanzada: `suspension_adaptive`, `suspension_selflevel_front`, `suspension_selflevel_rear`.
+- **KPIs:** sin score dedicado todavía; los campos alimentan futuras métricas de “ride & handling” y verifican promesas de suspensión neumática, adaptativa o autonivelante.
+- **Uso:** documentación de producto (p. ej. marketing 4WD premium), validación en argumentos off-road vs confort, y soporte para filtros técnicos en el frontend (filtrar por suspensión adaptativa, autonivelante, etc.).
+
+
+
+## 5. Ponderación por Segmento (v2)
+- **Sedán:** Seguridad 0.25 · ADAS 0.15 · Confort 0.15 · Infotainment 0.10 · Tracción/Utilidad 0.05 · Dimensiones 0.10 · Motor/Performance 0.15 · Energía/TCO 0.05 · Otros 0.000
+- **SUV:** Seguridad 0.20 · ADAS 0.15 · Confort 0.15 · Infotainment 0.10 · Tracción/Utilidad 0.15 · Dimensiones 0.10 · Motor/Performance 0.10 · Energía/TCO 0.05 · Otros 0.000
+- **Pickup:** Seguridad 0.15 · ADAS 0.10 · Confort 0.05 · Infotainment 0.05 · Tracción/Utilidad 0.30 · Dimensiones 0.15 · Motor/Performance 0.15 · Energía/TCO 0.05 · Otros 0.000
+- **Van:** Seguridad 0.25 · ADAS 0.10 · Confort 0.20 · Infotainment 0.10 · Tracción/Utilidad 0.05 · Dimensiones 0.15 · Motor/Performance 0.10 · Energía/TCO 0.05 · Otros 0.000
+- **Sports:** Seguridad 0.15 · ADAS 0.10 · Confort 0.10 · Infotainment 0.05 · Tracción/Utilidad 0.05 · Dimensiones 0.05 · Motor/Performance 0.35 · Energía/TCO 0.05 · Otros 0.100
+
+*Vehículos electrificados: trasladar 0.15 de motor/performance a energía/TCO cuando `categoria_hybrid in {phev, bev}`.*
+
+## 6. Derivados y normalización
+- Unificar booleans: mapear `Estándar/No disponible/Opcional` a {1,0,0.5} y crear flags limpios (`tiene_ac`, `llave_smart`, `ventanas_auto_full`).
+- Conteos numéricos: USB/USB-C/12V/110V, bocinas, plazas ISOFIX, airbags por fila.
+- Medidas: rines en pulgadas, llanta (ancho/perfil), volúmenes de carga, ángulos off-road, potencia/peso.
+- Scores 0–100 por pilar con percentiles por segmento/tamaño; cap y normalización para evitar outliers.
+- KPIs transversales listos para UI: precio/HP y precio/Nm, TCO 60k y por plaza, precio por punto de pilar.
+
+## 7. KPIs listos para UI
+- `equip_match_pct` y `equip_over_under_breakdown` (mantener) + top 3 brechas accionables por vehículo.
+- `precio_tx / infotainment_score`, `precio_tx / convenience_score`, `tco_total_60k / plazas`.
+- Off-road score vs rivales (ángulos, reductora, bloqueos).
+- ADAS coverage index (ponderado por severidad).
+
+## 8. Aplicación inmediata (GWM Tank 500)
+- **Confort:** faltaban portón eléctrico, park assist, sensor de lluvia; marcar en overlay para paquete Confort+.
+- **Eficiencia/TCO:** consumo 8.7 km/l vs 11 de rivales → considerar bono 2–3 % o tasa preferencial.
+- **ADAS:** ahora con flags ACC/LKA/RCTA explícitos; subir ADAS Score sin ambigüedad.
+- **Capacidad:** usar “7 plazas + 4WD real + longitud 5.08 m” con precio/TCO por plaza.
+- **Performance:** reforzar `$ / HP` y agregar `$ / Nm` y 0-100 estimado.
+- **Frase guía:** “Aunque nuestro motor tiene un desplazamiento menor (3.0L vs 3.8L), genera más potencia gracias a su configuración técnica avanzada.”
+
+## 9. Snippet de esquema recomendado
+```
+{
+  "infotainment": {
+    "pantalla_pulg": 12.3,
+    "carplay": true,
+    "carplay_wireless": true,
+    "android_auto": true,
+    "android_auto_wireless": true,
+    "marca_audio": null,
+    "bocinas": 8,
+    "subwoofer": false,
+    "hud": false,
+    "usb": {"usb": 2, "usb_c": 2},
+    "enchufes": {"12v": 2, "110v": 1}
+  },
+  "clima": {
+    "zonas": 3,
+    "controles_traseros": true,
+    "purificador": false,
+    "asientos_hvac": {
+      "fila1": {"heat": true, "vent": true},
+      "fila2": {"heat": false, "vent": false}
+    }
+  },
+  "confort": {
+    "porton_manos_libres": true,
+    "memoria_asientos": true,
+    "cortinillas": true,
+    "ambient_light": true,
+    "sensor_lluvia": true,
+    "park_assist": {"frontal": true, "trasero": true, "auto": false},
+    "carga_inalambrica": true
+  },
+  "offroad_traccion": {
+    "tipo": "4WD",
+    "low_range": true,
+    "bloqueos": {"central": true, "trasero": false, "delantero": false},
+    "modos": ["arena", "barro", "rocas"],
+    "angulos": {"ataque": 28, "salida": 26, "quiebre": 22},
+    "vadeo_mm": 700,
+    "despeje_mm": 220
+  },
+  "seguridad": {
+    "adas": {"aeb": true, "acc": true, "lka": true, "bsm": true, "rcta": true},
+    "bolsas": {"frontales": 2, "laterales": 2, "cortina_filas": 3, "rodillas": 1},
+    "esc": true,
+    "isofix": 2
+  },
+  "garantia_servicio": {
+    "garantia_basica": "3/60,000",
+    "tren_motriz": "5/100,000",
+    "mantenimiento_incluido": false,
+    "costo_60k_mxn": 20100,
+    "asistencia_vial_anios": 3
+  }
+}
+```
+
+## 10. Monitoreo continuo y auditoría
+- Refrescar catálogo con `scripts/run_daily_refresh.sh` (resetea cachés como `_VEH_JSON_ENTRIES`).
+- Regenerar `data/enriched/current.csv` vía `scripts/enrich_catalog.py` cuando cambien los mapeos.
+- Auditoría `scripts/audit_pillars.py` para cobertura (priorizar pendientes `only_general_missing_ids.txt`).
+- Validar variaciones de precio y KPI vs rivales en cada refresh.
+
+## 11. Resultado final
+`data/vehiculos-todos-augmented.normalized.enriched.scored.json` queda como fuente maestra:
+- `pillar_scores`, `equip_score`, `segment_score`, `equipment_breakdown` con `pillar_source = "v2_scoring"` y `equipment_enriched = true`.
+- Cobertura total MY 2025-2026 con dimensión, garantías y ADAS granular.
