@@ -203,8 +203,35 @@ def _to01_shared(v: _Any) -> int:
 
 def ensure_equip_score(row: Dict[str, _Any]) -> Dict[str, _Any]:
     out = dict(row)
+    def _avg_pillars() -> Optional[float]:
+        pillar_keys = (
+            "equip_p_adas",
+            "equip_p_safety",
+            "equip_p_comfort",
+            "equip_p_infotainment",
+            "equip_p_traction",
+            "equip_p_utility",
+        )
+        vals: list[float] = []
+        for key in pillar_keys:
+            v = _to_num_shared(out.get(key))
+            if v is None or v <= 0:
+                continue
+            try:
+                vals.append(float(v))
+            except Exception:
+                continue
+        if vals:
+            return round(sum(vals) / float(len(vals)), 1)
+        return None
+
     val = _to_num_shared(out.get("equip_score"))
-    if val is not None and val > 0:
+    if val is None or val <= 0:
+        avg = _avg_pillars()
+        if avg is not None:
+            out["equip_score"] = avg
+            return out
+    else:
         return out
     keys = [
         "android_auto","apple_carplay","tiene_pantalla_tactil","camara_360",
@@ -3192,6 +3219,42 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
             return float(price / hp)
         except Exception:
             return None
+
+    def seat_capacity(row: Dict[str, Any]) -> Optional[int]:
+        keys = ("seats_capacity","capacidad_de_asientos","capacidad_asientos","asientos","pasajeros")
+        for key in keys:
+            val = to_num(row.get(key))
+            if val is None:
+                continue
+            try:
+                if float(val) != float(val):  # NaN guard
+                    continue
+                if float(val) <= 0:
+                    continue
+                return int(round(float(val)))
+            except Exception:
+                continue
+        return None
+
+    def price_per_seat(row: Dict[str, Any]) -> Optional[float]:
+        price = to_num(row.get("precio_transaccion") or row.get("msrp"))
+        seats = seat_capacity(row)
+        if price is None or seats in (None, 0):
+            return None
+        try:
+            return float(price / seats)
+        except Exception:
+            return None
+
+    def equip_price_per_point(row: Dict[str, Any]) -> Optional[float]:
+        price = to_num(row.get("precio_transaccion") or row.get("msrp"))
+        score = to_num(row.get("equip_score"))
+        if price is None or score is None or score <= 0:
+            return None
+        try:
+            return float(price / score)
+        except Exception:
+            return None
     def _drop_nulls(value: Any) -> Any:
         if isinstance(value, dict):
             return {k: _drop_nulls(v) for k, v in value.items() if v is not None}
@@ -3297,8 +3360,35 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     def ensure_equip_score(row: Dict[str, Any]) -> Dict[str, Any]:
         out = dict(row)
+        def _avg_pillars() -> Optional[float]:
+            pillar_keys = (
+                "equip_p_adas",
+                "equip_p_safety",
+                "equip_p_comfort",
+                "equip_p_infotainment",
+                "equip_p_traction",
+                "equip_p_utility",
+            )
+            vals: list[float] = []
+            for key in pillar_keys:
+                v = to_num(out.get(key))
+                if v is None or v <= 0:
+                    continue
+                try:
+                    vals.append(float(v))
+                except Exception:
+                    continue
+            if vals:
+                return round(sum(vals) / float(len(vals)), 1)
+            return None
+
         val = to_num(out.get("equip_score"))
-        if val is not None and val > 0:
+        if val is None or val <= 0:
+            avg = _avg_pillars()
+            if avg is not None:
+                out["equip_score"] = avg
+                return out
+        else:
             return out
         # Simple proxy basado en presencia de features comunes
         keys = [
@@ -4691,8 +4781,8 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         pass
     # Fuel 60k fallback
     own = ensure_fuel_60(own)
-    own = ensure_equip_score(own)
     own = ensure_pillars(own)
+    own = ensure_equip_score(own)
     own = _attach_monthlies(own)
 
     # Calcular/normalizar bono según regla TX>0 y TX<MSRP
@@ -4724,6 +4814,14 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         cph = cost_per_hp(own)
         if cph is not None:
             own["cost_per_hp_mxn"] = cph
+    _normalize_common_types(own)
+    if own.get("price_per_seat") is None:
+        pps = price_per_seat(own)
+        if pps is not None:
+            own["price_per_seat"] = pps
+    epp = equip_price_per_point(own)
+    if epp is not None:
+        own["equip_price_per_point"] = epp
     # derive display segment
     seg_disp = _seg_display(own)
     if seg_disp:
@@ -4890,6 +4988,178 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         s = str(v).strip().lower()
         return s in {"true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y"}
 
+    def _normalize_common_types(r: Dict[str, Any]) -> None:
+        """Normalize booleans, numerics and composite fields for downstream consistency."""
+        truthy_tokens = {"true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y","sí","si"}
+        falsy_tokens = {"false","0","no","ninguno","n/a","na","none","null","sin","no disponible","-","off"}
+
+        def _coerce_bool(val: Any) -> Optional[bool]:
+            if isinstance(val, bool):
+                return val
+            if val is None:
+                return None
+            try:
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    if float(val) != float(val):  # NaN check
+                        return None
+                    return float(val) > 0
+            except Exception:
+                pass
+            try:
+                s = str(val).strip()
+            except Exception:
+                return None
+            if not s:
+                return None
+            sl = s.lower()
+            if sl in truthy_tokens:
+                return True
+            if sl in falsy_tokens:
+                return False
+            return None
+
+        def _to_int(val: Any) -> Optional[int]:
+            import math
+            if val is None:
+                return None
+            if isinstance(val, bool):
+                return 1 if val else 0
+            if isinstance(val, (int, float)):
+                try:
+                    if isinstance(val, float) and math.isnan(val):
+                        return None
+                except Exception:
+                    pass
+                try:
+                    return int(round(float(val)))
+                except Exception:
+                    return None
+            try:
+                s = str(val).strip()
+            except Exception:
+                return None
+            if not s:
+                return None
+            token = s.replace(",", "").replace(" ", "")
+            try:
+                return int(round(float(token)))
+            except Exception:
+                return None
+
+        bool_fields = [
+            "aire_acondicionado","llave_inteligente","abs","control_estabilidad",
+            "alerta_colision","sensor_punto_ciego","tiene_camara_punto_ciego","camara_360",
+            "asistente_estac_frontal","asistente_estac_trasero","control_frenado_curvas",
+            "ventanas_electricas","seguros_electricos","control_electrico_de_traccion",
+            "rieles_techo","enganche_remolque","preparacion_remolque","tercera_fila",
+            "asientos_calefaccion_conductor","asientos_calefaccion_pasajero",
+            "asientos_ventilacion_conductor","asientos_ventilacion_pasajero",
+            "limpiaparabrisas_lluvia","techo_corredizo",
+        ]
+
+        for field in bool_fields:
+            if field in r:
+                coerced = _coerce_bool(r.get(field))
+                if coerced is not None:
+                    r[field] = coerced
+
+        # Alias normalization: sensor_punto_ciego / tiene_camara_punto_ciego
+        blind_cam = _coerce_bool(r.get("tiene_camara_punto_ciego"))
+        blind = _coerce_bool(r.get("sensor_punto_ciego"))
+        if blind_cam is not None:
+            r["tiene_camara_punto_ciego"] = blind_cam
+        if blind is not None:
+            r["sensor_punto_ciego"] = blind
+        elif blind_cam is not None:
+            r["sensor_punto_ciego"] = blind_cam
+
+        # Canonical drivetrain fields
+        traccion_raw = r.get("traccion") or r.get("traccion_original") or r.get("driven_wheels") or r.get("drivetrain")
+        if traccion_raw is not None:
+            try:
+                s = str(traccion_raw).strip()
+            except Exception:
+                s = ""
+            if s:
+                r["traccion_raw"] = s
+                sl = s.lower()
+                if "awd" in sl or "4x4" in sl or "4wd" in sl or "all wheel" in sl:
+                    r["drivetrain_std"] = "AWD"
+                elif "fwd" in sl or "delan" in sl or "front" in sl or "4x2" in sl:
+                    r["drivetrain_std"] = "FWD"
+                elif "rwd" in sl or "tras" in sl or "rear" in sl:
+                    r["drivetrain_std"] = "RWD"
+
+        # Numeric coercions (price, costs, hp, etc.)
+        numeric_fields = [
+            "precio_transaccion","msrp","bono","bono_mxn","fuel_cost_60k_mxn",
+            "service_cost_60k_mxn","tco_60k_mxn","tco_total_60k_mxn","caballos_fuerza",
+            "longitud_mm","ancho_mm","alto_mm","combinado_kml","combinado_l_100km",
+        ]
+        for field in numeric_fields:
+            if field in r:
+                num = to_num(r.get(field))
+                if num is not None:
+                    r[field] = float(num)
+
+        # Seats and climate
+        seats = None
+        for key in ("seats_capacity","capacidad_de_asientos","capacidad_asientos","asientos","pasajeros"):
+            val = _to_int(r.get(key))
+            if val is not None and val > 0:
+                seats = val
+                r[key] = val
+        if seats is not None:
+            r.setdefault("seats_capacity", seats)
+            r["capacidad_de_asientos"] = seats
+
+        zonas = _to_int(r.get("zonas_clima"))
+        if zonas is not None:
+            r["zonas_clima"] = max(0, zonas)
+        if _coerce_bool(r.get("aire_acondicionado")) is True:
+            if r.get("zonas_clima") in (None, 0, "", "0"):
+                r["zonas_clima"] = 1
+
+        # Ventanas eléctricas detalle
+        ve_detail = r.get("ventanas_electricas_adelante_atras")
+        if isinstance(ve_detail, str):
+            import re as _re
+            tokens = [_t.strip() for _t in _re.split(r"[;,/|]", ve_detail) if _t.strip()]
+            mapping: Dict[str, bool] = {}
+            if tokens:
+                front = _coerce_bool(tokens[0])
+                if front is not None:
+                    mapping["front"] = front
+                rear = _coerce_bool(tokens[1]) if len(tokens) > 1 else None
+                if rear is not None:
+                    mapping["rear"] = rear
+            if mapping:
+                r["ventanas_electricas_detalle"] = mapping
+                if r.get("ventanas_electricas") in (None, "", "0"):
+                    r["ventanas_electricas"] = any(mapping.values())
+
+        # Enchufes 12V listado
+        ench = r.get("enchufe_12v_original")
+        if isinstance(ench, str):
+            import re as _re
+            tokens = [_t.strip() for _t in _re.split(r"[;,/|]", ench) if _t.strip() and _t.strip().lower() not in {"no disponible","sin dato","ninguno"}]
+            if tokens:
+                r["enchufe_12v_list"] = tokens
+                if r.get("enchufe_12v") in (None, "", "0"):
+                    r["enchufe_12v"] = True
+
+        # Service included flag when cost is zero
+        svc = to_num(r.get("service_cost_60k_mxn"))
+        if svc is not None:
+            r["service_cost_60k_mxn"] = float(svc)
+            if abs(svc) < 1e-6:
+                r["service_included_60k"] = True
+
+        # Wipe empty strings to None for clarity
+        for key, val in list(r.items()):
+            if isinstance(val, str) and val.strip() == "":
+                r[key] = None
+
     # Infer HP from text fields and ensure audio/speakers fallbacks
     def _infer_hp_from_texts(r: Dict[str, Any]) -> None:
         try:
@@ -4969,8 +5239,8 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
             pass
         # Fuel 60k fallback
         c = ensure_fuel_60(c)
-        c = ensure_equip_score(c)
         c = ensure_pillars(c)
+        c = ensure_equip_score(c)
         c = _attach_monthlies(c)
         # Extra inferences for display completeness
         try:
@@ -5000,6 +5270,14 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
             cph = cost_per_hp(c)
             if cph is not None:
                 c["cost_per_hp_mxn"] = cph
+        _normalize_common_types(c)
+        if c.get("price_per_seat") is None:
+            pps = price_per_seat(c)
+            if pps is not None:
+                c["price_per_seat"] = pps
+        epp_c = equip_price_per_point(c)
+        if epp_c is not None:
+            c["equip_price_per_point"] = epp_c
         # display segment for competitor
         segd = _seg_display(c)
         if segd:
@@ -5213,7 +5491,7 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         for key, val in entry.items():
             cleaned_entry[key] = _drop_nulls(val)
         comps_clean.append(cleaned_entry)
-    return {"own": own_clean, "competitors": comps_clean}
+    return {"own": own_clean, "competitors": comps_clean, "meta": {"delta_convention": "competitor_minus_base"}}
 
 
 # ------------------------------ Insights (OpenAI) -------------------------
@@ -6797,6 +7075,53 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
             return st
 
         ins_struct = _normalize_struct(ins_struct)
+        disclaimer_text = "Estos valores provienen de un modelo de regresión entrenado con datos históricos del mercado mexicano."
+
+        def _append_disclaimer_blob(blob: Any) -> None:
+            if not isinstance(blob, dict):
+                return
+            arr = blob.setdefault("hallazgos_clave", [])
+            if isinstance(arr, list):
+                present = False
+                for item in arr:
+                    if isinstance(item, str) and disclaimer_text in item:
+                        present = True
+                        break
+                    if isinstance(item, dict):
+                        vals = " ".join(str(v) for v in item.values() if v is not None)
+                        if disclaimer_text in vals:
+                            present = True
+                            break
+                if not present:
+                    arr.append(disclaimer_text)
+
+        def _append_disclaimer_struct(struct_obj: Any) -> None:
+            if not isinstance(struct_obj, dict):
+                return
+            sections = struct_obj.get("sections") or []
+            struct_obj["sections"] = sections
+            target = None
+            for sec in sections:
+                if isinstance(sec, dict) and (sec.get("id") == "hallazgos_clave"):
+                    target = sec
+                    break
+            if target is None:
+                sections.append({"id": "hallazgos_clave", "items": []})
+                target = sections[-1]
+            items = target.setdefault("items", [])
+            if not isinstance(items, list):
+                return
+            for it in items:
+                if isinstance(it, dict):
+                    args = it.get("args")
+                    if isinstance(args, dict) and disclaimer_text in str(args.get("text", "")):
+                        return
+                elif isinstance(it, str) and disclaimer_text in it:
+                    return
+            items.append({"key": "hallazgo", "args": {"text": disclaimer_text}})
+
+        _append_disclaimer_blob(ins_json if isinstance(ins_json, dict) else {})
+        _append_disclaimer_struct(ins_struct)
         used_fallback = False
         # If struct is missing/empty, try to build it from insights blob; else fallback deterministic
         if not _struct_has_content(ins_struct):

@@ -37,5 +37,6 @@ Reglas de estilo y cuantificación (obligatorias):
 - Evita generalidades (“mejor equipamiento”) y describe el “por qué” (feature → impacto).
 - Si falta un dato, usa “N/D” y sugiere cómo conseguirlo.
 - No repitas bullets (dedup en contenido y texto).
+- Cierra la lista de hallazgos con: "Estos valores provienen de un modelo de regresión entrenado con datos históricos del mercado mexicano." (sin comillas).
 
 Nota de identidad de marca (si make=GWM): resalta tecnología, off‑road (línea TANK), Hi4/4x4, enfoque centrado en usuario.
