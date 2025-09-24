@@ -1365,72 +1365,6 @@ export default function ComparePanel() {
     if (s.includes('sedan') || s.includes('saloon') || s.includes('berlina')) return 'sedan';
     return '';
   }
-  const SEGMENT_RADAR_PILLARS: Record<string, string[]> = {
-    suv: ['seguridad', 'motor', 'suspension', 'transmision', 'exterior', 'energia'],
-    pickup: ['motor', 'transmision', 'suspension', 'frenos', 'dimensiones', 'seguridad'],
-    sedan: ['seguridad', 'audio_y_entretenimiento', 'confort', 'motor', 'climatizacion', 'energia'],
-    hatch: ['seguridad', 'audio_y_entretenimiento', 'confort', 'motor', 'energia', 'llantas_y_rines'],
-    van: ['confort', 'dimensiones', 'seguridad', 'climatizacion', 'motor', 'energia'],
-  };
-
-  // Radar: keys por segmento (hasta 6 ejes)
-  function radarKeysForSegment(seg: string): Array<{key:string,label:string}> {
-    const keys = SEGMENT_RADAR_PILLARS[seg] || SEGMENT_RADAR_PILLARS['sedan'];
-    return keys.map((key) => ({ key, label: PILLAR_LABELS[key] || key }));
-  }
-  const { data: catalogForRadar } = useSWR(baseRow ? ['catalog_benchmarks_radar'] : null, async () => {
-    const res = await endpoints.catalog({ limit: 20000, format: 'json' });
-    const items = Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
-    return items.map((row: any) => {
-      if (row && typeof row === 'object') {
-        if (typeof row.pillar_scores === 'string') {
-          try { row.pillar_scores = JSON.parse(row.pillar_scores); } catch (err) { /* ignore parse errors */ }
-        }
-        if (typeof row.pillar_scores_raw === 'string') {
-          try { row.pillar_scores_raw = JSON.parse(row.pillar_scores_raw); } catch (err) { /* ignore parse errors */ }
-        }
-      }
-      return row;
-    });
-  });
-
-  const radarBenchmarks = React.useMemo(() => {
-    if (!catalogForRadar || !baseRow) return null;
-    const seg = segmentMain(baseRow) || '';
-    const axes = radarKeysForSegment(seg);
-    if (!axes.length) return null;
-    const rows = catalogForRadar.filter(Boolean);
-    if (!rows.length) return null;
-
-    const collectStats = (subset: any[]) => {
-      if (!subset.length) return null;
-      const stats: Record<string, number> = {};
-      axes.forEach(({ key }) => {
-        const values = subset
-          .map((r) => pillarValue(r, key))
-          .filter((val): val is number => typeof val === 'number' && Number.isFinite(val));
-        if (!values.length) return;
-        values.sort((a, b) => a - b);
-        const mid = Math.floor(values.length / 2);
-        const median = values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
-        stats[key] = Number(median.toFixed(1));
-      });
-      return Object.keys(stats).length ? stats : null;
-    };
-
-    const industryStats = collectStats(rows);
-    const segRows = seg ? rows.filter((r) => segmentMain(r) === seg) : rows;
-    const segmentStats = collectStats(segRows);
-    if (!industryStats && !segmentStats) return null;
-    return { industry: industryStats, segment: segmentStats };
-  }, [catalogForRadar, baseRow]);
-
-  function pillarValue(row:any, key:string): number | null {
-    const v = getPillarValue(row, key);
-    if (v == null || v <= 0) return null;
-    return v;
-  }
-
   const scoreVsPriceOption = React.useMemo(() => {
     const msrpData: any[] = [];
     const txData: any[] = [];
@@ -1522,102 +1456,6 @@ export default function ComparePanel() {
       ]
     } as any;
   }, [chartRows]);
-
-  // Radar de pilares (filtrado al segmento del vehículo base)
-  const radarPillarsOption = React.useMemo(() => {
-    if (!baseRow) return {} as any;
-    const seg = segmentMain(baseRow) || 'sedan';
-    const axes = radarKeysForSegment(seg);
-    if (!axes.length) return null;
-
-    const toVals = (r: any) => axes.map(a => {
-      const v = pillarValue(r, a.key);
-      return Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Number(v))) : 0;
-    });
-    const fromStats = (stats?: Record<string, number> | null) => axes.map(a => {
-      const val = stats ? stats[a.key] : null;
-      return Number.isFinite(Number(val)) ? Math.max(0, Math.min(100, Number(val))) : 0;
-    });
-    const nonZeroCount = (vals: number[]) => vals.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
-
-    const baseVals = toVals(baseRow);
-    const baseHas = nonZeroCount(baseVals) >= 1;
-    const industryStats = radarBenchmarks?.industry || null;
-    const segmentStats = radarBenchmarks?.segment || null;
-
-    const indicator = axes.map(axis => ({ name: axis.label, max: 100 }));
-
-    const benchmarkSeries: any[] = [];
-    const seriesData: any[] = [];
-
-    const pushBenchmark = (label: string, stats?: Record<string, number> | null, opts?: { color: string; dashed?: boolean }) => {
-      if (!stats) return;
-      const vals = fromStats(stats);
-      if (nonZeroCount(vals) < 1) return;
-      benchmarkSeries.push({
-        value: vals,
-        name: label,
-        areaStyle: { opacity: 0 },
-        lineStyle: { color: opts?.color || '#475569', width: 2.5, type: opts?.dashed ? 'dashed' : 'solid', opacity: 0.95 },
-        symbol: 'circle',
-        symbolSize: 7,
-        itemStyle: { color: opts?.color || '#475569' },
-        z: 2,
-      });
-    };
-
-    pushBenchmark('Benchmark industria', industryStats, { color: '#475569', dashed: true });
-    pushBenchmark('Benchmark segmento', segmentStats, { color: '#0ea5e9' });
-
-    const compSeries: any[] = [];
-    comps.forEach((r: any) => {
-      const vals = toVals(r);
-      if (nonZeroCount(vals) < 1) return;
-      const color = colorForVersion(r);
-      compSeries.push({
-        value: vals,
-        name: vehLabel(r),
-        areaStyle: { color: 'rgba(0,0,0,0.02)' },
-        lineStyle: { color, width: 1.5, opacity: 0.9 },
-        symbol: 'circle',
-        symbolSize: 6,
-        itemStyle: { color },
-        z: 4,
-      });
-    });
-
-    if (!baseHas && !compSeries.length && !benchmarkSeries.length) return null;
-
-    seriesData.push(...benchmarkSeries);
-    seriesData.push({
-      value: baseVals,
-      name: vehLabel(baseRow),
-      areaStyle: { color: 'rgba(30,58,138,0.12)' },
-      lineStyle: { color: '#1e3a8a', width: baseHas ? 2 : 1, opacity: baseHas ? 1 : 0.5 },
-      symbol: 'circle',
-      symbolSize: 8,
-      itemStyle: { color: '#1e3a8a' },
-      z: 5,
-    });
-    seriesData.push(...compSeries);
-
-    const legendData = Array.from(new Set(seriesData.map(item => item.name).filter(Boolean)));
-
-    return {
-      title: { text: `Radar de pilares (${(seg || '').toUpperCase()} vs benchmark)`, left: 'center', top: 6 },
-      tooltip: {
-        trigger: 'item',
-        formatter: (params: any) => {
-          const values: number[] = Array.isArray(params.value) ? params.value : [];
-          const lines = axes.map((axis, idx) => `${axis.label}: ${Math.round(Number(values[idx] ?? 0))}`);
-          return `<strong>${params.seriesName}</strong><br/>${lines.join('<br/>')}`;
-        },
-      },
-      legend: legendData.length ? { show: true, bottom: 0, left: 'center', data: legendData, textStyle: { color: '#475569', fontSize: 11 } } : { show: false },
-      radar: { indicator, center: ['50%','54%'], radius: 110, splitNumber: 4, alignTicks: false },
-      series: [{ type: 'radar', data: seriesData }],
-    } as any;
-  }, [baseRow, comps, radarBenchmarks]);
 
   // ΔHP vs base (barras)
   const deltaHpOption = React.useMemo(() => {
@@ -2528,11 +2366,6 @@ export default function ComparePanel() {
           {renderChart(salesLineOption, 340, 'Sin datos de ventas mensuales.')}
         </div>
 
-
-        {/* Radar por segmento (pilares) */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:16 }}>
-          {renderChart(radarPillarsOption, 360, 'Sin datos suficientes de pilares para graficar.')}
-        </div>
 
       </div>
     </section>
