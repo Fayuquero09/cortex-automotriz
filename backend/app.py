@@ -6664,6 +6664,33 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
         ins_json = (parsed.get("insights") if isinstance(parsed, dict) and parsed.get("insights") is not None else parsed)
         ins_struct = (parsed.get("struct") if isinstance(parsed, dict) else None)
 
+        # Prefer construir struct desde 'insights' (blob) si viene bien formado,
+        # ya que el 'struct' que devuelven algunos modelos puede venir sin textos.
+        def _blob_has_content(blob: Dict[str, Any] | None) -> bool:
+            try:
+                if not isinstance(blob, dict):
+                    return False
+                for k, arr in blob.items():
+                    if not isinstance(arr, list):
+                        continue
+                    for x in arr:
+                        s = None
+                        if isinstance(x, dict):
+                            s = x.get("text") or x.get("texto") or x.get("resumen") or next((v for v in x.values() if v is not None and str(v).strip()), None)
+                        else:
+                            s = x
+                        if s is not None and str(s).strip():
+                            return True
+                return False
+            except Exception:
+                return False
+
+        if _blob_has_content(ins_json):
+            try:
+                ins_struct = _struct_from_insights_blob(ins_json)
+            except Exception:
+                pass
+
         # Normalize struct IDs to canonical section IDs expected by the frontend
         def _normalize_struct(st: Dict[str, Any] | None) -> Dict[str, Any] | None:
             if not isinstance(st, dict):
