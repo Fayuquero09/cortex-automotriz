@@ -1,4 +1,4 @@
-#!/Users/Fernando.Molina/cortex-automotriz/dataframe_base/.venv/bin/python3.11
+#!/Users/Fernando.Molina/cortex-automotriz/dataframe_base/.venv/bin/python3.13
 # -*- coding: utf-8 -*-
 import re
 import sys
