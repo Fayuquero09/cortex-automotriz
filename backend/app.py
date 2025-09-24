@@ -3255,6 +3255,178 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
             return float(price / score)
         except Exception:
             return None
+
+    def _normalize_common_types(r: Dict[str, Any]) -> None:
+        """Normalize booleans, numerics and composite fields for downstream consistency."""
+        truthy_tokens = {"true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y","sí","si"}
+        falsy_tokens = {"false","0","no","ninguno","n/a","na","none","null","sin","no disponible","-","off"}
+
+        def _coerce_bool(val: Any) -> Optional[bool]:
+            if isinstance(val, bool):
+                return val
+            if val is None:
+                return None
+            try:
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    if float(val) != float(val):  # NaN check
+                        return None
+                    return float(val) > 0
+            except Exception:
+                pass
+            try:
+                s = str(val).strip()
+            except Exception:
+                return None
+            if not s:
+                return None
+            sl = s.lower()
+            if sl in truthy_tokens:
+                return True
+            if sl in falsy_tokens:
+                return False
+            return None
+
+        def _to_int(val: Any) -> Optional[int]:
+            import math
+            if val is None:
+                return None
+            if isinstance(val, bool):
+                return 1 if val else 0
+            if isinstance(val, (int, float)):
+                try:
+                    if isinstance(val, float) and math.isnan(val):
+                        return None
+                except Exception:
+                    pass
+                try:
+                    return int(round(float(val)))
+                except Exception:
+                    return None
+            try:
+                s = str(val).strip()
+            except Exception:
+                return None
+            if not s:
+                return None
+            token = s.replace(",", "").replace(" ", "")
+            try:
+                return int(round(float(token)))
+            except Exception:
+                return None
+
+        bool_fields = [
+            "aire_acondicionado","llave_inteligente","abs","control_estabilidad",
+            "alerta_colision","sensor_punto_ciego","tiene_camara_punto_ciego","camara_360",
+            "asistente_estac_frontal","asistente_estac_trasero","control_frenado_curvas",
+            "ventanas_electricas","seguros_electricos","control_electrico_de_traccion",
+            "rieles_techo","enganche_remolque","preparacion_remolque","tercera_fila",
+            "asientos_calefaccion_conductor","asientos_calefaccion_pasajero",
+            "asientos_ventilacion_conductor","asientos_ventilacion_pasajero",
+            "limpiaparabrisas_lluvia","techo_corredizo",
+        ]
+
+        for field in bool_fields:
+            if field in r:
+                coerced = _coerce_bool(r.get(field))
+                if coerced is not None:
+                    r[field] = coerced
+
+        # Alias normalization: sensor_punto_ciego / tiene_camara_punto_ciego
+        blind_cam = _coerce_bool(r.get("tiene_camara_punto_ciego"))
+        blind = _coerce_bool(r.get("sensor_punto_ciego"))
+        if blind_cam is not None:
+            r["tiene_camara_punto_ciego"] = blind_cam
+        if blind is not None:
+            r["sensor_punto_ciego"] = blind
+        elif blind_cam is not None:
+            r["sensor_punto_ciego"] = blind_cam
+
+        # Canonical drivetrain fields
+        traccion_raw = r.get("traccion") or r.get("traccion_original") or r.get("driven_wheels") or r.get("drivetrain")
+        if traccion_raw is not None:
+            try:
+                s = str(traccion_raw).strip()
+            except Exception:
+                s = ""
+            if s:
+                r["traccion_raw"] = s
+                sl = s.lower()
+                if "awd" in sl or "4x4" in sl or "4wd" in sl or "all wheel" in sl:
+                    r["drivetrain_std"] = "AWD"
+                elif "fwd" in sl or "delan" in sl or "front" in sl or "4x2" in sl:
+                    r["drivetrain_std"] = "FWD"
+                elif "rwd" in sl or "tras" in sl or "rear" in sl:
+                    r["drivetrain_std"] = "RWD"
+
+        # Numeric coercions (price, costs, hp, etc.)
+        numeric_fields = [
+            "precio_transaccion","msrp","bono","bono_mxn","fuel_cost_60k_mxn",
+            "service_cost_60k_mxn","tco_60k_mxn","tco_total_60k_mxn","caballos_fuerza",
+            "longitud_mm","ancho_mm","alto_mm","combinado_kml","combinado_l_100km",
+        ]
+        for field in numeric_fields:
+            if field in r:
+                num = to_num(r.get(field))
+                if num is not None:
+                    r[field] = float(num)
+
+        # Seats and climate
+        seats = None
+        for key in ("seats_capacity","capacidad_de_asientos","capacidad_asientos","asientos","pasajeros"):
+            val = _to_int(r.get(key))
+            if val is not None and val > 0:
+                seats = val
+                r[key] = val
+        if seats is not None:
+            r.setdefault("seats_capacity", seats)
+            r["capacidad_de_asientos"] = seats
+
+        zonas = _to_int(r.get("zonas_clima"))
+        if zonas is not None:
+            r["zonas_clima"] = max(0, zonas)
+        if _coerce_bool(r.get("aire_acondicionado")) is True:
+            if r.get("zonas_clima") in (None, 0, "", "0"):
+                r["zonas_clima"] = 1
+
+        # Ventanas eléctricas detalle
+        ve_detail = r.get("ventanas_electricas_adelante_atras")
+        if isinstance(ve_detail, str):
+            import re as _re
+            tokens = [_t.strip() for _t in _re.split(r"[;,/|]", ve_detail) if _t.strip()]
+            mapping: Dict[str, bool] = {}
+            if tokens:
+                front = _coerce_bool(tokens[0])
+                if front is not None:
+                    mapping["front"] = front
+                rear = _coerce_bool(tokens[1]) if len(tokens) > 1 else None
+                if rear is not None:
+                    mapping["rear"] = rear
+            if mapping:
+                r["ventanas_electricas_detalle"] = mapping
+                if r.get("ventanas_electricas") in (None, "", "0"):
+                    r["ventanas_electricas"] = any(mapping.values())
+
+        # Enchufes 12V listado
+        ench = r.get("enchufe_12v_original")
+        if isinstance(ench, str):
+            import re as _re
+            tokens = [_t.strip() for _t in _re.split(r"[;,/|]", ench) if _t.strip() and _t.strip().lower() not in {"no disponible","sin dato","ninguno"}]
+            if tokens:
+                r["enchufe_12v_list"] = tokens
+                if r.get("enchufe_12v") in (None, "", "0"):
+                    r["enchufe_12v"] = True
+
+        # Service included flag when cost is zero
+        svc = to_num(r.get("service_cost_60k_mxn"))
+        if svc is not None:
+            r["service_cost_60k_mxn"] = float(svc)
+            if abs(svc) < 1e-6:
+                r["service_included_60k"] = True
+
+        # Wipe empty strings to None for clarity
+        for key, val in list(r.items()):
+            if isinstance(val, str) and val.strip() == "":
+                r[key] = None
     def _drop_nulls(value: Any) -> Any:
         if isinstance(value, dict):
             return {k: _drop_nulls(v) for k, v in value.items() if v is not None}
@@ -4988,177 +5160,6 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         s = str(v).strip().lower()
         return s in {"true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y"}
 
-    def _normalize_common_types(r: Dict[str, Any]) -> None:
-        """Normalize booleans, numerics and composite fields for downstream consistency."""
-        truthy_tokens = {"true","1","si","sí","estandar","estándar","incluido","standard","std","present","x","y","sí","si"}
-        falsy_tokens = {"false","0","no","ninguno","n/a","na","none","null","sin","no disponible","-","off"}
-
-        def _coerce_bool(val: Any) -> Optional[bool]:
-            if isinstance(val, bool):
-                return val
-            if val is None:
-                return None
-            try:
-                if isinstance(val, (int, float)) and not isinstance(val, bool):
-                    if float(val) != float(val):  # NaN check
-                        return None
-                    return float(val) > 0
-            except Exception:
-                pass
-            try:
-                s = str(val).strip()
-            except Exception:
-                return None
-            if not s:
-                return None
-            sl = s.lower()
-            if sl in truthy_tokens:
-                return True
-            if sl in falsy_tokens:
-                return False
-            return None
-
-        def _to_int(val: Any) -> Optional[int]:
-            import math
-            if val is None:
-                return None
-            if isinstance(val, bool):
-                return 1 if val else 0
-            if isinstance(val, (int, float)):
-                try:
-                    if isinstance(val, float) and math.isnan(val):
-                        return None
-                except Exception:
-                    pass
-                try:
-                    return int(round(float(val)))
-                except Exception:
-                    return None
-            try:
-                s = str(val).strip()
-            except Exception:
-                return None
-            if not s:
-                return None
-            token = s.replace(",", "").replace(" ", "")
-            try:
-                return int(round(float(token)))
-            except Exception:
-                return None
-
-        bool_fields = [
-            "aire_acondicionado","llave_inteligente","abs","control_estabilidad",
-            "alerta_colision","sensor_punto_ciego","tiene_camara_punto_ciego","camara_360",
-            "asistente_estac_frontal","asistente_estac_trasero","control_frenado_curvas",
-            "ventanas_electricas","seguros_electricos","control_electrico_de_traccion",
-            "rieles_techo","enganche_remolque","preparacion_remolque","tercera_fila",
-            "asientos_calefaccion_conductor","asientos_calefaccion_pasajero",
-            "asientos_ventilacion_conductor","asientos_ventilacion_pasajero",
-            "limpiaparabrisas_lluvia","techo_corredizo",
-        ]
-
-        for field in bool_fields:
-            if field in r:
-                coerced = _coerce_bool(r.get(field))
-                if coerced is not None:
-                    r[field] = coerced
-
-        # Alias normalization: sensor_punto_ciego / tiene_camara_punto_ciego
-        blind_cam = _coerce_bool(r.get("tiene_camara_punto_ciego"))
-        blind = _coerce_bool(r.get("sensor_punto_ciego"))
-        if blind_cam is not None:
-            r["tiene_camara_punto_ciego"] = blind_cam
-        if blind is not None:
-            r["sensor_punto_ciego"] = blind
-        elif blind_cam is not None:
-            r["sensor_punto_ciego"] = blind_cam
-
-        # Canonical drivetrain fields
-        traccion_raw = r.get("traccion") or r.get("traccion_original") or r.get("driven_wheels") or r.get("drivetrain")
-        if traccion_raw is not None:
-            try:
-                s = str(traccion_raw).strip()
-            except Exception:
-                s = ""
-            if s:
-                r["traccion_raw"] = s
-                sl = s.lower()
-                if "awd" in sl or "4x4" in sl or "4wd" in sl or "all wheel" in sl:
-                    r["drivetrain_std"] = "AWD"
-                elif "fwd" in sl or "delan" in sl or "front" in sl or "4x2" in sl:
-                    r["drivetrain_std"] = "FWD"
-                elif "rwd" in sl or "tras" in sl or "rear" in sl:
-                    r["drivetrain_std"] = "RWD"
-
-        # Numeric coercions (price, costs, hp, etc.)
-        numeric_fields = [
-            "precio_transaccion","msrp","bono","bono_mxn","fuel_cost_60k_mxn",
-            "service_cost_60k_mxn","tco_60k_mxn","tco_total_60k_mxn","caballos_fuerza",
-            "longitud_mm","ancho_mm","alto_mm","combinado_kml","combinado_l_100km",
-        ]
-        for field in numeric_fields:
-            if field in r:
-                num = to_num(r.get(field))
-                if num is not None:
-                    r[field] = float(num)
-
-        # Seats and climate
-        seats = None
-        for key in ("seats_capacity","capacidad_de_asientos","capacidad_asientos","asientos","pasajeros"):
-            val = _to_int(r.get(key))
-            if val is not None and val > 0:
-                seats = val
-                r[key] = val
-        if seats is not None:
-            r.setdefault("seats_capacity", seats)
-            r["capacidad_de_asientos"] = seats
-
-        zonas = _to_int(r.get("zonas_clima"))
-        if zonas is not None:
-            r["zonas_clima"] = max(0, zonas)
-        if _coerce_bool(r.get("aire_acondicionado")) is True:
-            if r.get("zonas_clima") in (None, 0, "", "0"):
-                r["zonas_clima"] = 1
-
-        # Ventanas eléctricas detalle
-        ve_detail = r.get("ventanas_electricas_adelante_atras")
-        if isinstance(ve_detail, str):
-            import re as _re
-            tokens = [_t.strip() for _t in _re.split(r"[;,/|]", ve_detail) if _t.strip()]
-            mapping: Dict[str, bool] = {}
-            if tokens:
-                front = _coerce_bool(tokens[0])
-                if front is not None:
-                    mapping["front"] = front
-                rear = _coerce_bool(tokens[1]) if len(tokens) > 1 else None
-                if rear is not None:
-                    mapping["rear"] = rear
-            if mapping:
-                r["ventanas_electricas_detalle"] = mapping
-                if r.get("ventanas_electricas") in (None, "", "0"):
-                    r["ventanas_electricas"] = any(mapping.values())
-
-        # Enchufes 12V listado
-        ench = r.get("enchufe_12v_original")
-        if isinstance(ench, str):
-            import re as _re
-            tokens = [_t.strip() for _t in _re.split(r"[;,/|]", ench) if _t.strip() and _t.strip().lower() not in {"no disponible","sin dato","ninguno"}]
-            if tokens:
-                r["enchufe_12v_list"] = tokens
-                if r.get("enchufe_12v") in (None, "", "0"):
-                    r["enchufe_12v"] = True
-
-        # Service included flag when cost is zero
-        svc = to_num(r.get("service_cost_60k_mxn"))
-        if svc is not None:
-            r["service_cost_60k_mxn"] = float(svc)
-            if abs(svc) < 1e-6:
-                r["service_included_60k"] = True
-
-        # Wipe empty strings to None for clarity
-        for key, val in list(r.items()):
-            if isinstance(val, str) and val.strip() == "":
-                r[key] = None
 
     # Infer HP from text fields and ensure audio/speakers fallbacks
     def _infer_hp_from_texts(r: Dict[str, Any]) -> None:
