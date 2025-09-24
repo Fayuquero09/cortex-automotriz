@@ -5095,9 +5095,9 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         system = (
             "Actúa como un especialista senior en producto, marketing y pricing dentro de una OEM automotriz. "
-            "Evalúa si el precio de nuestro vehículo está justificado al compararlo con las versiones de la competencia, considerando equipamiento, desempeño, costo total de propiedad y percepción de valor. "
+            "Evalúa si el precio de nuestro vehículo está justificado al compararlo con las versiones de la competencia, considerando equipamiento, desempeño, costo total de propiedad, percepción de valor y el volumen de ventas del modelo (YTD y participación de segmento). "
             "Explica qué respalda el precio actual, qué brechas existen frente a los rivales y qué ajustes estratégicos (bonos, equipamiento adicional o mensajes de marketing) reforzarían el posicionamiento. "
-            "Trabaja SIEMPRE desde la perspectiva de nuestro vehículo ('nosotros') y evita describir gráficas o repetir números textuales del UI; usa los datos para generar implicaciones nuevas (cruza métricas como $/HP, TCO, ventas vs. equipamiento, etc.). "
+            "Trabaja SIEMPRE desde la perspectiva de nuestro vehículo ('nosotros') y evita describir gráficas o repetir números textuales del UI; usa los datos para generar implicaciones nuevas (cruza métricas como $/HP, TCO, ventas modelo vs. equipamiento, etc.). "
             "Devuelve JSON UTF-8 (sin Markdown) con dos bloques: (a) 'insights' con las claves {hallazgos_clave[5..7], oportunidades[3..5], riesgos_y_contramedidas[3..5], acciones_priorizadas[4..6], preguntas_para_el_equipo[3..4], supuestos_y_datos_faltantes[2..5]} donde cada elemento sea una oración clara; (b) 'struct' siguiendo el esquema canónico de secciones e ítems para que el front pueda renderizarlo."
         )
 
