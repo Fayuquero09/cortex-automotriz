@@ -94,8 +94,29 @@ except Exception:  # pragma: no cover
 from typing import Optional as _Optional, Any as _Any
 
 def _to_num_shared(x: _Any) -> _Optional[float]:
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        try:
+            v = float(x)
+            if v != v:  # NaN guard
+                return None
+            return v
+        except Exception:
+            return None
     try:
-        return float(x)
+        import re
+        s = str(x).strip()
+        if not s:
+            return None
+        # Replace common thousand separators
+        s = s.replace("·", " ")
+        # Extract first numeric token (permits comma or dot decimals)
+        m = re.search(r"[-+]?[0-9]+(?:[\.,][0-9]+)?", s)
+        if not m:
+            return None
+        token = m.group(0).replace(",", ".")
+        return float(token)
     except Exception:
         return None
 
@@ -123,6 +144,18 @@ def _kml_from_row_shared(row: Dict[str, _Any]) -> _Optional[float]:
                 return 100.0/float(v)
             except Exception:
                 pass
+    # fuelEconomy nested dicts (combined km/l or l/100km)
+    try:
+        fe = row.get("fuelEconomy") if isinstance(row, dict) else None
+        if isinstance(fe, dict):
+            val = _to_num_shared(fe.get("combinedKmPerLitre") or fe.get("combined"))
+            if val is not None and val > 0:
+                return float(val)
+            l100 = _to_num_shared(fe.get("combinedLitresPer100Km"))
+            if l100 is not None and l100 > 0:
+                return float(100.0 / l100)
+    except Exception:
+        pass
     return None
 
 def _fuel_price_for_shared(row: Dict[str, _Any]) -> _Optional[float]:
@@ -263,15 +296,18 @@ def _load_prompts_for_lang(lang: str) -> tuple[_Optional[str], _Optional[str]]:
     lang = (lang or "").strip().lower()
     if lang not in {"es","en","zh"}:
         return None, None
-    sys_name = f"prompt_cortex_exec_{lang}_v1.txt"
-    usr_name = f"user_template_exec_{lang}_v1.txt"
-    for base in _prompt_search_dirs():
-        p_sys = base / sys_name
-        p_usr = base / usr_name
-        sys_txt = _read_text_cached(p_sys) if p_sys.exists() else None
-        usr_txt = _read_text_cached(p_usr) if p_usr.exists() else None
-        if sys_txt and usr_txt:
-            return sys_txt, usr_txt
+    name_pairs = [
+        (f"prompt_cortex_exec_{lang}_v1.txt", f"user_template_exec_{lang}_v1.txt"),
+        (f"prompt_narrativa_comparativa_{lang}_v1.txt", f"user_template_narrativa_comparativa_{lang}_v1.txt"),
+    ]
+    for sys_name, usr_name in name_pairs:
+        for base in _prompt_search_dirs():
+            p_sys = base / sys_name
+            p_usr = base / usr_name
+            sys_txt = _read_text_cached(p_sys) if p_sys.exists() else None
+            usr_txt = _read_text_cached(p_usr) if p_usr.exists() else None
+            if sys_txt and usr_txt:
+                return sys_txt, usr_txt
     return None, None
 
 # ----------------------------- Options Index ------------------------------
@@ -4451,8 +4487,22 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                             yr = int(str(r.get("Año") or r.get("ano") or r.get("AÑO") or "").strip())
                         except Exception:
                             yr = None
-                        # Parse value: allow numeric and textual 'Incluido'
-                        raw = str(r.get("service_cost_60k_mxn") or "").strip()
+                        # Parse value: allow numeric and textual 'Incluido'. Algunas fuentes usan
+                        # otras columnas ("60000", "Costo 60k", etc.); tomamos el primer valor disponible.
+                        raw_val = None
+                        for col in (
+                            "service_cost_60k_mxn",
+                            "ServiceCost60k",
+                            "service_cost",
+                            "60000",
+                            "Costo_60k",
+                            "Costo 60k",
+                        ):
+                            v = r.get(col)
+                            if v not in (None, ""):
+                                raw_val = v
+                                break
+                        raw = str(raw_val or "").strip()
                         val = None
                         if raw != "":
                             low = raw.lower().strip()
@@ -4481,7 +4531,10 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 yr0 = None
             def pick(filter_fn):
                 cand = [r for r in recs if filter_fn(r)]
-                return cand[0]["val"] if cand else None
+                if not cand:
+                    return None
+                cand.sort(key=lambda x: (0 if x["val"] == 0 else 1, x["val"]))
+                return cand[0]["val"]
             # Exact (mk, md, yr, vr)
             val = pick(lambda r: r["mk"]==mk0 and r["md"]==md0 and r["yr"]==yr0 and r["vr"]==vr0)
             if val is None and yr0 is not None:
@@ -5951,7 +6004,12 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
             import json as _json2
             data_blob = {"base": own, "competidores": comps_short, "signals": signals, "price_explain": explainers}
-            user_message_override = user_template_override.replace("<DATA_JSON>", _json2.dumps(data_blob, ensure_ascii=False, indent=2))
+            payload_json = _json2.dumps(data_blob, ensure_ascii=False, indent=2)
+            tmpl = user_template_override
+            if "{{JSON}}" in tmpl:
+                user_message_override = tmpl.replace("{{JSON}}", payload_json)
+            else:
+                user_message_override = tmpl.replace("<DATA_JSON>", payload_json)
         except Exception:
             user_message_override = None
 
@@ -6312,7 +6370,15 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
             {"role": "system", "content": system},
             {"role": "user", "content": (user_message_override or _json.dumps(user, ensure_ascii=False))},
         ]
-        data = {"model": model, "messages": messages, "temperature": 0.3}
+        data = {
+            "model": model,
+            "messages": messages,
+            "temperature": float(os.getenv("OPENAI_TEMPERATURE", "0.3")),
+            "max_tokens": int(os.getenv("OPENAI_MAX_TOKENS", "1200")),
+            "frequency_penalty": float(os.getenv("OPENAI_FREQUENCY_PENALTY", "0.2")),
+            "presence_penalty": float(os.getenv("OPENAI_PRESENCE_PENALTY", "0.0")),
+            "top_p": float(os.getenv("OPENAI_TOP_P", "1.0")),
+        }
         # Allow overriding timeouts via env; default to a more forgiving value
         try:
             timeout_read = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))

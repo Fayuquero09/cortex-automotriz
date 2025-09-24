@@ -9,6 +9,7 @@ import { useAppState } from '@/lib/state';
 import { useI18n } from '@/lib/i18n';
 import { endpoints } from '@/lib/api';
 import { brandLabel, vehicleLabel } from '@/lib/vehicleLabels';
+import { renderStruct } from '@/lib/insightsTemplates';
 
 type Row = Record<string, any>;
 
@@ -348,6 +349,9 @@ export default function ComparePanel() {
   const [autoGenerateNotice, setAutoGenerateNotice] = React.useState<string>('Pulsa “Generar competidores (IA)” para iniciar la auto-selección.');
   const autoGenTriggeredRef = React.useRef<boolean>(false);
   const [dismissedKeys, setDismissedKeys] = React.useState<Set<string>>(() => new Set());
+  const [insightsStruct, setInsightsStruct] = React.useState<any | null>(null);
+  const [insightsNotice, setInsightsNotice] = React.useState<string>('Pulsa “Generar insights” para ver highlights del vehículo.');
+  const [insightsLoading, setInsightsLoading] = React.useState<boolean>(false);
 
   const keyForRow = React.useCallback((row: any) => {
     if (!row) return '';
@@ -387,6 +391,11 @@ export default function ComparePanel() {
     setDismissedKeys(() => new Set());
   }, [own.make, own.model, own.year, own.version]);
 
+  React.useEffect(() => {
+    setInsightsStruct(null);
+    setInsightsNotice('Pulsa “Generar insights” para ver highlights del vehículo.');
+  }, [own.make, own.model, own.year, own.version]);
+
   const truthyFeature = React.useCallback((value: any): boolean => normalizeBoolean(value), []);
 
   const renderNoData = (message: string) => (
@@ -400,6 +409,16 @@ export default function ComparePanel() {
     if (!EChart) return null;
     return <EChart echarts={echarts} option={option} opts={{ renderer: 'svg' }} style={{ height }} />;
   };
+
+  const exportPdf = React.useCallback(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.print();
+      }
+    } catch (err) {
+      // ignorar errores de print
+    }
+  }, []);
 
   React.useEffect(() => {
     if (filters.includeDifferentYears) setManualNotice('');
@@ -696,7 +715,7 @@ export default function ComparePanel() {
 
   React.useEffect(() => {
     if (autoGenSeq === 0) {
-      setAutoGenerateNotice(filters.autoGenerate ? 'Pulsa “Generar competidores (IA)” para iniciar la auto-selección.' : '');
+      setAutoGenerateNotice(autoGenerate ? 'Pulsa “Generar competidores (IA)” para iniciar la auto-selección.' : '');
       autoGenTriggeredRef.current = false;
       return;
     }
@@ -717,7 +736,7 @@ export default function ComparePanel() {
     } else if (autoGenTriggeredRef.current || auto?.notice) {
       setAutoGenerateNotice(auto?.notice || 'IA no encontró competidores con los filtros actuales.');
     }
-  }, [filters.autoGenerate, autoGenSeq, autoItems.length, autoLoading, autoError, auto?.notice]);
+  }, [autoGenerate, autoGenSeq, autoItems.length, autoLoading, autoError, auto?.notice]);
 
   const sig = (rows: Row[]) => rows.map(r => `${r.make}|${r.model}|${r.version||''}|${r.ano||''}`).join(',');
   // Helpers numéricos para consumo energético/combustible
@@ -793,22 +812,6 @@ export default function ComparePanel() {
         }
       }
     }
-    return null;
-  }
-  function fuelPriceFor(row: any): number | null {
-    const raw = _fuelRaw(row);
-    const lc = raw.toLowerCase();
-    if (!lc) return null;
-    if (/bev|eléctr|electr/.test(lc) && !/phev|hibrid/.test(lc)) {
-      const v = Number(fuelPrices?.electricidad_kwh ?? NaN);
-      return Number.isFinite(v) ? v : null;
-    }
-    if (/phev|enchuf/.test(lc)) {
-      return Number(fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro ?? NaN);
-    }
-    if (lc.includes('diesel')) return Number(fuelPrices?.diesel_litro ?? NaN);
-    if (lc.includes('premium')) return Number(fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro ?? NaN);
-    if (lc.includes('gas') || lc.includes('nafta') || lc.includes('petrol')) return Number(fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? NaN);
     return null;
   }
   function featureNumber(row: any, category: string, keyword: string): number | null {
@@ -916,6 +919,43 @@ export default function ComparePanel() {
     };
   }), [compared]);
   const comps = React.useMemo(() => rawComps.filter((r:any) => !dismissedKeys.has(keyForRow(r))), [rawComps, dismissedKeys, keyForRow]);
+
+  const generateInsights = React.useCallback(async () => {
+    if (!baseRow) {
+      setInsightsNotice('Selecciona un vehículo base para generar insights.');
+      return;
+    }
+    if (!compared) {
+      setInsightsNotice('Espera a que se cargue la comparación antes de generar insights.');
+      return;
+    }
+    try {
+      setInsightsLoading(true);
+      setInsightsNotice('Generando insights…');
+      const payload: Record<string, any> = {
+        compare: {
+          own: compared.own || baseRow,
+          competitors: compared.competitors || [],
+        },
+        prompt_lang: 'es',
+        refresh: Date.now(),
+      };
+      const resp = await endpoints.insights(payload);
+      if (resp?.ok === false) {
+        setInsightsStruct(null);
+        setInsightsNotice(resp?.error ? String(resp.error) : 'No se pudieron generar insights.');
+      } else {
+        setInsightsStruct(resp?.insights_struct || null);
+        const note = resp?.notice ? String(resp.notice) : '';
+        setInsightsNotice(resp?.insights_struct ? (note || 'Insights generados.') : (note || 'Sin datos suficientes para insights.'));
+      }
+    } catch (error) {
+      setInsightsStruct(null);
+      setInsightsNotice(`Error al generar insights: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }, [baseRow, compared]);
 
   const getFeatureDiffs = React.useCallback((comp: any) => {
     const diffs = comp?.__diffs || {};
@@ -1966,6 +2006,23 @@ export default function ComparePanel() {
     {manualNotice ? (
       <div style={{ margin:'6px 0 10px', padding:'6px 8px', border:'1px solid #fca5a5', borderRadius:8, background:'#fef2f2', color:'#b91c1c', fontSize:12 }}>{manualNotice}</div>
     ) : null}
+    <div className="no-print" style={{ margin:'6px 0 12px', display:'flex', justifyContent:'flex-end', gap:8, flexWrap:'wrap' }}>
+      <button
+        type="button"
+        onClick={exportPdf}
+        style={{ padding:'8px 12px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor:'pointer' }}
+      >
+        Exportar PDF
+      </button>
+      <button
+        type="button"
+        onClick={generateInsights}
+        disabled={insightsLoading || !baseRow}
+        style={{ padding:'8px 12px', background:'#1d4ed8', color:'#fff', border:'none', borderRadius:8, cursor:(insightsLoading||!baseRow)?'not-allowed':'pointer', opacity:(insightsLoading||!baseRow)?0.6:1 }}
+      >
+        {insightsLoading ? 'Generando…' : 'Generar insights'}
+      </button>
+    </div>
     {(autoGenSeq > 0 || autoGenerate || autoGenerateNotice) ? (
       <div style={{ margin:'6px 0 12px', padding:'8px 10px', border:'1px solid #cbd5e1', borderRadius:8, background:'#f8fafc', color:'#1f2937', fontSize:12 }}>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
@@ -2044,31 +2101,17 @@ export default function ComparePanel() {
               <div style={{ fontWeight:500, fontSize:15 }}>{String(baseRow.model||'')}</div>
               <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(baseRow.version||''))}</div>
               {(() => {
-                const y = Number(own.year || 2025);
                 const segLabelText = segLabel(baseRow);
-                const mon = (() => {
-                  const lm = Number((baseRow as any)?.ventas_model_ytd_month ?? NaN);
-                  if (Number.isFinite(lm)) return monthNameEs(lm);
-                  const m = lastYtdMonth([baseRow], y);
-                  return m ? monthNameEs(m) : '';
-                })();
-                const u = (() => {
-                  const v = Number((baseRow as any)?.ventas_model_ytd ?? NaN);
-                  return Number.isFinite(v) ? v : ytdUnits(baseRow, y);
-                })();
                 const share = (() => {
                   const v = Number((baseRow as any)?.ventas_model_seg_share_pct ?? (baseRow as any)?.ventas_share_seg_pct ?? NaN);
                   return Number.isFinite(v) ? v : null;
                 })();
-                if (!segLabelText && u == null && share == null) return null;
+                if (!segLabelText && share == null) return null;
                 return (
                   <div style={{ marginTop:6, padding:'4px 0', borderTop:'1px solid #e2e8f0' }}>
                     {segLabelText ? <div style={{ fontSize:12, color:'#334155' }}>{segLabelText}</div> : null}
-                    {u != null ? (
-                      <div style={{ fontSize:11, color:'#475569' }}>{fmtNum(u)} u YTD{mon ? ` (${mon})` : ''}</div>
-                    ) : null}
                     {share != null ? (
-                      <div style={{ fontSize:11, color:'#475569' }}>{share.toFixed(1)}% cuota</div>
+                      <div style={{ fontSize:11, color:'#475569' }}>{share.toFixed(1)}% cuota segmento</div>
                     ) : null}
                   </div>
                 );
@@ -2145,33 +2188,16 @@ export default function ComparePanel() {
                       const m = lastYtdMonth(rowsAll, y);
                       return m ? monthNameEs(m) : '';
                     })();
-                    const u = (() => {
-                      const v = Number((r as any)?.ventas_model_ytd ?? NaN);
-                      return Number.isFinite(v) ? v : ytdUnits(r, y);
-                    })();
-                    const ub = (() => {
-                      const v = Number((baseRow as any)?.ventas_model_ytd ?? NaN);
-                      return Number.isFinite(v) ? v : ytdUnits(baseRow, y);
-                    })();
                     const share = (() => {
                       const v = Number((r as any)?.ventas_model_seg_share_pct ?? (r as any)?.ventas_share_seg_pct ?? NaN);
                       return Number.isFinite(v) ? v : null;
                     })();
-                    const deltaUnits = (u != null && ub != null) ? (u - ub) : null;
-                    if (!seg && u == null && share == null) return null;
+                    if (!seg && share == null) return null;
                     return (
                       <div style={{ marginTop:6, padding:'4px 0', borderTop:'1px solid #e2e8f0' }}>
                         {seg ? <div style={{ fontSize:12, color:'#334155' }}>{seg}</div> : null}
-                        {u != null ? (
-                          <div style={{ fontSize:11, color:'#475569' }}>{fmtNum(u)} u YTD{mon ? ` (${mon})` : ''}</div>
-                        ) : null}
                         {share != null ? (
-                          <div style={{ fontSize:11, color:'#475569' }}>{share.toFixed(1)}% cuota</div>
-                        ) : null}
-                        {deltaUnits != null ? (
-                          <div style={{ fontSize:11, color: deltaUnits>0 ? '#16a34a' : '#dc2626' }}>
-                            {tri(deltaUnits)} {fmtNum(Math.abs(deltaUnits))} u vs base
-                          </div>
+                          <div style={{ fontSize:11, color:'#475569' }}>{share.toFixed(1)}% cuota segmento</div>
                         ) : null}
                       </div>
                     );
@@ -2364,6 +2390,20 @@ export default function ComparePanel() {
         {/* Línea: ventas mensuales 2025 (si hay datos) */}
         <div>
           {renderChart(salesLineOption, 340, 'Sin datos de ventas mensuales.')}
+        </div>
+
+        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, marginTop:16 }}>
+          <div style={{ fontWeight:700, marginBottom:6 }}>Insights — destacar funciones del propio</div>
+          {insightsStruct ? (
+            <>
+              <div style={{ display:'grid', gap:12 }}>
+                {renderStruct(insightsStruct, 'es' as any)}
+              </div>
+              {insightsNotice ? (<div style={{ marginTop:10, color:'#475569', fontSize:12 }}>{insightsNotice}</div>) : null}
+            </>
+          ) : (
+            <div style={{ color:'#64748b', fontSize:13 }}>{insightsNotice}</div>
+          )}
         </div>
 
 

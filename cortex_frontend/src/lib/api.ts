@@ -21,11 +21,12 @@ export async function apiGet<T = any>(path: string, params?: Record<string, any>
 export const endpoints = {
   config: () => apiGet('/config'),
   health: () => apiGet('/health'),
-  dashboard: () => apiGet('/dashboard'),
+  dashboard: (params?: Record<string, any>) => apiGet('/dashboard', params),
   seasonality: (params?: { segment?: string; year?: number }) => apiGet('/seasonality', params),
   options: (params?: Record<string, any>) => apiGet('/options', params),
   catalog: (params?: Record<string, any>) => apiGet('/catalog', params),
   compare: (body: Record<string, any>) => fetch(buildUrl('/compare'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r=>r.json()),
   autoCompetitors: (body: Record<string, any>) => fetch(buildUrl('/auto_competitors'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r=>r.json()),
+  insights: (body: Record<string, any>) => fetch(buildUrl('/insights'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r=>r.json()),
   versionDiffs: (params?: Record<string, any>) => apiGet('/version_diffs', params),
 };
