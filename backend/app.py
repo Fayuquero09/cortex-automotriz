@@ -6881,6 +6881,15 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
             narrative_text = text if isinstance(text, str) else None
 
         if narrative_text:
+            try:
+                coerced = _parse_any(narrative_text)
+            except Exception:
+                coerced = None
+            if isinstance(coerced, dict):
+                parsed = coerced
+                narrative_text = None
+
+        if narrative_text:
             ins_struct = {
                 "sections": [
                     {
@@ -7120,7 +7129,8 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
                     return
             items.append({"key": "hallazgo", "args": {"text": disclaimer_text}})
 
-        _append_disclaimer_blob(ins_json if isinstance(ins_json, dict) else {})
+        if isinstance(ins_json, dict):
+            _append_disclaimer_blob(ins_json)
         _append_disclaimer_struct(ins_struct)
         used_fallback = False
         # If struct is missing/empty, try to build it from insights blob; else fallback deterministic
