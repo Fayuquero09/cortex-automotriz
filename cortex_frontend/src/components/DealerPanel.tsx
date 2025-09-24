@@ -655,7 +655,7 @@ export default function DealerPanel(){
       {/* Insights (Dealer) */}
       <div style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
         <div className="no-print" style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div style={{ fontWeight:700 }}>Insights — destacar funciones del propio</div>
+          <div style={{ fontWeight:700 }}>Insights</div>
           <button onClick={genDealer} disabled={loading || !baseRow} style={{ padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor: (loading||!baseRow)?'not-allowed':'pointer', opacity:(loading||!baseRow)?0.6:1 }}>
             {loading? 'Generando…':'Generar insights'}
           </button>

@@ -2393,7 +2393,7 @@ export default function ComparePanel() {
         </div>
 
         <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, marginTop:16 }}>
-          <div style={{ fontWeight:700, marginBottom:6 }}>Insights — destacar funciones del propio</div>
+          <div style={{ fontWeight:700, marginBottom:6 }}>Insights</div>
           {insightsStruct ? (
             <>
               <div style={{ display:'grid', gap:12 }}>
