@@ -117,6 +117,24 @@ const renderItem = (item: InsightItem, lang: Lang): React.ReactNode => {
   if (key === 'supuesto') {
     return <span>{text}</span>;
   }
+  if (key === 'narrativa') {
+    const parts = (text || '').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+    if (!parts.length) return <span>{text}</span>;
+    return (
+      <div style={{ display: 'grid', gap: 12 }}>
+        {parts.map((p, idx) => (
+          <p key={idx} style={{ margin: 0, fontSize: 15, lineHeight: 1.6, color: '#1f2937' }}>
+            {p.split(/\n+/).map((line, lineIdx, arr) => (
+              <React.Fragment key={lineIdx}>
+                {line}
+                {lineIdx < arr.length - 1 ? <br /> : null}
+              </React.Fragment>
+            ))}
+          </p>
+        ))}
+      </div>
+    );
+  }
   if (key.startsWith('accion_')) {
     return (
       <div style={cardStyle('#0f172a')}>

@@ -297,7 +297,9 @@ def _load_prompts_for_lang(lang: str) -> tuple[_Optional[str], _Optional[str]]:
     if lang not in {"es","en","zh"}:
         return None, None
     name_pairs = [
+        # Preferir prompts estructurados (JSON) para generar acciones accionables
         (f"prompt_cortex_exec_{lang}_v1.txt", f"user_template_exec_{lang}_v1.txt"),
+        # Fallback a narrativa plana si no existen los anteriores
         (f"prompt_narrativa_comparativa_{lang}_v1.txt", f"user_template_narrativa_comparativa_{lang}_v1.txt"),
     ]
     for sys_name, usr_name in name_pairs:
@@ -748,6 +750,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _warm_startup_caches() -> None:
+    """Preload heavy datasets so the first UI hits are responsive."""
+    try:
+        _load_catalog()
+    except Exception:
+        pass
+    try:
+        _ensure_options_index()
+    except Exception:
+        pass
 
 
 # Simple media proxy for vehicle images
@@ -2276,7 +2291,13 @@ def _load_catalog():
                     if c in mdf.columns:
                         mdf[c] = mdf[c].astype(str)
                 if "ano" in mdf.columns:
-                    mdf["ano"] = pd.to_numeric(mdf["ano"], errors="coerce")
+                    anos = pd.to_numeric(mdf["ano"], errors="coerce")
+                    try:
+                        anos = anos.round().astype("Int64")
+                    except Exception:
+                        import pandas as _pd
+                        anos = _pd.array(anos.round(), dtype="Int64")
+                    mdf["ano"] = anos
                 if "service_cost_60k_mxn" in mdf.columns:
                     # Normalizar: quitar símbolos y mapear "Incluido"/"Sin costo" a 0 + bandera incluida
                     raw = mdf["service_cost_60k_mxn"].astype(str)
@@ -2295,7 +2316,11 @@ def _load_catalog():
                     # compact model (remove non-alnum) to improve matches like "4 RUNNER" vs "4RUNNER"
                     import re as _re
                     mdf["__mdc"] = mdf["__md"].map(lambda s: _re.sub(r"[^A-Z0-9]", "", str(s)))
-                    mdf["__yr"] = mdf["ano"].astype("Int64")
+                    try:
+                        mdf["__yr"] = pd.to_numeric(mdf["ano"], errors="coerce").round().astype("Int64")
+                    except Exception:
+                        import pandas as _pd
+                        mdf["__yr"] = _pd.array(pd.to_numeric(mdf["ano"], errors="coerce").round(), dtype="Int64")
                     if "version" in mdf.columns:
                         mdf["__vr"] = mdf["version"].map(up)
                     # First do (mk, md, yr, vr)
@@ -2306,7 +2331,12 @@ def _load_catalog():
                         import re as _re
                         left["__mdc"] = left["__md"].map(lambda s: _re.sub(r"[^A-Z0-9]", "", str(s)))
                     if "ano" in left.columns:
-                        left["__yr"] = pd.to_numeric(left["ano"], errors="coerce").astype("Int64")
+                        anos_left = pd.to_numeric(left["ano"], errors="coerce")
+                        try:
+                            left["__yr"] = anos_left.round().astype("Int64")
+                        except Exception:
+                            import pandas as _pd
+                            left["__yr"] = _pd.array(anos_left.round(), dtype="Int64")
                     if "version" in left.columns:
                         left["__vr"] = left["version"].astype(str).map(up)
                     svc = None
@@ -2367,22 +2397,101 @@ def _load_catalog():
                         pass
                     # Sync back
                     if "service_cost_60k_mxn" in left.columns:
-                        # Enforce minimum of 1 MXN when not included and year in 2024–2026
+                        # Enforce minimum of 1 MXN when not incluido; respetar ceros explícitos como "incluido".
                         try:
-                            yrs = pd.to_numeric(left.get("__yr"), errors="coerce").astype("Int64") if "__yr" in left.columns else None
-                            inc = left.get("service_included_60k") if "service_included_60k" in left.columns else None
+                            yrs = None
+                            if "__yr" in left.columns:
+                                yrs_raw = pd.to_numeric(left.get("__yr"), errors="coerce")
+                                try:
+                                    yrs = yrs_raw.round().astype("Int64")
+                                except Exception:
+                                    import pandas as _pd
+                                    yrs = pd.Series(_pd.array(yrs_raw.round(), dtype="Int64"), index=left.index)
                             val = pd.to_numeric(left["service_cost_60k_mxn"], errors="coerce")
+                            zero_mask = val.fillna(pd.NA).eq(0)
+                            if "service_included_60k" in left.columns:
+                                inc_series = left["service_included_60k"].fillna(False).astype(bool) | zero_mask.fillna(False)
+                                left["service_included_60k"] = inc_series
+                            else:
+                                inc_series = zero_mask.fillna(False)
                             mask = val.fillna(0).le(0)
                             if yrs is not None:
-                                mask = mask & yrs.isin([2024,2025,2026])
-                            if inc is not None:
-                                mask = mask & (~inc.fillna(False))
+                                mask = mask & yrs.isin([2024, 2025, 2026])
+                            if inc_series is not None:
+                                mask = mask & (~inc_series)
                             left.loc[mask, "service_cost_60k_mxn"] = 1.0
                         except Exception:
                             pass
                         df["service_cost_60k_mxn"] = left["service_cost_60k_mxn"]
                     if "service_included_60k" in left.columns:
                         df["service_included_60k"] = left["service_included_60k"]
+                    # Extra pass: resolver valores faltantes o sentinelas (1 MXN) con los mismos datos
+                    try:
+                        svc_series = pd.to_numeric(df.get("service_cost_60k_mxn"), errors="coerce") if "service_cost_60k_mxn" in df.columns else None
+                    except Exception:
+                        svc_series = None
+                    if svc_series is not None:
+                        need_mask = svc_series.isna() | (svc_series == 1.0)
+                        if need_mask.any():
+                            # Prepara lista de registros válidos (0 = incluido)
+                            recs = []
+                            for _, rec in mdf.iterrows():
+                                try:
+                                    val = float(rec.get("service_cost_60k_mxn"))
+                                except Exception:
+                                    continue
+                                if val < 0 or val == 1.0 or pd.isna(val):
+                                    continue
+                                mk_r = str(rec.get("__mk") or rec.get("make") or "").strip().upper()
+                                md_r = str(rec.get("__md") or rec.get("model") or "").strip().upper()
+                                vr_r = str(rec.get("__vr") or rec.get("version") or "").strip().upper()
+                                yr_r = rec.get("__yr")
+                                try:
+                                    yr_r = int(yr_r) if yr_r is not None and not pd.isna(yr_r) else None
+                                except Exception:
+                                    yr_r = None
+                                recs.append({
+                                    "mk": mk_r,
+                                    "md": md_r,
+                                    "mdc": str(rec.get("__mdc") or ""),
+                                    "vr": vr_r,
+                                    "vrc": str(rec.get("__vrc") or ""),
+                                    "yr": yr_r,
+                                    "val": val,
+                                    "inc": bool(rec.get("service_included_60k", False)) or (val == 0),
+                                })
+                            def _pick(filter_fn):
+                                cands = [r for r in recs if filter_fn(r)]
+                                if not cands:
+                                    return None
+                                cands.sort(key=lambda r: (0 if r["val"] == 0 else 1, r["val"]))
+                                return cands[0]
+                            idxs = df.index[need_mask]
+                            for idx in idxs:
+                                try:
+                                    mk0 = _canon_make(df.at[idx, "make"]) or str(df.at[idx, "make"] or "").strip().upper()
+                                    md0 = _canon_model(mk0, df.at[idx, "model"]) or str(df.at[idx, "model"] or "").strip().upper()
+                                    vr0 = str(df.at[idx, "version"] or "").strip().upper()
+                                    vr0c = _compact_key(vr0)
+                                    try:
+                                        yr_raw = df.at[idx, "ano"]
+                                        yr0 = int(round(float(yr_raw))) if yr_raw is not None and str(yr_raw).strip() != "" else None
+                                    except Exception:
+                                        yr0 = None
+                                    candidate = _pick(lambda r: r["mk"] == mk0 and r["md"] == md0 and r["yr"] == yr0 and (r["vr"] == vr0 or (vr0c and r["vrc"] == vr0c)))
+                                    if candidate is None and yr0 is not None:
+                                        candidate = _pick(lambda r: r["mk"] == mk0 and r["md"] == md0 and r["yr"] == yr0)
+                                    if candidate is None:
+                                        candidate = _pick(lambda r: r["mk"] == mk0 and r["md"] == md0 and r["yr"] == 2025)
+                                    if candidate is None:
+                                        candidate = _pick(lambda r: r["mk"] == mk0 and r["md"] == md0)
+                                    if candidate is None:
+                                        continue
+                                    df.at[idx, "service_cost_60k_mxn"] = float(candidate["val"])
+                                    if candidate.get("inc") or float(candidate["val"]) == 0.0:
+                                        df.at[idx, "service_included_60k"] = True
+                                except Exception:
+                                    continue
         except Exception:
             pass
 
@@ -4468,13 +4577,11 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         try:
             vcur = to_num(row.get("service_cost_60k_mxn"))
-            if vcur is not None and vcur > 1:
-                return
             import csv as _csv
             # Leer principal y fallback enriquecido
             paths = [ROOT / "data" / "costos_mantenimiento.csv", ROOT / "data" / "enriched" / "costos_mantenimiento_enriched.csv"]
             recs = []
-            for p in paths:
+            for prio, p in enumerate(paths):
                 if not p.exists():
                     continue
                 with p.open("r", encoding="utf-8", newline="") as f:
@@ -4482,7 +4589,8 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                     for r in rd:
                         mk = str(r.get("MAKE") or r.get("Make") or r.get("make") or "").strip().upper()
                         md = str(r.get("Model") or r.get("MODEL") or r.get("model") or "").strip().upper()
-                        vr = str(r.get("Version") or r.get("VERSION") or r.get("version") or "").strip().upper()
+                        vr_raw = str(r.get("Version") or r.get("VERSION") or r.get("version") or "").strip().upper()
+                        vr = vr_raw
                         try:
                             yr = int(str(r.get("Año") or r.get("ano") or r.get("AÑO") or "").strip())
                         except Exception:
@@ -4518,7 +4626,15 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                         # Acepta 0 (incluido) y >1; ignora sólo 1 (sentinela) o negativos/NaN
                         if val is None or (val == 1) or (val < 0):
                             continue
-                        recs.append({"mk": mk, "md": md, "vr": vr, "yr": yr, "val": val})
+                        recs.append({
+                            "mk": mk,
+                            "md": md,
+                            "vr": vr,
+                            "vr_compact": _compact_key(vr),
+                            "yr": yr,
+                            "val": val,
+                            "prio": prio,
+                        })
             if not recs:
                 return
             mk0 = _canon_make(row.get("make")) or str(row.get("make") or "").strip().upper()
@@ -4533,10 +4649,11 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 cand = [r for r in recs if filter_fn(r)]
                 if not cand:
                     return None
-                cand.sort(key=lambda x: (0 if x["val"] == 0 else 1, x["val"]))
+                cand.sort(key=lambda x: (x.get("prio", 1), 0 if x["val"] == 0 else 1, x["val"]))
                 return cand[0]["val"]
             # Exact (mk, md, yr, vr)
-            val = pick(lambda r: r["mk"]==mk0 and r["md"]==md0 and r["yr"]==yr0 and r["vr"]==vr0)
+            vr0_compact = _compact_key(vr0)
+            val = pick(lambda r: r["mk"]==mk0 and r["md"]==md0 and r["yr"]==yr0 and (r["vr"]==vr0 or r.get("vr_compact")==vr0_compact))
             if val is None and yr0 is not None:
                 val = pick(lambda r: r["mk"]==mk0 and r["md"]==md0 and r["yr"]==yr0)
             if val is None:
@@ -4545,6 +4662,9 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 val = pick(lambda r: r["mk"]==mk0 and r["md"]==md0)
             if val is not None:
                 row["service_cost_60k_mxn"] = float(val)
+            elif vcur is not None and vcur > 1:
+                # Mantener valor existente sólo si no hubo match
+                row["service_cost_60k_mxn"] = float(vcur)
         except Exception:
             pass
     for _c in ("caballos_fuerza","longitud_mm","combinado_kml","ciudad_kml","carretera_kml","msrp","precio_transaccion"):
@@ -5162,11 +5282,11 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
             "El tono debe transmitir el propósito 'Tecnología con más amor. Un mundo con más vida.'"
         )
     # Derivar señales básicas no-obvias para el modelo
-    def _to_f(v):
-        try:
-            return float(v)
-        except Exception:
-            return None
+        def _to_f(v):
+            try:
+                return float(v)
+            except Exception:
+                return None
 
     def _to_i(v):
         try:
@@ -5321,13 +5441,39 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
         cph_med = _median(cphs)
         tco_med = _median(tcos)
         near_tx = None
+        near_comp_name = None
+        near_comp_tx = None
         if own_price is not None and prices:
-            near_tx = min(prices, key=lambda v: abs(v-own_price))
+            # Find competitor with TX closest to ours
+            try:
+                best = None
+                for c in comps_short:
+                    it = c.get("item") or {}
+                    p = _to_f(it.get("precio_transaccion") or it.get("msrp"))
+                    if p is None:
+                        continue
+                    diff = abs(p - own_price)
+                    if best is None or diff < best[0]:
+                        nm_model = str(it.get("model") or "").strip()
+                        nm_version = str(it.get("version") or "").strip()
+                        nm_make = str(it.get("make") or "").strip()
+                        nm = (f"{nm_make} {nm_model}".strip() or nm_model or nm_make)
+                        if nm_version:
+                            nm = f"{nm} {nm_version}".strip()
+                        best = (diff, p, nm)
+                if best is not None:
+                    near_tx = best[1]
+                    near_comp_tx = best[1]
+                    near_comp_name = best[2]
+            except Exception:
+                pass
         signals = {
             "own_cph": own_cph,
             "cph_median": cph_med,
             "tco_median": tco_med,
             "nearest_tx": near_tx,
+            "nearest_comp_name": near_comp_name,
+            "nearest_comp_tx": near_comp_tx,
             "delta_tx_nearest": (near_tx - own_price) if (near_tx is not None and own_price is not None) else None,
         }
 
@@ -6317,23 +6463,6 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
             })
         sections.append({"id": "acciones_priorizadas", "items": acciones})
 
-        # Preguntas para el equipo
-        preguntas: list[dict] = []
-        missing_map = {
-            "equip_p_adas": "detalle ADAS del propio",
-            "equip_p_safety": "pilar de seguridad",
-            "equip_p_comfort": "pilar de confort",
-            "equip_p_infotainment": "pilar de infoentretenimiento",
-            "fuel_cost_60k_mxn": "consumo energético 60k",
-            "service_cost_60k_mxn": "costo de servicio 60k",
-        }
-        for key, label in missing_map.items():
-            if _to_f(own.get(key)) is None:
-                preguntas.append({"key": "pregunta", "args": {"text": f"¿Confirmar {label} para el modelo base?"}})
-        if not preguntas:
-            preguntas.append({"key": "pregunta", "args": {"text": "¿Qué volúmenes objetivo y mix de versiones requieren soporte comercial?"}})
-        sections.append({"id": "preguntas_para_el_equipo", "items": preguntas})
-
         # Supuestos y datos faltantes
         supuestos: list[dict] = []
         try:
@@ -6392,11 +6521,27 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 resp = requests.post(url, headers=headers, json=data, timeout=(timeout_connect, max(timeout_read, 90.0)))
             except Exception as e2:
+                print("[insights] request_timeout:", repr(e2), flush=True)
                 return {"ok": False, "error": str(e2), "compare": comp_json}
+        except requests.RequestException as exc:
+            print("[insights] request_exception:", repr(exc), flush=True)
+            return {"ok": False, "error": str(exc), "compare": comp_json}
+        try:
+            if str(os.getenv("INSIGHTS_DEBUG", "0")).strip().lower() in {"1","true","yes","y"}:
+                body_preview = resp.text[:400].replace("\n", " ")
+                print(f"[insights] openai_status={resp.status_code} body={body_preview}", flush=True)
+        except Exception:
+            pass
         if resp.status_code != 200:
             return {"ok": True, "model": model, "insights": "", "insights_json": None, "insights_struct": _deterministic_struct(), "compare": comp_json}
         out = resp.json()
         text = out.get("choices", [{}])[0].get("message", {}).get("content", "")
+        try:
+            if str(os.getenv("INSIGHTS_DEBUG", "0")).strip().lower() in {"1","true","yes","y"}:
+                preview = text if isinstance(text, str) else str(text)
+                print("[insights] raw_reply:", preview[:200].replace("\n", " "))
+        except Exception:
+            pass
         # Intenta parsear el JSON eliminando code fences y otros adornos
         def _parse_any(s: str):
             try:
@@ -6423,6 +6568,40 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
                 pass
             return None
         parsed = _parse_any(text)
+
+        narrative_text: Optional[str] = None
+        try:
+            if parsed is None and isinstance(text, str):
+                stripped = text.strip()
+                if stripped:
+                    narrative_text = stripped
+        except Exception:
+            narrative_text = text if isinstance(text, str) else None
+
+        if narrative_text:
+            ins_struct = {
+                "sections": [
+                    {
+                        "id": "narrativa",
+                        "title": "Narrativa comparativa",
+                        "items": [
+                            {"key": "narrativa", "args": {"text": narrative_text}}
+                        ],
+                    }
+                ]
+            }
+            res = {
+                "ok": True,
+                "model": model,
+                "insights": narrative_text,
+                "insights_json": None,
+                "insights_struct": ins_struct,
+                "compare": comp_json,
+                "used_fallback_struct": False,
+            }
+            if cache_key:
+                cache[cache_key] = {k: v for k, v in res.items() if k != "compare"}
+            return res
 
         def _struct_has_content(st: Dict[str, Any] | None) -> bool:
             try:
@@ -6484,33 +6663,120 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Extract fields
         ins_json = (parsed.get("insights") if isinstance(parsed, dict) and parsed.get("insights") is not None else parsed)
         ins_struct = (parsed.get("struct") if isinstance(parsed, dict) else None)
+
+        # Normalize struct IDs to canonical section IDs expected by the frontend
+        def _normalize_struct(st: Dict[str, Any] | None) -> Dict[str, Any] | None:
+            if not isinstance(st, dict):
+                return st
+            try:
+                id_map = {
+                    "hallazgo": "hallazgos_clave",
+                    "hallazgos": "hallazgos_clave",
+                    "hallazgos_clave": "hallazgos_clave",
+                    "oportunidad": "oportunidades",
+                    "oportunidades": "oportunidades",
+                    "riesgo": "riesgos_y_contramedidas",
+                    "riesgos": "riesgos_y_contramedidas",
+                    "riesgos_y_contramedidas": "riesgos_y_contramedidas",
+                    "acciones": "acciones_priorizadas",
+                    "accion": "acciones_priorizadas",
+                    "acciones_priorizadas": "acciones_priorizadas",
+                    "pregunta": "preguntas_para_el_equipo",
+                    "preguntas": "preguntas_para_el_equipo",
+                    "preguntas_para_el_equipo": "preguntas_para_el_equipo",
+                    "supuesto": "supuestos_y_datos_faltantes",
+                    "supuestos": "supuestos_y_datos_faltantes",
+                    "supuestos_y_datos_faltantes": "supuestos_y_datos_faltantes",
+                    # descartar narrativa plana en modo ejecutivo
+                    "narrativa": None,
+                }
+                allowed = {
+                    "hallazgos_clave",
+                    "oportunidades",
+                    "riesgos_y_contramedidas",
+                    "acciones_priorizadas",
+                    # "preguntas_para_el_equipo" removido por requerimiento: no preguntar, solo proponer
+                    "supuestos_y_datos_faltantes",
+                }
+                sections = []
+                for sec in (st.get("sections") or []):
+                    sid = (sec.get("id") or "").strip().lower()
+                    # Map ids like 'accion_p1', 'accion_p2' → 'acciones_priorizadas'
+                    if sid.startswith("accion"):
+                        new_id = "acciones_priorizadas"
+                    else:
+                        new_id = id_map.get(sid, sid)
+                    if not new_id or new_id not in allowed:
+                        continue
+                    items = sec.get("items") or []
+                    # asegurar shape { key, args }
+                    norm_items = []
+                    for it in items:
+                        if isinstance(it, dict):
+                            k = it.get("key") or ""
+                            a = it.get("args") if isinstance(it.get("args"), (dict, str, list)) else {"text": str(it.get("args") or "")}
+                            if isinstance(a, list):
+                                a = {"text": "; ".join(str(x) for x in a if x is not None)}
+                            norm_items.append({"key": str(k).lower(), "args": a})
+                        else:
+                            norm_items.append({"key": "hallazgo", "args": {"text": str(it)}})
+                    # de-duplicate by normalized text to avoid repeated bullets
+                    seen = set()
+                    dedup_items = []
+                    for it in norm_items:
+                        t = ""
+                        try:
+                            if isinstance(it.get("args"), dict):
+                                t = str(it["args"].get("text") or "").strip().lower()
+                            if not t and isinstance(it.get("text"), str):
+                                t = it["text"].strip().lower()
+                        except Exception:
+                            t = ""
+                        key = (it.get("key") or "").strip().lower()
+                        sig = (key, t)
+                        if sig in seen:
+                            continue
+                        seen.add(sig)
+                        dedup_items.append(it)
+                    sections.append({"id": new_id, "items": dedup_items})
+                if sections:
+                    return {"sections": sections}
+            except Exception:
+                return st
+            return st
+
+        ins_struct = _normalize_struct(ins_struct)
         used_fallback = False
         # If struct is missing/empty, try to build it from insights blob; else fallback deterministic
         if not _struct_has_content(ins_struct):
             if isinstance(ins_json, dict):
                 candidate = _struct_from_insights_blob(ins_json)
-                if _struct_has_content(candidate):
-                    ins_struct = candidate
+                # Normalize and deduplicate candidate as well
+                candidate_norm = _normalize_struct(candidate)
+                if _struct_has_content(candidate_norm):
+                    ins_struct = candidate_norm
             if not _struct_has_content(ins_struct):
                 ins_struct = _deterministic_struct()
                 used_fallback = True
 
-        # Insert per-vehicle 1–7 analysis, then 1–1 competitor deep dives right after the first (general) section
+        # Insert análisis determinístico SOLO cuando usamos fallback.
+        # Si el modelo ya proporcionó estructura válida, respetarla sin mezclar bloques adicionales.
         try:
-            vehicle_secs = _build_vehicle_analysis()
-            comp_secs = _build_comp_sections()
-            if isinstance(ins_struct, dict) and (vehicle_secs or comp_secs):
-                secs = list(ins_struct.get("sections") or [])
-                new_list = []
-                if secs:
-                    new_list.append(secs[0])
-                if vehicle_secs:
-                    new_list.extend(vehicle_secs)
-                if comp_secs:
-                    new_list.extend(comp_secs)
-                if secs and len(secs) > 1:
-                    new_list.extend(secs[1:])
-                ins_struct["sections"] = new_list
+            if used_fallback:
+                vehicle_secs = _build_vehicle_analysis()
+                comp_secs = _build_comp_sections()
+                if isinstance(ins_struct, dict) and (vehicle_secs or comp_secs):
+                    secs = list(ins_struct.get("sections") or [])
+                    new_list = []
+                    if secs:
+                        new_list.append(secs[0])
+                    if vehicle_secs:
+                        new_list.extend(vehicle_secs)
+                    if comp_secs:
+                        new_list.extend(comp_secs)
+                    if secs and len(secs) > 1:
+                        new_list.extend(secs[1:])
+                    ins_struct["sections"] = new_list
         except Exception:
             pass
 

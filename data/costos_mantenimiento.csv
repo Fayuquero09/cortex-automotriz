@@ -1583,11 +1583,11 @@ Jeep,Compass,Altitude Light S Quemacocos,2025,1
 Jeep,Compass,Altitude Light,2025,1
 Jeep,Compass,Limited Premium,2025,1
 Jeep,Grand Cherokee,PHEV 4xe,2025,1
-Jeep,Grand Cherokee,PHEV Summit Reserve 4xe,2025,1
-Jeep,Grand Cherokee,Limited V6 4X2,2025,1
-Jeep,Grand Cherokee,Altitude,2025,1
-Jeep,Grand Cherokee,Limited L V6 4X2,2025,1
-Jeep,Grand Cherokee,Summit V6 4X4,2025,1
+Jeep,Grand Cherokee,PHEV Summit Reserve 4xe,2025,15200
+Jeep,Grand Cherokee,Limited V6 4X2,2025,15200
+Jeep,Grand Cherokee,Altitude,2025,15200
+Jeep,Grand Cherokee,Limited L V6 4X2,2025,15200
+Jeep,Grand Cherokee,Summit V6 4X4,2025,15200
 Jeep,JT,Rubicon 4x4,2025,1
 Jeep,JT,Mojave,2025,1
 Jeep,JT,Willys,2025,1
@@ -1990,9 +1990,9 @@ Ford,Expedition,Active,2025,1
 Ford,Expedition,Active Max,2025,1
 Ford,Expedition,Platinum,2025,1
 Ford,Expedition,Platinum Max,2025,1
-Ford,Explorer,Platinum,2025,1
-Ford,Explorer,Active,2025,1
-Ford,Explorer,ST,2025,1
+Ford,Explorer,Platinum,2025,20200
+Ford,Explorer,Active,2025,20200
+Ford,Explorer,ST,2025,20200
 Ford,F-150,Supercab 4x2 V6,2025,1
 Ford,F-150,XLT Super Single Cab 4x4,2025,1
 Ford,F-150,XLT Crew Cab 4x4,2025,1
