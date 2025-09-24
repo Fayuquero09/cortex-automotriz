@@ -390,10 +390,14 @@ def _load_vehicle_json_entries() -> list[dict[str, Any]]:
         return str(s or "").strip().upper()
 
     candidates = [
+        ROOT / "data" / "vehiculos-todos-augmented.normalized.json",
+        ROOT / "data" / "vehiculos-todos-augmented.json",
         ROOT / "data" / "vehiculos-todos.json",
         ROOT / "data" / "vehiculos-todos2.json",
         ROOT / "data" / "vehiculos-todos1.json",
     ]
+
+    seen_ids: set[str] = set()
 
     for path in candidates:
         try:
@@ -409,6 +413,10 @@ def _load_vehicle_json_entries() -> list[dict[str, Any]]:
                 if not isinstance(raw, dict):
                     continue
                 try:
+                    vid_raw = raw.get("vehicleId") or raw.get("vehicleid")
+                    vid = str(vid_raw).strip() if vid_raw is not None else ""
+                    if vid and vid in seen_ids:
+                        continue
                     mk_raw = ((raw.get("make") or {}).get("name") if isinstance(raw.get("make"), dict) else None) or ((raw.get("manufacturer") or {}).get("name") if isinstance(raw.get("manufacturer"), dict) else "")
                     mk_up = _canon_make(mk_raw) or _up(mk_raw)
                     md_raw = (raw.get("model") or {}).get("name") if isinstance(raw.get("model"), dict) else ""
@@ -429,6 +437,8 @@ def _load_vehicle_json_entries() -> list[dict[str, Any]]:
                         "year": yr_up,
                         "raw": raw,
                     })
+                    if vid:
+                        seen_ids.add(vid)
                 except Exception:
                     continue
         except Exception:
@@ -532,7 +542,7 @@ def _ensure_options_index() -> None:
                 cols = _cols(keys)
                 if not cols:
                     return _pd.Series([0]*len(df))
-                binm = df[cols].applymap(_to01)
+                binm = df[cols].map(_to01)
                 sc = (binm.sum(axis=1) / float(len(cols)) * 100.0).round(1)
                 return sc
             def _need(col):
@@ -1328,7 +1338,7 @@ def _load_catalog():
                 cols = [c for c in cols if c in df.columns]
                 if not cols:
                     return _pd.Series([0]*len(df))
-                binm = df[cols].applymap(_to01)
+                binm = df[cols].map(_to01)
                 sc = (binm.sum(axis=1) / float(len(cols)) * 100.0).round(1)
                 return sc
             # Mapas de columnas → pilares (usar solo si existen)
@@ -2235,9 +2245,9 @@ def _load_catalog():
                     # Normalizar: quitar símbolos y mapear "Incluido"/"Sin costo" a 0 + bandera incluida
                     raw = mdf["service_cost_60k_mxn"].astype(str)
                     # Detectar 'Incluido' antes de limpiar
-                    included_mask = raw.str.contains(r"(?i)\b(inclu[íi]do|incl\.|sin\s*costo|gratis)\b", regex=True)
+                    included_mask = raw.str.contains(r"(?i)\b(?:inclu[íi]do|incl\.|sin\s*costo|gratis)\b", regex=True)
                     ser = raw.str.replace("$", "", regex=False).str.replace(",", "", regex=False)
-                    ser = ser.replace(r"(?i)\s*(inclu[íi]do|incl\.|sin\s*costo|gratis)\s*", "0", regex=True)
+                    ser = ser.replace(r"(?i)\s*(?:inclu[íi]do|incl\.|sin\s*costo|gratis)\s*", "0", regex=True)
                     mdf["service_cost_60k_mxn"] = pd.to_numeric(ser, errors="coerce")
                     mdf["service_included_60k"] = included_mask.fillna(False).astype(bool)
                 # Build normalized join keys (upper)
@@ -2958,6 +2968,24 @@ NUMERIC_KEYS = [
     "equip_p_efficiency",
     "equip_p_electrification",
     "warranty_score",
+    "infotainment_score",
+    "infotainment_price_per_score",
+    "comfort_hvac_score",
+    "comfort_hvac_price_per_score",
+    "convenience_score",
+    "convenience_price_per_score",
+    "engine_displacement_cc",
+    "engine_displacement_l",
+    "engine_cylinders",
+    "engine_power_hp",
+    "engine_power_kw",
+    "engine_torque_lbft",
+    "engine_torque_nm",
+    "performance_accel_0_100_s",
+    "price_per_seat",
+    "tco_60k_per_seat",
+    "tco_total_60k_per_seat",
+    "cargo_density_kg_per_l",
 ]
 
 
@@ -3019,6 +3047,12 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
             return float(price / hp)
         except Exception:
             return None
+    def _drop_nulls(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: _drop_nulls(v) for k, v in value.items() if v is not None}
+        if isinstance(value, list):
+            return [_drop_nulls(v) for v in value if v is not None]
+        return value
     # Helper to derive a display segment
     def _seg_display(row: Dict[str, Any]) -> Optional[str]:
         try:
@@ -3400,7 +3434,12 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 return None
             s["__lm"] = s.apply(_last_m, axis=1)
             for _, row in s.iterrows():
-                key = (row["__mk"], row["__md"], int(row["__yr"]) if not _pd.isna(row["__yr"]) else year)
+                raw_mk = row["__mk"]
+                mk = _canon_make(raw_mk) or raw_mk
+                raw_md = row["__md"]
+                md = _canon_model(mk, raw_md) or raw_md
+                yr_val = int(row["__yr"]) if not _pd.isna(row["__yr"]) else year
+                key = (mk, md, yr_val)
                 ytd = int(float(row.get("__ytd") or 0))
                 lm = (int(row.get("__lm")) if row.get("__lm") == row.get("__lm") else None)
                 out[key] = (ytd, lm)
@@ -3675,6 +3714,119 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     return None
                 return None
+
+            def _numbers_from_text(val) -> list[float]:
+                nums: list[float] = []
+                if val is None:
+                    return nums
+                try:
+                    raw = str(val)
+                except Exception:
+                    return nums
+                for token in _re.findall(r"-?\d+(?:[\.,]\d+)?", raw):
+                    try:
+                        nums.append(float(token.replace(',', '')))
+                    except Exception:
+                        continue
+                return nums
+
+            def _maybe_set_numeric(col: str, value: Optional[float]) -> None:
+                if value is None:
+                    return
+                try:
+                    cur = row.get(col)
+                    cur_num = float(cur)
+                    if cur_num and cur_num > 0:
+                        return
+                except Exception:
+                    if col in row and row[col] not in (None, "", 0):
+                        return
+                if abs(value - round(value)) < 1e-6:
+                    value = float(round(value))
+                    if value.is_integer():
+                        row[col] = int(value)
+                        return
+                row[col] = value
+
+            def _norm_feat_name(text: Any) -> str:
+                s = str(text or "").strip().lower()
+                try:
+                    s = unicodedata.normalize("NFKD", s)
+                    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+                except Exception:
+                    pass
+                return _re.sub(r"\s+", " ", s)
+
+            def _content_truthy(val: Any) -> Optional[bool]:
+                try:
+                    s = _norm_feat_name(val)
+                except Exception:
+                    s = ""
+                if not s:
+                    return None
+                negatives = {"no disponible", "sin", "ninguno", "n/a", "na", "-", "0", "ninguna"}
+                positives = {"estandar", "serie", "incluido", "si", "sí", "standard", "present", "activo", "disponible"}
+                if any(tok in s for tok in negatives):
+                    if any(tok in s for tok in positives):
+                        # Mixed text -> assume available
+                        return True
+                    return False
+                if any(tok in s for tok in positives):
+                    return True
+                return None
+
+            def _set_bool(col: str, value: bool = True) -> None:
+                cur = row.get(col)
+                if cur in (True, False):
+                    if cur is True or value is False:
+                        return
+                if isinstance(cur, str) and cur.strip().lower() in {"true", "false"}:
+                    if cur.strip().lower() == "true" or value is False:
+                        row[col] = value or (cur.strip().lower() == "true")
+                        return
+                row[col] = bool(value)
+
+            def _maybe_set_int(col: str, value: Optional[float]) -> None:
+                if value is None:
+                    return
+                try:
+                    v = int(round(float(value)))
+                except Exception:
+                    return
+                cur = row.get(col)
+                try:
+                    if cur is not None and int(cur) > 0:
+                        return
+                except Exception:
+                    if cur not in (None, ""):
+                        return
+                row[col] = v
+
+            def _sum_numbers(nums: list[float]) -> Optional[float]:
+                if not nums:
+                    return None
+                total = 0.0
+                for n in nums:
+                    total += float(n)
+                return total
+
+            WORDS_TO_NUM = {
+                "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5,
+                "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
+                "twelve": 12, "once": 11, "doce": 12
+            }
+
+            def _word_number(text: Any) -> Optional[int]:
+                try:
+                    s = _norm_feat_name(text)
+                except Exception:
+                    return None
+                if not s:
+                    return None
+                for word, num in WORDS_TO_NUM.items():
+                    if word in s:
+                        return num
+                return None
             # FE
             fe = (hit.get("fuelEconomy") or {}) if isinstance(hit.get("fuelEconomy"), dict) else {}
             ck = _to_kml_text(fe.get("combined"))
@@ -3704,8 +3856,533 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                         row["doors"] = ver.get("doors")
             # Image
             imgs = hit.get("images") or {}
-            if isinstance(imgs, dict) and imgs.get("default"):
-                row["images_default"] = imgs.get("default")
+            if isinstance(imgs, dict):
+                if imgs.get("default"):
+                    row["images_default"] = imgs.get("default")
+
+                def _pick_link(val):
+                    try:
+                        if not val:
+                            return None
+                        if isinstance(val, str):
+                            s = str(val).strip()
+                            return s if s.lower().startswith("http") else None
+                        if isinstance(val, dict):
+                            for key in ("href", "url", "src", "image", "default", "filePathJPG", "filePathPng"):
+                                if key in val:
+                                    got = _pick_link(val.get(key))
+                                    if got:
+                                        return got
+                            links = val.get("links")
+                            if isinstance(links, (list, tuple)):
+                                for item in links:
+                                    got = _pick_link(item)
+                                    if got:
+                                        return got
+                            return None
+                        if isinstance(val, (list, tuple)):
+                            for item in val:
+                                got = _pick_link(item)
+                                if got:
+                                    return got
+                        return None
+                    except Exception:
+                        return None
+
+                link = None
+                for key in ("default_href", "defaultPhoto", "default", "exteriorPhotos", "exterior", "photos", "media"):
+                    if key in imgs:
+                        link = _pick_link(imgs.get(key))
+                        if link:
+                            break
+                if link:
+                    row["images_default_href"] = link
+
+            feats = hit.get("features") if isinstance(hit.get("features"), dict) else None
+            if feats:
+                dims = feats.get("Dimensiones")
+                if isinstance(dims, list):
+                    dim_map = {
+                        _norm_feat_name("Longitud (mm)"): "longitud_mm",
+                        _norm_feat_name("Anchura (mm)"): "ancho_mm",
+                        _norm_feat_name("Ancho (mm)"): "ancho_mm",
+                        _norm_feat_name("Altura (mm)"): "alto_mm",
+                        _norm_feat_name("Distancia entre ejes (mm)"): "batalla_mm",
+                        _norm_feat_name("Capacidad de carga (l)"): "capacidad_carga_l",
+                        _norm_feat_name("Capacidad de carga con respaldo abatido (l)"): "capacidad_baul_l",
+                        _norm_feat_name("Peso en vacío (kg)"): "peso_kg",
+                        _norm_feat_name("Peso en vacio (kg)"): "peso_kg",
+                    }
+                    for item in dims:
+                        if not isinstance(item, dict):
+                            continue
+                        key = _norm_feat_name(item.get("feature"))
+                        target = dim_map.get(key)
+                        if not target:
+                            continue
+                        nums = _numbers_from_text(item.get("content"))
+                        if not nums:
+                            continue
+                        _maybe_set_numeric(target, nums[0])
+
+                warranty = feats.get("Garantía")
+                if isinstance(warranty, list):
+                    for item in warranty:
+                        if not isinstance(item, dict):
+                            continue
+                        key = _norm_feat_name(item.get("feature"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if not nums:
+                            continue
+                        months = nums[0] if len(nums) >= 1 else None
+                        km = nums[1] if len(nums) >= 2 else None
+                        if "total" in key:
+                            _maybe_set_numeric("warranty_full_months", months)
+                            _maybe_set_numeric("warranty_full_km", km)
+                        elif "tren" in key or "powertrain" in key:
+                            _maybe_set_numeric("warranty_powertrain_months", months)
+                            _maybe_set_numeric("warranty_powertrain_km", km)
+                        elif "anticorrosion" in key:
+                            _maybe_set_numeric("warranty_corrosion_months", months)
+                            _maybe_set_numeric("warranty_corrosion_km", km)
+                        elif "asistencia" in key or "roadside" in key:
+                            _maybe_set_numeric("warranty_roadside_months", months)
+                            _maybe_set_numeric("warranty_roadside_km", km)
+                        elif "hibrid" in key or "hybrid" in key:
+                            _maybe_set_numeric("warranty_hybrid_months", months)
+                            _maybe_set_numeric("warranty_hybrid_km", km)
+                        elif "electr" in key:
+                            _maybe_set_numeric("warranty_electric_months", months)
+                            _maybe_set_numeric("warranty_electric_km", km)
+                        elif "bateri" in key:
+                            _maybe_set_numeric("warranty_battery_months", months)
+                            _maybe_set_numeric("warranty_battery_km", km)
+
+                # --- Audio / Infotainment ---
+                for cat_name in ("Infoentretenimiento", "Audio y entretenimiento", "Audio", "Infotenimiento"):
+                    items = feats.get(cat_name)
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if "carplay" in name_norm or "carplay" in content_norm:
+                            truth = _content_truthy(item.get("content"))
+                            if truth is True:
+                                _set_bool("apple_carplay", True)
+                            if "inalam" in content_norm or "wireless" in content_norm:
+                                _set_bool("carplay_wireless", True)
+                        if "android" in name_norm or "android" in content_norm:
+                            truth = _content_truthy(item.get("content"))
+                            if truth is True:
+                                _set_bool("android_auto", True)
+                            if "inalam" in content_norm or "wireless" in content_norm:
+                                _set_bool("android_auto_wireless", True)
+                        if "pantalla" in name_norm and ("pulg" in content_norm or " in" in content_norm or "in." in content_norm or '"' in content_norm):
+                            val = nums[0] if nums else None
+                            _maybe_set_numeric("screen_main_in", val)
+                        if "head up" in name_norm or "hud" in name_norm or "head-up" in content_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("hud", True)
+                        if "instrumento" in name_norm and "pulg" in content_norm:
+                            val = nums[0] if nums else None
+                            _maybe_set_numeric("cluster_screen_in", val)
+                        if "marca" in name_norm and "audio" in name_norm:
+                            if item.get("content"):
+                                row.setdefault("marca_audio", str(item.get("content")))
+                        if "bocina" in name_norm or "altavoz" in name_norm:
+                            total = _sum_numbers(nums)
+                            _maybe_set_int("speakers_count", total)
+                        if "subwoofer" in name_norm:
+                            truth = _content_truthy(item.get("content"))
+                            if truth is True:
+                                _set_bool("subwoofer", True)
+                        if "envolvente" in content_norm or "surround" in content_norm:
+                            _set_bool("audio_surround", True)
+                        if "usb" in name_norm:
+                            total = _sum_numbers(nums)
+                            if total is not None:
+                                if "type c" in name_norm or "tipo c" in name_norm or "usb-c" in name_norm:
+                                    _maybe_set_int("usb_c_count", total)
+                                elif "type a" in name_norm or "tipo a" in name_norm:
+                                    _maybe_set_int("usb_a_count", total)
+                                else:
+                                    # generic USB count
+                                    if "usb_a_count" not in row:
+                                        _maybe_set_int("usb_a_count", total)
+                        if "12v" in name_norm or "12 v" in name_norm:
+                            total = _sum_numbers(nums)
+                            _maybe_set_int("power_12v_count", total)
+                        if "110v" in name_norm or "120v" in name_norm or "ac" in name_norm and "toma" in name_norm:
+                            total = _sum_numbers(nums)
+                            _maybe_set_int("power_110v_count", total)
+
+                # --- Climatización ---
+                for cat_name in ("Climatización", "Clima", "HVAC"):
+                    items = feats.get(cat_name)
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if "numero de zonas" in name_norm:
+                            val = nums[0] if nums else None
+                            if val is not None and val > 0:
+                                _maybe_set_numeric("zonas_clima", val)
+                        if "controles de ventilacion secundarios" in name_norm or "controles de ventilacion" in name_norm:
+                            truth = _content_truthy(item.get("content"))
+                            if truth is not False:
+                                _set_bool("clima_controles_traseros", True)
+                        if "filtro" in name_norm or "purificador" in name_norm:
+                            truth = _content_truthy(item.get("content"))
+                            if truth is True:
+                                _set_bool("clima_filtro", True)
+                            if "purificador" in name_norm or "purificador" in content_norm:
+                                _set_bool("clima_purificador", True)
+                        if "ionizador" in name_norm or "ionizador" in content_norm:
+                            truth = _content_truthy(item.get("content"))
+                            if truth is True:
+                                _set_bool("clima_ionizador", True)
+                        if "asientos traseros con calefaccion" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("asientos_calefaccion_fila2", True)
+                        if "asientos traseros con ventilacion" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("asientos_ventilacion_fila2", True)
+                        if "asientos tercera fila con calefaccion" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("asientos_calefaccion_fila3", True)
+                        if "asientos tercera fila con ventilacion" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("asientos_ventilacion_fila3", True)
+
+                # --- Confort & Conveniencia ---
+                for cat_name in ("Confort y conveniencia", "Confort", "Conveniencia"):
+                    items = feats.get(cat_name)
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        truth = _content_truthy(item.get("content"))
+                        if "cierre electrico de la cajuela" in name_norm or "porton" in name_norm:
+                            if truth is not False:
+                                _set_bool("porton_electrico", True)
+                            if "manos libres" in content_norm or "manos libres" in name_norm:
+                                _set_bool("porton_manos_libres", True)
+                        if "ajustes memorizados" in name_norm or "memoria" in name_norm:
+                            if truth is not False:
+                                _set_bool("memoria_asientos", True)
+                        if "cortina" in name_norm or "sunshade" in name_norm:
+                            if truth is not False:
+                                _set_bool("cortinillas", True)
+                        if "iluminacion ambiental" in name_norm:
+                            if truth is not False:
+                                _set_bool("iluminacion_ambiental", True)
+                        if "parabrisas" in name_norm and "acustico" in content_norm:
+                            _set_bool("parabrisas_acustico", True)
+                        if "cargador" in name_norm and "inalam" in content_norm:
+                            _set_bool("carga_inalambrica", True)
+                        if "freno de mano electrico" in name_norm:
+                            if truth is not False:
+                                _set_bool("freno_estacionamiento_electrico", True)
+                        if "limpiaparabrisas" in name_norm and "lluvia" in content_norm:
+                            if truth is not False:
+                                _set_bool("limpiaparabrisas_lluvia", True)
+                                _set_bool("sensor_lluvia", True)
+                        if "limpiaparabrisas con sensores de lluvia" in name_norm or "sensor de lluvia" in content_norm:
+                            if truth is not False:
+                                _set_bool("limpiaparabrisas_lluvia", True)
+                                _set_bool("sensor_lluvia", True)
+                        if "asistente de estacionamiento frontal" in name_norm:
+                            if truth is not False:
+                                _set_bool("asistente_estac_frontal", True)
+                        if "asistente de estacionamiento trasero" in name_norm:
+                            if truth is not False:
+                                _set_bool("asistente_estac_trasero", True)
+                        if "autoestacionamiento" in content_norm or "park assist" in name_norm:
+                            if truth is not False:
+                                _set_bool("park_assist_auto", True)
+                        if "zonas con control del clima" in name_norm:
+                            value = nums[0] if nums else _word_number(item.get("content"))
+                            _maybe_set_numeric("zonas_clima", value)
+                        if "aire acondicionado" in name_norm:
+                            if truth is not False:
+                                _set_bool("aire_acondicionado", True)
+                        if "recirculacion" in name_norm:
+                            if truth is not False:
+                                _set_bool("clima_recirculacion", True)
+                        if "filtro de aire" in name_norm:
+                            if truth is not False:
+                                _set_bool("clima_filtro", True)
+
+                # --- Llantas y Rines ---
+                for cat_name in ("Llantas y rines", "Llantas", "Rines"):
+                    items = feats.get(cat_name)
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if "neumatic" in name_norm or "neumatico" in content_norm:
+                            if item.get("content"):
+                                row.setdefault("neumatico_medida", str(item.get("content")))
+                        if "runflat" in content_norm or "run flat" in content_norm:
+                            _set_bool("neumatico_runflat", True)
+                        if "tpms" in name_norm or "presion" in name_norm:
+                            if "individual" in content_norm or "rueda" in content_norm:
+                                _set_bool("tpms_individual", True)
+                        if "kit reparacion" in name_norm or "paquete reparacion llantas" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("kit_inflado", True)
+                        if "llanta de refaccion" in name_norm:
+                            truth = _content_truthy(item.get("content"))
+                            if truth is True:
+                                _set_bool("llanta_refaccion", True)
+                            if item.get("content"):
+                                row.setdefault("llanta_refaccion_tipo", str(item.get("content")))
+                        if "rin" in name_norm and "pulg" in content_norm:
+                            val = nums[0] if nums else None
+                            _maybe_set_numeric("rin_pulg", val)
+
+                # --- Frenos ---
+                for cat_name in ("Frenos",):
+                    items = feats.get(cat_name)
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if "ebd" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("frenos_ebd", True)
+                        if "assist" in name_norm or "bas" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("frenos_bas", True)
+                        if "auto hold" in name_norm or "autohold" in content_norm:
+                            _set_bool("freno_auto_hold", True)
+                        if "freno electrico" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("freno_estacionamiento_electrico", True)
+                        if "disco delantero" in name_norm or "freno delantero" in name_norm:
+                            val = nums[0] if nums else None
+                            _maybe_set_numeric("freno_disco_delantero_mm", val)
+                        if "disco trasero" in name_norm or "freno trasero" in name_norm:
+                            val = nums[0] if nums else None
+                            _maybe_set_numeric("freno_disco_trasero_mm", val)
+
+                # --- Motor & Performance ---
+                for cat_name in ("Motor", "Performance"):
+                    items = feats.get(cat_name)
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if "torque" in name_norm and nums:
+                            _maybe_set_numeric("torque_nm", nums[0])
+                        if "0 a 100" in name_norm or "0-100" in name_norm:
+                            _maybe_set_numeric("aceleracion_0_100_s", nums[0] if nums else None)
+                        if "80-120" in name_norm or "80 a 120" in name_norm:
+                            _maybe_set_numeric("rebase_80_120_s", nums[0] if nums else None)
+                        if "capacidad de arrastre" in name_norm or "remolque" in name_norm:
+                            if "sin freno" in content_norm:
+                                _maybe_set_numeric("arrastre_sin_freno_kg", nums[0] if nums else None)
+                            elif "con freno" in content_norm or "frenado" in content_norm:
+                                _maybe_set_numeric("arrastre_con_freno_kg", nums[0] if nums else None)
+                            else:
+                                _maybe_set_numeric("arrastre_con_freno_kg", nums[0] if nums else None)
+
+                # --- Suspensión ---
+                items = feats.get("Suspensión")
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        if "suspension" in name_norm and "adaptativ" in content_norm:
+                            _set_bool("suspension_adaptativa", True)
+                        if "suspension" in name_norm and "neumat" in content_norm:
+                            _set_bool("suspension_neumatica", True)
+                        if "altura ajustable" in content_norm or "elevacion" in content_norm:
+                            _set_bool("suspension_elevacion", True)
+
+                # --- Tracción / Off-road ---
+                items = feats.get("Tracción") or feats.get("Off-Road")
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if "reductora" in name_norm or "low range" in content_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("reductora", True)
+                        if "bloqueo" in name_norm:
+                            if "central" in content_norm:
+                                _set_bool("bloqueo_diferencial_central", True)
+                            if "trasero" in content_norm:
+                                _set_bool("bloqueo_diferencial_trasero", True)
+                            if "delantero" in content_norm:
+                                _set_bool("bloqueo_diferencial_delantero", True)
+                        if "modos" in name_norm or "modos" in content_norm:
+                            if item.get("content"):
+                                row.setdefault("modos_offroad", str(item.get("content")))
+                        if "angulo de ataque" in name_norm:
+                            _maybe_set_numeric("angulo_ataque_deg", nums[0] if nums else None)
+                        if "angulo de salida" in name_norm:
+                            _maybe_set_numeric("angulo_salida_deg", nums[0] if nums else None)
+                        if "angulo ventral" in name_norm or "angulo de quiebre" in name_norm:
+                            _maybe_set_numeric("angulo_quiebre_deg", nums[0] if nums else None)
+                        if "despeje" in name_norm or "despeje" in content_norm:
+                            _maybe_set_numeric("despeje_suelo_mm", nums[0] if nums else None)
+                        if "vadeo" in name_norm or "profundidad" in name_norm:
+                            _maybe_set_numeric("profundidad_vadeo_mm", nums[0] if nums else None)
+
+                # --- Seguridad / ADAS ---
+                items = feats.get("Asistencia para el conductor")
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        truth = _content_truthy(item.get("content"))
+                        if "frenado de emergencia" in name_norm or "aeb" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_aeb", True)
+                        if "sistema de alerta de colision incluye frenado" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_aeb", True)
+                        if "control crucero adaptativo" in name_norm or "acc" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_acc", True)
+                                _set_bool("control_crucero", True)
+                        if "mantenerse en carril" in name_norm or "mantenimiento de carril" in name_norm or "lka" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_lka", True)
+                        if "centrado de carril" in name_norm or "lane centering" in content_norm:
+                            if truth is not False:
+                                _set_bool("adas_lane_center", True)
+                        if "trafico cruzado trasero" in name_norm or "rcta" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_rcta", True)
+                        if "trafico cruzado frontal" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_fcta", True)
+                        if "deteccion de peatones" in name_norm or "peaton" in content_norm:
+                            if truth is not False:
+                                _set_bool("adas_detecta_peaton", True)
+                        if "deteccion de ciclista" in name_norm or "ciclista" in content_norm:
+                            if truth is not False:
+                                _set_bool("adas_detecta_ciclista", True)
+                        if "punto ciego" in name_norm:
+                            if truth is not False:
+                                _set_bool("sensor_punto_ciego", True)
+                        if "camara de punto ciego" in name_norm:
+                            if truth is not False:
+                                _set_bool("tiene_camara_punto_ciego", True)
+                        if "asistencia de frenado" in name_norm:
+                            if truth is not False:
+                                _set_bool("frenos_bas", True)
+                        if "distribucion electronica de frenado" in name_norm:
+                            if truth is not False:
+                                _set_bool("frenos_ebd", True)
+                        if "freno de apoyo para pendiente" in name_norm:
+                            if truth is not False:
+                                _set_bool("asistente_arranque_pendiente", True)
+                        if "sensores frontales de distancia para estacionar" in name_norm:
+                            if truth is not False:
+                                _set_bool("sensores_estacionamiento_frontales", True)
+                        if "sensores traseros de distancia para estacionar" in name_norm:
+                            if truth is not False:
+                                _set_bool("sensores_estacionamiento_traseros", True)
+                        if "sensores laterales de distancia para estacionar" in name_norm:
+                            if truth is not False:
+                                _set_bool("sensores_estacionamiento_laterales", True)
+                        if "advertencia de baja presion" in name_norm:
+                            if truth is not False:
+                                _set_bool("tpms", True)
+                        if "sistema latch" in name_norm:
+                            if truth is not False:
+                                _set_bool("isofix", True)
+                        if "sistema de alerta sonora de peatones" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_sonido_peatones", True)
+                        if "alerta de manejo en carril" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_lka", True)
+                        if "alerta de manejo en carril activa la direccion" in name_norm:
+                            if truth is not False:
+                                _set_bool("adas_lane_center", True)
+                        if "alerta de cruce de trafico" in name_norm:
+                            parts = [p.strip() for p in (item.get("content") or "").split('/')]
+                            if parts:
+                                if len(parts) >= 1 and _content_truthy(parts[0]) is not False:
+                                    _set_bool("adas_fcta", True)
+                                if len(parts) >= 2 and _content_truthy(parts[1]) is not False:
+                                    _set_bool("adas_rcta", True)
+
+                items = feats.get("Seguridad")
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if "isofix" in name_norm:
+                            total = _sum_numbers(nums)
+                            _maybe_set_int("isofix_count", total)
+                        if "bolsas de aire cortina" in name_norm and "fila" in content_norm:
+                            row.setdefault("bolsas_cortina_detalle", str(item.get("content")))
+
+                # --- Utilidad / Remolque ---
+                for cat_name in ("Utilidad", "Carga", "Remolque"):
+                    items = feats.get(cat_name)
+                    if not isinstance(items, list):
+                        continue
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        name_norm = _norm_feat_name(item.get("feature"))
+                        content_norm = _norm_feat_name(item.get("content"))
+                        nums = _numbers_from_text(item.get("content"))
+                        if "carga util" in name_norm:
+                            _maybe_set_numeric("carga_util_kg", nums[0] if nums else None)
+                        if "capacidad techo" in name_norm:
+                            _maybe_set_numeric("capacidad_techo_kg", nums[0] if nums else None)
+                        if "balanceo de remolque" in name_norm:
+                            if _content_truthy(item.get("content")) is not False:
+                                _set_bool("control_balanceo_remolque", True)
+                        if "toma" in name_norm and "12v" in content_norm and "cajuela" in content_norm:
+                            _set_bool("toma_12v_cajuela", True)
+                        if "toma" in name_norm and ("110v" in content_norm or "120v" in content_norm):
+                            _set_bool("toma_110v", True)
+                        if "conector" in name_norm and 7 in _numbers_from_text(item.get("content")):
+                            _set_bool("conector_7_pines", True)
+                        if "conector" in name_norm and 4 in _numbers_from_text(item.get("content")):
+                            _set_bool("conector_4_pines", True)
         except Exception:
             pass
     # Nota: no aplicar fallback de 1 MXN; si no hay dato, dejarlo en None.
@@ -4356,7 +5033,14 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         item["diffs"] = diffs
         comps.append(item)
     audit("resp", "/compare", body={"competitors": len(comps)})
-    return {"own": own, "competitors": comps}
+    own_clean = _drop_nulls(own)
+    comps_clean: List[Dict[str, Any]] = []
+    for entry in comps:
+        cleaned_entry = {}
+        for key, val in entry.items():
+            cleaned_entry[key] = _drop_nulls(val)
+        comps_clean.append(cleaned_entry)
+    return {"own": own_clean, "competitors": comps_clean}
 
 
 # ------------------------------ Insights (OpenAI) -------------------------
@@ -4409,42 +5093,21 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
     if system_prompt_override:
         system = system_prompt_override
     else:
-        lang_label = {
-            "es": "español",
-            "en": "English",
-            "zh": "Chinese"
-        }
-        lang_name = lang_label.get(lang_req or "", "español")
-        if lang_req == "en":
-            system = (
-                "You are a senior automotive strategist. Write the output in coherent English prose and always from the perspective of our base vehicle ('we'). "
-                "Deliver exactly three short paragraphs (two sentences each): (1) what the combined metrics reveal about our standing, (2) which product, price, and messaging levers we would pull, (3) the risks we monitor and how we react immediately. "
-                "All comparisons must be voiced as 'we' versus each competitor and spell out why it matters. "
-                "Never describe or quote the on-screen charts or restate deltas verbatim; use data to explain causes, trade-offs, or tensions. "
-                "Use figures only when they unlock a fresh implication by crossing metrics (e.g., $/HP with 7 seats, TCO with equipment, sales with positioning). "
-                "Mention audio brand and speaker count only when it creates a differentiated storyline. "
-                "Return valid UTF-8 JSON (no Markdown) with two blocks: (a) 'insights': {hallazgos_clave[5..7], oportunidades[3..5], riesgos_y_contramedidas[3..5], acciones_priorizadas[4..6], preguntas_para_el_equipo[3..4], supuestos_y_datos_faltantes[2..5]} where each entry is a narrative sentence; (b) 'struct' following the canonical section/item schema so the UI can render it."
-            )
-        elif lang_req == "zh":
-            system = (
-                "你是一位资深汽车策略分析师，所有内容必须用中文撰写，并始终以“我们”的视角阐述。"
-                " 请写出三个紧凑段落，每段两句话：(1) 结合多项指标讲出我们与竞品的故事；(2) 点出我们会启动的产品、定价与沟通杠杆；(3) 需要预警的风险以及我们会如何立即应对。"
-                " 所有比较都要以“我们 vs 对手”的措辞呈现，并说明对我们的意义。"
-                " 严禁描述或复述图表，也不要逐字重复图表里的差值，要用数据解释因果、权衡或机会。"
-                " 只有在跨指标产生新含义时才引用数字，例如美元/马力与7座、TCO与装备、销量与定位的联动。"
-                " 仅当品牌及喇叭数量能强化故事时才提及。"
-                " 结果需为 UTF-8 JSON（不要 Markdown）：包含 (a) 'insights'，结构为 hallazgos_clave[5..7]、oportunidades[3..5]、riesgos_y_contramedidas[3..5]、acciones_priorizadas[4..6]、preguntas_para_el_equipo[3..4]、supuestos_y_datos_faltantes[2..5]；(b) 'struct'，遵循既定 section/item 架构以便前端渲染。"
-            )
-        else:
-            system = (
-                "Eres un analista automotriz senior. Escribe la narrativa en español y SIEMPRE desde la perspectiva de nuestro vehículo ('nosotros'). "
-                " Redacta exactamente tres párrafos cortos (dos oraciones cada uno): (1) qué historia cuentan las cifras combinadas al compararnos, (2) qué palancas moveríamos en producto, precio y comunicación, (3) qué riesgos vigilar y cómo reaccionar de inmediato. "
-                " Todas las comparaciones deben narrarse como 'nosotros' frente a cada rival, dejando claro por qué importa. "
-                " Prohibido describir las gráficas o repetir literalmente los deltas; usa los datos para explicar causas, tensiones u oportunidades. "
-                " Usa cifras sólo cuando aporten una implicación nueva al cruzar métricas (p. ej. $/HP con 7 plazas, TCO con equipamiento, ventas con posicionamiento). "
-                " Menciona la marca del audio y el número de bocinas sólo si refuerzan la historia. "
-                " Devuelve JSON UTF-8 (sin Markdown) con dos bloques: (a) 'insights' con las claves {hallazgos_clave[5..7], oportunidades[3..5], riesgos_y_contramedidas[3..5], acciones_priorizadas[4..6], preguntas_para_el_equipo[3..4], supuestos_y_datos_faltantes[2..5]} escritos en narrativa; (b) 'struct' siguiendo el esquema canónico para que el front pueda renderizarlo."
-            )
+        system = (
+            "Actúa como un especialista senior en producto, marketing y pricing dentro de una OEM automotriz. "
+            "Evalúa si el precio de nuestro vehículo está justificado al compararlo con las versiones de la competencia, considerando equipamiento, desempeño, costo total de propiedad y percepción de valor. "
+            "Explica qué respalda el precio actual, qué brechas existen frente a los rivales y qué ajustes estratégicos (bonos, equipamiento adicional o mensajes de marketing) reforzarían el posicionamiento. "
+            "Trabaja SIEMPRE desde la perspectiva de nuestro vehículo ('nosotros') y evita describir gráficas o repetir números textuales del UI; usa los datos para generar implicaciones nuevas (cruza métricas como $/HP, TCO, ventas vs. equipamiento, etc.). "
+            "Devuelve JSON UTF-8 (sin Markdown) con dos bloques: (a) 'insights' con las claves {hallazgos_clave[5..7], oportunidades[3..5], riesgos_y_contramedidas[3..5], acciones_priorizadas[4..6], preguntas_para_el_equipo[3..4], supuestos_y_datos_faltantes[2..5]} donde cada elemento sea una oración clara; (b) 'struct' siguiendo el esquema canónico de secciones e ítems para que el front pueda renderizarlo."
+        )
+
+    make_name = str(own.get("make") or own.get("marca") or own.get("brand") or "").strip().lower()
+    if make_name == "gwm":
+        system += (
+            " Cuando analices vehículos de GWM, incorpora consistentemente la identidad de marca de GWM: una empresa global de tecnología inteligente que impulsa un ecosistema sostenible de movilidad. "
+            "Resalta su desempeño off-road (especialmente la línea TANK), la tecnología avanzada como Hi4 y conducción inteligente, el enfoque centrado en el usuario inspirado en elementos naturales, la visión global con localización profunda y el portafolio diverso (HAVAL, TANK, ORA). "
+            "El tono debe transmitir el propósito 'Tecnología con más amor. Un mundo con más vida.'"
+        )
     # Derivar señales básicas no-obvias para el modelo
     def _to_f(v):
         try:
@@ -6923,8 +7586,9 @@ def dashboard(segment: Optional[str] = Query(None)) -> Dict[str, Any]:
             models = 0
     except Exception:
         models = 0
-    # Count unique versions across years (make, model, version, ano)
+    # Count unique versions across years (make, model, version) and by year (añadiendo ano)
     versions_by_year: Dict[int, int] = {}
+    versions = 0
     try:
         if pd is not None and {"make","model","version","ano"}.issubset(df.columns):
             tmp = df[["make","model","version","ano"]].copy()
@@ -6933,7 +7597,7 @@ def dashboard(segment: Optional[str] = Query(None)) -> Dict[str, Any]:
             tmp["ano"] = pd.to_numeric(tmp["ano"], errors="coerce").astype("Int64")
             tmp = tmp.dropna(subset=["make","model","version","ano"])  # type: ignore[arg-type]
             tmp = tmp.drop_duplicates(subset=["make","model","version","ano"])  # unique version-year
-            versions = int(tmp.shape[0])
+            versions = int(tmp.drop_duplicates(subset=["make","model","version"]).shape[0])
             try:
                 by = tmp.groupby(tmp["ano"].astype(int)).size()
                 versions_by_year = {int(k): int(v) for k, v in by.to_dict().items()}
