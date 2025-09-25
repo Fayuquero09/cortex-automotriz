@@ -398,8 +398,28 @@ export default function ComparePanel() {
 
   const truthyFeature = React.useCallback((value: any): boolean => normalizeBoolean(value), []);
 
+  const hasManualFor = React.useCallback((mk?: string, md?: string, yr?: number | string) => {
+    const mkNorm = norm(String(mk || ''));
+    const mdNorm = norm(String(md || ''));
+    const yrNorm = String(yr ?? '').trim();
+    return manual.some((row) => {
+      const rowMk = norm(String(row?.make || ''));
+      const rowMd = norm(String(row?.model || ''));
+      const rowYr = String(row?.ano || row?.year || '').trim();
+      if (mkNorm && rowMk !== mkNorm) return false;
+      if (mdNorm && rowMd !== mdNorm) return false;
+      if (yrNorm && rowYr !== yrNorm) return false;
+      return true;
+    });
+  }, [manual]);
+
+  const noBreakStyle: React.CSSProperties = React.useMemo(() => ({
+    breakInside: 'avoid',
+    pageBreakInside: 'avoid',
+  }), []);
+
   const renderNoData = (message: string) => (
-    <div style={{ padding:'12px 10px', border:'1px dashed #e5e7eb', borderRadius:8, color:'#64748b', fontSize:12, textAlign:'center' }}>{message}</div>
+    <div style={{ ...noBreakStyle, padding:'12px 10px', border:'1px dashed #e5e7eb', borderRadius:8, color:'#64748b', fontSize:12, textAlign:'center' }}>{message}</div>
   );
 
   const renderChart = (option: any | null, height: number, emptyMessage: string) => {
@@ -407,7 +427,11 @@ export default function ComparePanel() {
       return renderNoData(emptyMessage);
     }
     if (!EChart) return null;
-    return <EChart echarts={echarts} option={option} opts={{ renderer: 'svg' }} style={{ height }} />;
+    return (
+      <div style={{ ...noBreakStyle }}>
+        <EChart echarts={echarts} option={option} opts={{ renderer: 'svg' }} style={{ height }} />
+      </div>
+    );
   };
 
   const exportPdf = React.useCallback(() => {
@@ -437,7 +461,9 @@ export default function ComparePanel() {
 
     const pickYear = async () => {
       if (!sorted.length) {
-        if (!filters.includeDifferentYears && own.year) setManualNotice(`No encontramos ${own.year} para ${manModel || mk}.`);
+        if (!filters.includeDifferentYears && own.year && !hasManualFor(mk, manModel, own.year)) {
+          setManualNotice(`No encontramos ${own.year} para ${manModel || mk}.`);
+        }
         if (!cancelled) setManYear('');
         return;
       }
@@ -450,7 +476,9 @@ export default function ComparePanel() {
           }
         } else if (!cancelled) {
           setManYear('');
-          setManualNotice(`No encontramos ${own.year} para ${manModel || mk}. Habilita "Incluir años modelo diferentes" o elige otro modelo.`);
+          if (!hasManualFor(mk, manModel, target)) {
+            setManualNotice(`No encontramos ${own.year} para ${manModel || mk}. Habilita "Incluir años modelo diferentes" o elige otro modelo.`);
+          }
         }
         return;
       }
@@ -476,7 +504,7 @@ export default function ComparePanel() {
     pickYear();
     setManVersion('');
     return () => { cancelled = true; };
-  }, [manOpts, manMake, manModel, filters.includeDifferentYears, own.year]);
+  }, [manOpts, manMake, manModel, filters.includeDifferentYears, own.year, hasManualFor]);
 
   React.useEffect(() => {
     if (!makeOpts || manModel) return;
@@ -495,7 +523,9 @@ export default function ComparePanel() {
           }
         } else if (!cancelled) {
           setManYear('');
-          setManualNotice(`No encontramos ${own.year} para ${manMake || 'esta marca'}.`);
+          if (!hasManualFor(manMake, undefined, target)) {
+            setManualNotice(`No encontramos ${own.year} para ${manMake || 'esta marca'}.`);
+          }
         }
         return;
       }
@@ -520,7 +550,7 @@ export default function ComparePanel() {
 
     pickYear();
     return () => { cancelled = true; };
-  }, [makeOpts, manModel, manMake, filters.includeDifferentYears, own.year]);
+  }, [makeOpts, manModel, manMake, filters.includeDifferentYears, own.year, hasManualFor]);
 
   // When year changes, fetch versions for model-year
   const { data: manVerOpts } = useSWR<any>(manModel && manYear ? ['man_ver', manModel, manYear, manMake] : null, () => endpoints.options({ model: manModel, year: manYear as number, make: manMake }));
@@ -601,6 +631,7 @@ export default function ComparePanel() {
   function norm(s: string){
     try { return s.normalize('NFD').replace(/\p{Diacritic}+/gu,'').toLowerCase().replace(/[^a-z0-9]/g,''); } catch { return s.toLowerCase().replace(/[^a-z0-9]/g,''); }
   }
+
   function isRowAvailable(row: any): boolean {
     const status = String(row?.metadata_dataStatus || row?.metadata?.dataStatus || '').toLowerCase();
     if (!status) return true;
@@ -880,6 +911,20 @@ export default function ComparePanel() {
     }
     const len = lengthMm(out);
     if (len != null) out.longitud_mm = len;
+
+    // Ajustar equip_score si el valor crudo es inconsistente con los pilares disponibles
+    const pillarKeys = ['equip_p_adas','equip_p_safety','equip_p_comfort','equip_p_infotainment','equip_p_traction','equip_p_utility'] as const;
+    const pillarVals = pillarKeys
+      .map((key) => parseNumberLike((out as any)[key]))
+      .filter((v): v is number => Number.isFinite(v) && v > 0);
+    if (pillarVals.length) {
+      const avg = pillarVals.reduce((acc, v) => acc + v, 0) / pillarVals.length;
+      const raw = parseNumberLike(out.equip_score);
+      if (!Number.isFinite(raw) || raw <= 0 || raw > 100 || Math.abs(raw - avg) >= 5) {
+        out.equip_score = Number(avg.toFixed(1));
+      }
+    }
+
     augmentFeatureFlags(out);
     return out;
   }
@@ -1232,6 +1277,7 @@ export default function ComparePanel() {
     return list;
   }, [baseRow, comps]);
 
+
   // Ventas mensuales 2025 (líneas)
   // NOTE: se define después de colorForVersion; este placeholder evita referencias circulares.
   let salesLineOption: any = {} as any;
@@ -1255,6 +1301,18 @@ export default function ComparePanel() {
     return map;
   }, [chartRows]);
   const colorForVersion = (r: any) => versionColorMap[String(r?.version||'').toUpperCase()] || '#6b7280';
+
+  const legendItems = React.useMemo(() => {
+    const seen = new Set<string>();
+    const items: Array<{ label: string; isBase: boolean; color: string }> = [];
+    chartRows.forEach((r) => {
+      const label = vehLabel(r);
+      if (!label || seen.has(label)) return;
+      seen.add(label);
+      items.push({ label, isBase: !!(r as any).__isBase, color: colorForVersion(r) });
+    });
+    return items;
+  }, [chartRows, versionColorMap]);
 
   // Ventas mensuales 2025 (líneas) — depende de colorForVersion
   salesLineOption = React.useMemo(() => {
@@ -2293,13 +2351,52 @@ export default function ComparePanel() {
           );
         })()}
 
+        {legendItems.length ? (
+          <div
+            style={{
+              ...noBreakStyle,
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 12,
+              margin: '8px 0 14px',
+              padding: '8px 12px',
+              border: '1px solid #e2e8f0',
+              borderRadius: 10,
+              background: '#f8fafc',
+              fontSize: 12,
+              color: '#0f172a',
+            }}
+          >
+            {legendItems.map(({ label, isBase, color }) => (
+              <div
+                key={label}
+                style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+              >
+                <span
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: 12,
+                    background: color,
+                    border: isBase ? '2px solid #0f172a' : '1px solid rgba(15,23,42,0.35)',
+                    boxShadow: isBase ? '0 0 0 1px rgba(15,23,42,0.08)' : 'none',
+                  }}
+                />
+                <span style={{ fontWeight: isBase ? 600 : 500 }}>
+                  {isBase ? `Nosotros — ${label}` : label}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         {/* Fila 1: Score vs Precio (con tendencia) y MSRP vs HP (con líneas $/HP) */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
           {(() => {
             const hasScore = chartRows.some(r => Number((r as any)?.equip_score) > 0);
             if (!hasScore) {
               return (
-                <div style={{ padding:'12px 10px', border:'1px dashed #e5e7eb', borderRadius:8, color:'#64748b' }}>
+                <div style={{ ...noBreakStyle, padding:'12px 10px', border:'1px dashed #e5e7eb', borderRadius:8, color:'#64748b' }}>
                   No hay datos de &quot;score de equipo&quot; para graficar. (campo equip_score)
                 </div>
               );

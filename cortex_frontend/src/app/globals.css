@@ -177,3 +177,5 @@ body.cortex-app .print-only { display: none; }
 
 .print-break-before { break-before: page; page-break-before: always; }
 .print-break-after { break-after: page; page-break-after: always; }
+
+.chart-block { break-inside: avoid; page-break-inside: avoid; }

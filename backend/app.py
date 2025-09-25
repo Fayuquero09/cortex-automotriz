@@ -225,13 +225,20 @@ def ensure_equip_score(row: Dict[str, _Any]) -> Dict[str, _Any]:
             return round(sum(vals) / float(len(vals)), 1)
         return None
 
+    avg = _avg_pillars()
     val = _to_num_shared(out.get("equip_score"))
-    if val is None or val <= 0:
-        avg = _avg_pillars()
-        if avg is not None:
+    if avg is not None:
+        # Si el score existente está ausente, fuera de rango o difiere demasiado del promedio de pilares,
+        # sustituirlo por el promedio calculado (garantiza coherencia con columnas pilar 0..100).
+        if (
+            val is None
+            or val <= 0
+            or val > 100
+            or abs(float(val) - avg) >= 5.0
+        ):
             out["equip_score"] = avg
             return out
-    else:
+    if val is not None and 0 < val <= 100:
         return out
     keys = [
         "android_auto","apple_carplay","tiene_pantalla_tactil","camara_360",
@@ -3554,13 +3561,18 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
                 return round(sum(vals) / float(len(vals)), 1)
             return None
 
+        avg = _avg_pillars()
         val = to_num(out.get("equip_score"))
-        if val is None or val <= 0:
-            avg = _avg_pillars()
-            if avg is not None:
+        if avg is not None:
+            if (
+                val is None
+                or val <= 0
+                or val > 100
+                or abs(float(val) - avg) >= 5.0
+            ):
                 out["equip_score"] = avg
                 return out
-        else:
+        if val is not None and 0 < val <= 100:
             return out
         # Simple proxy basado en presencia de features comunes
         keys = [
