@@ -5549,8 +5549,9 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
     system_prompt_override = None
     user_template_override = None
     lang_req = str(payload.get("prompt_lang") or "").strip().lower()
+    scope_req = str(payload.get("prompt_scope") or payload.get("insights_scope") or payload.get("mode") or "").strip().lower()
     if lang_req in {"es","en","zh"}:
-        sys_txt, usr_txt = _load_prompts_for_lang(lang_req)
+        sys_txt, usr_txt = _load_prompts_for_lang(lang_req, scope_req)
         system_prompt_override = sys_txt or None
         user_template_override = usr_txt or None
 
@@ -6459,7 +6460,7 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
         import hashlib as _hash
         # Permitir forzar regeneración desde el cliente: incluir 'refresh' en la clave
         refresh = payload.get("refresh") or payload.get("cache_bust")
-        cache_basis = {"own": own, "comps": comps_short, "refresh": refresh}
+        cache_basis = {"own": own, "comps": comps_short, "refresh": refresh, "scope": scope_req}
         cache_key = _hash.sha256(
             _json.dumps(cache_basis, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
@@ -7096,7 +7097,11 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
                 return st
             return st
 
-        ins_struct = _normalize_struct(ins_struct)
+        normalize_struct_flag = scope_req not in {"dealer_script"}
+        if normalize_struct_flag:
+            ins_struct = _normalize_struct(ins_struct)
+        elif not isinstance(ins_struct, dict):
+            ins_struct = None
         disclaimer_text = "Estos valores provienen de un modelo de regresión entrenado con datos históricos del mercado mexicano."
 
         def _append_disclaimer_blob(blob: Any) -> None:
@@ -7142,26 +7147,30 @@ def post_insights(payload: Dict[str, Any]) -> Dict[str, Any]:
                     return
             items.append({"key": "hallazgo", "args": {"text": disclaimer_text}})
 
-        if isinstance(ins_json, dict):
+        if isinstance(ins_json, dict) and normalize_struct_flag:
             _append_disclaimer_blob(ins_json)
-        _append_disclaimer_struct(ins_struct)
+        if normalize_struct_flag:
+            _append_disclaimer_struct(ins_struct)
         used_fallback = False
         # If struct is missing/empty, try to build it from insights blob; else fallback deterministic
         if not _struct_has_content(ins_struct):
             if isinstance(ins_json, dict):
                 candidate = _struct_from_insights_blob(ins_json)
                 # Normalize and deduplicate candidate as well
-                candidate_norm = _normalize_struct(candidate)
+                candidate_norm = _normalize_struct(candidate) if normalize_struct_flag else candidate
                 if _struct_has_content(candidate_norm):
                     ins_struct = candidate_norm
             if not _struct_has_content(ins_struct):
-                ins_struct = _deterministic_struct()
+                if scope_req == "dealer_script":
+                    ins_struct = {"sections": []}
+                else:
+                    ins_struct = _deterministic_struct()
                 used_fallback = True
 
         # Insert análisis determinístico SOLO cuando usamos fallback.
         # Si el modelo ya proporcionó estructura válida, respetarla sin mezclar bloques adicionales.
         try:
-            if used_fallback:
+            if used_fallback and normalize_struct_flag:
                 vehicle_secs = _build_vehicle_analysis()
                 comp_secs = _build_comp_sections()
                 if isinstance(ins_struct, dict) and (vehicle_secs or comp_secs):

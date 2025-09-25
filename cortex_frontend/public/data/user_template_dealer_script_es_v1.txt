@@ -1,0 +1,10 @@
+Contexto del análisis (JSON):
+<DATA_JSON>
+
+Instrucciones al modelo:
+- Usa el JSON anterior (vehículo propio, competidores, diferencias y costos) para rellenar el guion.
+- Sigue exactamente la estructura indicada en el prompt del sistema (tres pasos, ids "paso1/2/3").
+- Para cada competidor nombra explícitamente el modelo y menciona brechas de precio, equipamiento y consumo/TCO en lenguaje simple.
+- Explica cómo presentar nuestras ventajas y cómo responder a sus ventajas aunque sean pequeñas.
+- Evita repetir el mismo texto; cada bullet debe aportar una idea concreta para el discurso comercial.
+- Responde exclusivamente en JSON UTF-8, sin Markdown ni texto extra.

@@ -75,18 +75,15 @@ function DealerManualBlock({ onAdd, year, allowDifferentYears }: { onAdd: (r: Ro
   });
   const list = (sugg||[]).slice(0, 12);
   return (
-    <div className="no-print" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:10 }}>
-      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-        <span style={{ fontWeight:600 }}>Agregar competidor:</span>
-        <input placeholder="Marca o modelo" value={q} onChange={e=>setQ(e.target.value)} style={{ minWidth:260 }} />
-      </div>
+    <div className="no-print" style={{ display:'grid', gap:6 }}>
+      <input placeholder="Marca o modelo" value={q} onChange={e=>setQ(e.target.value)} style={{ minWidth:260, padding:'6px 8px', borderRadius:6, border:'1px solid #cbd5f5' }} />
       {list.length>0 ? (
-        <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginTop:6 }}>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
           {list.map((r:Row, i:number)=> (
             <button
               key={i}
               onClick={()=> onAdd(r)}
-              style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'4px 8px', borderRadius:6, cursor:'pointer' }}
+              style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'4px 8px', borderRadius:6, cursor:'pointer', fontSize:12 }}
             >
               {vehicleLabel(r)}
             </button>
@@ -115,9 +112,12 @@ export default function DealerPanel(){
   const ownRow = (ownRows && ownRows[0]) || null;
 
   const [manual, setManual] = React.useState<Row[]>([]);
+  const [manualNotice, setManualNotice] = React.useState<string>('');
   const [allowDifferentYears, setAllowDifferentYears] = React.useState<boolean>(false);
+  const [allowDifferentSegments, setAllowDifferentSegments] = React.useState<boolean>(false);
   const addComp = async (r: Row) => {
     // Regla: mismo año modelo por defecto; permitir diferentes si se activa el toggle
+    setManualNotice('');
     try{
       if (!allowDifferentYears && own?.year && r?.ano && Number(r.ano)!==Number(own.year)){
         const list = await endpoints.catalog({ make: r.make, model: r.model, year: Number(own.year), limit: 50 });
@@ -125,6 +125,14 @@ export default function DealerPanel(){
         if (rows && rows.length){ r = rows[0]; }
       }
     } catch {}
+    if (!allowDifferentSegments && ownRow){
+      const baseSeg = segLabel(ownRow);
+      const candSeg = segLabel(r);
+      if (baseSeg && candSeg && baseSeg !== candSeg){
+        setManualNotice(`El competidor pertenece al segmento "${candSeg}". Activa la casilla para permitir segmentos distintos.`);
+        return;
+      }
+    }
     const key = `${r.make}|${r.model}|${r.version||''}|${r.ano||''}`;
     if (!manual.some(x => `${x.make}|${x.model}|${x.version||''}|${x.ano||''}` === key)) setManual(prev => [...prev, r]);
   };
@@ -217,60 +225,131 @@ export default function DealerPanel(){
     return raw.slice(0,1).toUpperCase() + raw.slice(1);
   }
 
-  const BODY_GUIDE: Record<string, { desc: string; pros: string[]; when: string[] }> = {
-    'Sedán': {
-      desc: 'Carrocería tradicional de 4 puertas con maletero separado; cómoda y estable. ',
-      pros: ['Confort y manejo estable', 'Buen espacio para 4–5 pasajeros', 'Maletero amplio y aislado'],
-      when: ['Familias y viajes de trabajo', 'Trayectos largos en carretera']
-    },
-    'Hatchback': {
-      desc: 'Cajuela integrada que abre hacia arriba; tamaño compacto y versátil para ciudad.',
-      pros: ['Compacto y práctico', 'Buen volumen de carga relativo', 'Fácil de estacionar'],
-      when: ['Uso urbano diario', 'Primer auto o familias pequeñas']
-    },
-    "SUV'S": {
-      desc: 'Altura y espacio superiores; útil en caminos mixtos y para familias.',
-      pros: ['Posición de manejo alta', 'Interior y cajuela amplios', 'Mejor despeje y opciones AWD/4x4'],
-      when: ['Familias y viajes largos', 'Actividades al aire libre o caminos irregulares']
-    },
-    'Crossover': {
-      desc: 'Mezcla de SUV y hatch/sedán: más eficiente y compacto pero con postura alta.',
-      pros: ['Tamaño contenido', 'Práctico para ciudad', 'Postura alta con buena visibilidad'],
-      when: ['Ciudad con viajes ocasionales', 'Familias pequeñas que buscan versatilidad']
-    },
-    'Station Wagon': {
-      desc: 'Versión alargada del sedán con gran cajuela; muy útil para carga/viaje.',
-      pros: ['Gran capacidad de carga', 'Consumo contenido por aerodinámica', 'Confort de sedán'],
-      when: ['Familias grandes', 'Necesidad de cajuela ampliada sin ir a SUV']
-    },
-    'Pickup': {
-      desc: 'Caja abierta para carga; opción de doble o sencilla cabina; enfoque de trabajo.',
-      pros: ['Alta capacidad de carga y arrastre', 'Estructura robusta', 'Versiones 4x4 disponibles'],
-      when: ['Uso comercial (obra, campo, logística)', 'Necesidad de transportar carga a cielo abierto']
-    },
-    'Cabriolet': {
-      desc: 'Techo retráctil para manejo a cielo abierto; enfoque emocional/deportivo.',
-      pros: ['Experiencia de conducción abierta', 'Diseño y desempeño'],
-      when: ['Uso recreativo', 'Entusiastas que priorizan estilo/performance']
-    },
-    'Van': {
-      desc: 'Gran volumen interior para pasajeros o carga; ideal para logística o familias grandes.',
-      pros: ['Habitáculo enorme', 'Configuraciones de asientos flexibles', 'Gran capacidad de carga'],
-      when: ['Transporte comercial y de pasajeros', 'Familias muy grandes o equipaje voluminoso']
-    },
-  };
-
   // Insights para dealer (centrado en el propio)
   const [insightsStruct, setInsightsStruct] = React.useState<any|null>(null);
+  const [insightsNotice, setInsightsNotice] = React.useState<string>('Pulsa “Generar speech comercial” para armar el guion.');
   const [loading, setLoading] = React.useState<boolean>(false);
-  const genDealer = async ()=>{
-    try{
-      setLoading(true);
-      const r = await endpoints.insights({ own: baseRow, competitors: manual, prompt_lang: 'es', refresh: Date.now() });
-      const ok = r?.ok !== false;
-      setInsightsStruct(ok ? (r?.insights_struct || null) : null);
-    } finally { setLoading(false); }
+
+  const equipScoreFor = React.useCallback((row: any): number | null => {
+    const direct = num(row?.equip_score);
+    if (direct != null && direct > 0) return direct;
+    const pillars = ['equip_p_adas','equip_p_safety','equip_p_comfort','equip_p_infotainment','equip_p_traction','equip_p_utility'];
+    const vals = pillars
+      .map(key => num((row as any)?.[key]))
+      .filter((v): v is number => v != null && v > 0);
+    if (vals.length) {
+      const avg = vals.reduce((acc, v) => acc + v, 0) / vals.length;
+      return Number(avg.toFixed(1));
+    }
+    return null;
+  }, []);
+
+  const formatMoney = React.useCallback((val: number | null | undefined) => {
+    if (val == null || !Number.isFinite(val)) return 'N/D';
+    return Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(val);
+  }, []);
+
+  const formatDeltaMoney = React.useCallback((val: number | null | undefined) => {
+    if (val == null || !Number.isFinite(val) || Math.abs(val) < 1) return '±$0';
+    const sign = val > 0 ? '+' : '-';
+    return `${sign}${formatMoney(Math.abs(val))}`;
+  }, [formatMoney]);
+
+  const pickFeatures = (arr: any[] | undefined, fallback: string) => {
+    if (!Array.isArray(arr) || !arr.length) return fallback;
+    const unique = Array.from(new Set(arr.map(item => String(item).trim()).filter(Boolean)));
+    return unique.slice(0, 3).join(', ');
   };
+
+  const buildFallbackScript = React.useCallback(() => {
+    if (!baseRow) return { sections: [] };
+    const baseName = `${brandLabel(baseRow)} ${baseRow.model || ''}${baseRow.version ? ` – ${baseRow.version}` : ''}`.trim();
+    const basePrice = num(baseRow?.precio_transaccion) ?? num(baseRow?.msrp);
+    const baseEquip = equipScoreFor(baseRow);
+    const baseFuel = num(baseRow?.fuel_cost_60k_mxn);
+
+    const saludo = `Saluda al cliente, presenta ${baseName} y pregunta para qué lo necesita (familia, viajes, carga).`;
+    const valor = `Menciona que ofrece ${baseRow.caballos_fuerza ? `${fmtNum(baseRow.caballos_fuerza)} hp` : 'potencia destacada'}, tracción ${propulsionLabel(baseRow)} y precio ${basePrice != null ? formatMoney(basePrice) : 'competitivo'}.`;
+
+    const compareItems = comps.length ? comps.map((comp: any) => {
+      const compName = `${brandLabel(comp)} ${comp.model || ''}${comp.version ? ` – ${comp.version}` : ''}`.trim();
+      const compPrice = num(comp?.precio_transaccion) ?? num(comp?.msrp);
+      const compEquip = equipScoreFor(comp);
+      const compFuel = num(comp?.fuel_cost_60k_mxn);
+      const priceDelta = basePrice != null && compPrice != null ? basePrice - compPrice : null;
+      const equipDelta = baseEquip != null && compEquip != null ? baseEquip - compEquip : null;
+      const fuelDelta = baseFuel != null && compFuel != null ? baseFuel - compFuel : null;
+      const ourWins = pickFeatures((comp as any)?.__diffs?.features_minus, 'cámara 360, ventilación, ADAS completos');
+      const theirWins = pickFeatures((comp as any)?.__diffs?.features_plus, 'un detalle menor');
+      const precioTxt = priceDelta == null ? 'precio similar' : (priceDelta <= 0 ? `estamos ${formatDeltaMoney(priceDelta)} vs ${compName}` : `ellos bajan ${formatDeltaMoney(-priceDelta)}; responde con valor agregado`);
+      const equipTxt = equipDelta == null ? 'equipo comparable' : (equipDelta >= 0 ? `tenemos ~${Math.abs(equipDelta).toFixed(1)} pts más de cobertura` : `quedamos ~${Math.abs(equipDelta).toFixed(1)} pts bajo; ofrece paquete de valor`);
+      const fuelTxt = fuelDelta == null ? 'consumo similar' : (fuelDelta <= 0 ? `nuestro gasto a 60k es ${formatDeltaMoney(fuelDelta)} menor` : `ellos ahorran ${formatDeltaMoney(-fuelDelta)}; compénsalo con garantía/servicio`);
+      const text = `vs ${compName}: ${precioTxt}. Equipo: ${equipTxt}. Nosotros sí tenemos ${ourWins}; ellos presumen ${theirWins}. ${fuelTxt}.`;
+      return { key: 'hallazgo', args: { text } };
+    }) : [{ key: 'hallazgo', args: { text: 'Agrega un competidor para practicar comparativos sencillos.' } }];
+
+    const cierre = `Invita a la prueba de manejo, presume garantía (${baseRow.warranty_full_months ? `${baseRow.warranty_full_months} meses` : 'extendida'}) y ofrece financiamiento, accesorios o servicio incluido para cerrar.`;
+
+    return {
+      sections: [
+        { id: 'paso1', title: 'Paso 1 — Rompe el hielo', items: [ { key: 'hallazgo', args: { text: saludo } }, { key: 'hallazgo', args: { text: valor } } ] },
+        { id: 'paso2', title: 'Paso 2 — Cara a cara con rivales', items: compareItems },
+        { id: 'paso3', title: 'Paso 3 — Cierra la venta', items: [ { key: 'hallazgo', args: { text: cierre } } ] },
+      ],
+    };
+  }, [baseRow, comps, equipScoreFor, formatDeltaMoney, formatMoney, pickFeatures]);
+
+  const genDealer = React.useCallback(async () => {
+    if (!baseRow) {
+      setInsightsStruct(null);
+      setInsightsNotice('Selecciona un vehículo base para armar el guion.');
+      return;
+    }
+    const fallbackStruct = buildFallbackScript();
+    try {
+      setLoading(true);
+      setInsightsNotice('Generando speech con IA…');
+      const payload: Record<string, any> = {
+        own: baseRow,
+        competitors: manual,
+        prompt_lang: 'es',
+        prompt_scope: 'dealer_script',
+        refresh: Date.now(),
+      };
+      const resp = await endpoints.insights(payload);
+      if (resp?.ok === false) {
+        if (fallbackStruct) {
+          setInsightsStruct(fallbackStruct);
+          setInsightsNotice(resp?.error ? `No se pudo generar con IA (${resp.error}). Usando guion base.` : 'No se pudo generar con IA. Usando guion base.');
+        } else {
+          setInsightsStruct(null);
+          setInsightsNotice(resp?.error ? `No se pudo generar: ${resp.error}` : 'No se pudo generar el speech.');
+        }
+        return;
+      }
+      const struct = resp?.insights_struct;
+      if (struct && Array.isArray(struct.sections) && struct.sections.length) {
+        setInsightsStruct(struct);
+        setInsightsNotice('Guion listo: usa los tres pasos para conducir la conversación.');
+      } else if (fallbackStruct) {
+        setInsightsStruct(fallbackStruct);
+        setInsightsNotice('Guion listo (modo base).');
+      } else {
+        setInsightsStruct(null);
+        setInsightsNotice('El modelo no devolvió contenido utilizable.');
+      }
+    } catch (error: any) {
+      if (fallbackStruct) {
+        setInsightsStruct(fallbackStruct);
+        setInsightsNotice(`Error al generar con IA (${error instanceof Error ? error.message : 'desconocido'}). Usando guion base.`);
+      } else {
+        setInsightsStruct(null);
+        setInsightsNotice(`Error al generar con IA: ${error instanceof Error ? error.message : 'desconocido'}.`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [baseRow, manual, buildFallbackScript]);
 
   const exportPdf = React.useCallback(() => {
     try {
@@ -285,8 +364,6 @@ export default function DealerPanel(){
     price: number | null;
     hp: number | null;
     length: number | null;
-    screen: number | null;
-    safety: number | null;
     isBase: boolean;
   };
 
@@ -297,10 +374,8 @@ export default function DealerPanel(){
       const price = num(row?.precio_transaccion) ?? num(row?.msrp);
       const hp = num(row?.caballos_fuerza);
       const length = num(row?.longitud_mm);
-      const screen = num(row?.screen_main_in);
-      const safety = getPillarValue(row, 'seguridad');
       const name = `${brandLabel(row)} ${row?.model || ''}${row?.version ? ` – ${row.version}` : ''}`.trim();
-      return { name: name || 'Vehículo', price, hp, length, screen, safety, isBase: !!row?.__isBase };
+      return { name: name || 'Vehículo', price, hp, length, isBase: !!row?.__isBase };
     }) as ChartRow[];
   }, [baseRow, comps]);
 
@@ -354,110 +429,61 @@ export default function DealerPanel(){
   }, [chartsRows]);
 
   const lengthOption = React.useMemo(() => {
+    const baseLength = num(baseRow?.longitud_mm);
     const data = chartsRows.filter(d => d.length !== null);
-    if (!data.length) return {} as any;
-    const categories = data.map(d => d.name);
-    const values = data.map(d => ({
-      value: d.length,
-      itemStyle: { color: d.isBase ? '#0fa968' : '#0c4a30' },
-      label: { show: true, position: 'right', formatter: ({ value }: any) => `${Intl.NumberFormat('es-MX').format(value)} mm` },
-    }));
+    if (!data.length || baseLength == null) return {} as any;
+    const formatted = data.map(d => {
+      const delta = (d.length ?? 0) - baseLength;
+      return {
+        name: d.isBase ? `${d.name} (Nosotros)` : d.name,
+        value: Number(delta.toFixed(0)),
+        abs: d.length,
+        isBase: d.isBase,
+      };
+    });
+    const maxAbs = Math.max(...formatted.map(d => Math.abs(d.value))) || 1;
+    const pad = Math.max(100, Math.ceil(maxAbs * 0.1));
+    const xMax = maxAbs + pad;
     return {
-      title: { text: 'Longitud total', left: 'center', top: 6 },
-      grid: { left: 120, right: 30, top: 60, bottom: 40 },
-      xAxis: {
-        type: 'value',
-        name: 'mm',
-        axisLabel: { formatter: (val: number) => `${Intl.NumberFormat('es-MX').format(val)} mm` },
-        splitNumber: 4,
-      },
-      yAxis: {
-        type: 'category',
-        data: categories,
-      },
-      series: [{ type: 'bar', data: values }],
-    } as any;
-  }, [chartsRows]);
-
-  const screenOption = React.useMemo(() => {
-    const data = chartsRows.filter(d => d.screen !== null);
-    if (!data.length) return {} as any;
-    const categories = data.map(d => d.name);
-    const values = data.map(d => ({
-      value: d.screen,
-      itemStyle: { color: d.isBase ? '#1d4ed8' : '#7c3aed' },
-      label: { show: true, position: 'right', formatter: ({ value }: any) => `${Number(value).toFixed(1)}"` },
-    }));
-    return {
-      title: { text: 'Pantalla principal (pulgadas)', left: 'center', top: 6 },
-      grid: { left: 120, right: 30, top: 60, bottom: 40 },
-      xAxis: {
-        type: 'value',
-        name: '"',
-        axisLabel: { formatter: (val: number) => `${Number(val).toFixed(1)}"` },
-        min: Math.max(0, Math.min(...data.map(d => d.screen!)) - 1),
-      },
-      yAxis: { type: 'category', data: categories },
-      series: [{ type: 'bar', data: values }],
-    } as any;
-  }, [chartsRows]);
-
-  const safetyOption = React.useMemo(() => {
-    const data = chartsRows.filter(d => d.safety !== null);
-    if (!data.length) return {} as any;
-    return {
-      title: { text: `${PILLAR_LABELS['seguridad']} (0-100)`, left: 'center', top: 6 },
+      title: { text: 'Δ Longitud vs base (mm)', left: 'center', top: 6 },
       tooltip: {
         trigger: 'item',
         formatter: (params: any) => {
-          const safetyVal = Number(params.value);
-          return `<strong>${params.name}</strong><br/>${PILLAR_LABELS['seguridad']}: ${safetyVal.toFixed(1)}`;
+          const mmFmt = (n: number) => `${Intl.NumberFormat('es-MX').format(n)} mm`;
+          const delta = Number(params.value);
+          const original = formatted[params.dataIndex]?.abs ?? baseLength;
+          const label = formatted[params.dataIndex]?.isBase ? 'Nosotros' : params.name;
+          const sign = delta > 0 ? '+' : '';
+          return `<strong>${label}</strong><br/>Longitud: ${mmFmt(Number(original))}<br/>Δ vs base: ${sign}${mmFmt(delta)}`;
         },
       },
-      grid: { left: 50, right: 20, top: 60, bottom: 50 },
+      grid: { left: 120, right: 40, top: 60, bottom: 40 },
       xAxis: {
         type: 'value',
-        name: PILLAR_LABELS['seguridad'],
-        min: 0,
-        max: 100,
+        min: -xMax,
+        max: xMax,
+        splitNumber: 6,
+        axisLabel: { formatter: (val: number) => `${Intl.NumberFormat('es-MX').format(val)} mm` },
       },
       yAxis: {
         type: 'category',
-        data: data.map(d => d.name),
+        data: formatted.map(d => d.name),
       },
       series: [{
         type: 'bar',
-        data: data.map(d => ({
-          value: d.safety,
-          itemStyle: { color: d.isBase ? '#0fa968' : '#14b8a6' },
-          label: { show: true, position: 'right', formatter: ({ value }: any) => `${Number(value).toFixed(0)}` },
+        data: formatted.map(d => ({
+          value: d.value,
+          itemStyle: { color: d.isBase ? '#0fa968' : (d.value >= 0 ? '#0c4a30' : '#dc2626') },
+          label: {
+            show: true,
+            position: d.value >= 0 ? 'right' : 'left',
+            formatter: ({ value }: any) => `${value >= 0 ? '+' : ''}${Intl.NumberFormat('es-MX').format(value)} mm`,
+            color: '#0f172a',
+          },
         })),
       }],
     } as any;
-  }, [chartsRows]);
-
-  // Radar simple (6 pilares)
-  const radarOption = React.useMemo(() => {
-    if (!baseRow) return {} as any;
-    const keys = ['seguridad','motor','confort','audio_y_entretenimiento','transmision','energia'];
-    const ind = keys.map(k => ({ name: PILLAR_LABELS[k] || k, max: 100 }));
-    const rows = [ { ...baseRow, __isBase: true }, ...comps ];
-    const series = rows.map((r:any) => ({
-      name: `${brandLabel(r)} ${r.model||''}${r.version?` – ${r.version}`:''}`,
-      value: keys.map(k => {
-        const val = getPillarValue(r, k);
-        return val != null ? Number(val.toFixed(1)) : 0;
-      })
-    }));
-    if (!series.length) return {} as any;
-    return {
-      title: { text: 'Pilares de equipamiento', left:'center', top:6 },
-      tooltip: { trigger: 'item' },
-      radar: { indicator: ind, radius: 90 },
-      legend: { bottom: 0 },
-      series: [{ type: 'radar', data: series }]
-    } as any;
-  }, [baseRow, comps]);
+  }, [chartsRows, baseRow]);
 
   // Tabla principal (deltas)
   function fmtMoney(v:any){ const n=Number(v); return Number.isFinite(n)? Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(n):'-'; }
@@ -466,19 +492,59 @@ export default function DealerPanel(){
 
   return (
     <section style={{ display:'grid', gap:16 }}>
-      <div className="no-print" style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-        <DealerManualBlock onAdd={addComp} year={own.year} allowDifferentYears={allowDifferentYears} />
-        <label style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <input type="checkbox" checked={allowDifferentYears} onChange={e=>setAllowDifferentYears(e.target.checked)} />
-          <span style={{ fontSize:12, color:'#475569' }}>Permitir años diferentes</span>
-        </label>
-        <button
-          type="button"
-          onClick={exportPdf}
-          style={{ padding:'8px 12px', background:'#1f2937', color:'#fff', border:'none', borderRadius:8, cursor:'pointer' }}
-        >
-          Exportar PDF
-        </button>
+      <div className="no-print" style={{ display:'grid', gap:12, gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))' }}>
+        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#f8fafc' }}>
+          <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Vehículo propio</div>
+          {baseRow ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              <div style={{ fontWeight:700, fontSize:16 }}>{brandLabel(baseRow)} {String(baseRow.model||'')}</div>
+              <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:12, color:'#475569' }}>
+                <span>{baseRow.version || 'Versión N/D'}</span>
+                <span>{baseRow.ano ? `MY ${baseRow.ano}` : 'Año N/D'}</span>
+                <span>{propulsionLabel(baseRow)}</span>
+              </div>
+              <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:13 }}>
+                <span>Precio tx: {fmtMoney(baseRow.precio_transaccion ?? baseRow.msrp)}</span>
+                <span>HP: {fmtNum(baseRow.caballos_fuerza)}</span>
+                <span>Equipamiento: {fmtNum(getPillarValue(baseRow, 'seguridad') ?? 0)} pts seguridad</span>
+              </div>
+              <button type="button" onClick={exportPdf} style={{ alignSelf:'flex-start', marginTop:6, padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor:'pointer' }}>Exportar PDF</button>
+            </div>
+          ) : (
+            <div style={{ fontSize:12, color:'#64748b' }}>Selecciona un vehículo en la parte superior para ver detalles.</div>
+          )}
+        </div>
+        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
+          <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Agregar competidor</div>
+          <DealerManualBlock onAdd={addComp} year={own.year} allowDifferentYears={allowDifferentYears} />
+          <div style={{ display:'flex', gap:12, flexWrap:'wrap', marginTop:8, fontSize:12, color:'#475569' }}>
+            <label style={{ display:'flex', alignItems:'center', gap:6 }}>
+              <input
+                type="checkbox"
+                checked={allowDifferentYears}
+                onChange={e => {
+                  setAllowDifferentYears(e.target.checked);
+                  setManualNotice('');
+                }}
+              />
+              Permitir otros años modelo
+            </label>
+            <label style={{ display:'flex', alignItems:'center', gap:6 }}>
+              <input
+                type="checkbox"
+                checked={allowDifferentSegments}
+                onChange={e => {
+                  setAllowDifferentSegments(e.target.checked);
+                  setManualNotice('');
+                }}
+              />
+              Permitir otros segmentos
+            </label>
+          </div>
+          {manualNotice ? (
+            <div style={{ marginTop:6, fontSize:11, color:'#b91c1c' }}>{manualNotice}</div>
+          ) : null}
+        </div>
       </div>
 
       {/* Tabla de deltas */}
@@ -549,74 +615,48 @@ export default function DealerPanel(){
         </div>
       ) : null}
 
-      {/* Equipo: diferencias vs base */}
-      {baseRow && comps.length ? (
-        <div style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
-          <div style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', fontWeight:600 }}>Equipo: diferencias vs base</div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:12, padding:10 }}>
-            {comps.map((r:any, idx:number)=>{
-              const diffs = (r as any).__diffs || {};
-              const plus: string[] = Array.isArray(diffs.features_plus)? diffs.features_plus as string[] : [];
-              const minus: string[] = Array.isArray(diffs.features_minus)? diffs.features_minus as string[] : [];
-              return (
-                <div key={idx} style={{ border:'1px solid #f1f5f9', borderRadius:8, padding:10 }}>
-                  <div style={{ fontWeight:600, marginBottom:6, color:'#334155' }}>{vehicleLabel(r)}</div>
-                  <div style={{ display:'flex', gap:12 }}>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:12, color:'#16a34a', marginBottom:4 }}>Ellos no tienen (nosotros sí)</div>
-                      <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                        {minus.length ? minus.map((p,i)=>(<span key={i} style={{ fontSize:11, background:'rgba(22,163,74,0.08)', color:'#166534', border:`1px solid rgba(22,163,74,0.25)`, borderRadius:6, padding:'2px 6px' }}>{p}</span>)) : <span style={{ fontSize:11, color:'#64748b' }}>—</span>}
-                      </div>
-                    </div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:12, color:'#dc2626', marginBottom:4 }}>Ellos sí tienen (nosotros no)</div>
-                      <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                        {plus.length ? plus.map((p,i)=>(<span key={i} style={{ fontSize:11, background:'rgba(220,38,38,0.06)', color:'#991b1b', border:`1px solid rgba(220,38,38,0.25)`, borderRadius:6, padding:'2px 6px' }}>{p}</span>)) : <span style={{ fontSize:11, color:'#64748b' }}>—</span>}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {/* Guía de segmentos cuando hay diferencias de body style */}
-      {baseRow && comps.length ? (() => {
-        const baseSeg = segLabel(baseRow);
-        const diffs = Array.from(new Set(comps.map((r:any)=> segLabel(r)).filter((s)=> s && s!==baseSeg)));
-        if (!diffs.length) return null;
-        const show = [baseSeg, ...diffs];
+      {/* Tabla de equipamiento (pilares) */}
+      {baseRow ? (() => {
+        const rows = [{ row: baseRow, isBase: true }, ...comps.map(r => ({ row: r, isBase: false }))];
+        const pillars = ['seguridad','confort','audio_y_entretenimiento','transmision','energia'];
         return (
-          <div style={{ border:'1px solid #e5e7eb', borderRadius:10, marginTop:12 }}>
-            <div style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', fontWeight:600 }}>
-              Guía rápida de segmentos (comparación entre estilos distintos)
-            </div>
-            <div style={{ padding:10, color:'#334155' }}>
-              <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>
-                Cuando el cliente compara vehículos de segmentos diferentes, conviene explicar pros, uso típico y trade‑offs.
-              </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px,1fr))', gap:12 }}>
-                {show.map((seg)=>{
-                  const info = BODY_GUIDE[seg] || null;
-                  return (
-                    <div key={seg} style={{ border:'1px solid #eef2f7', borderRadius:8, padding:10 }}>
-                      <div style={{ fontWeight:700, marginBottom:4 }}>{seg}</div>
-                      <div style={{ fontSize:12, marginBottom:6 }}>{info?.desc || '—'}</div>
-                      <div style={{ fontSize:12, marginBottom:4 }}><span style={{ fontWeight:600 }}>Ventajas:</span> {(info?.pros||[]).join(' · ') || '—'}</div>
-                      <div style={{ fontSize:12 }}><span style={{ fontWeight:600 }}>¿Cuándo conviene?</span> {(info?.when||[]).join(' · ') || '—'}</div>
-                    </div>
-                  );
-                })}
-              </div>
+          <div style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
+            <div style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', fontWeight:600 }}>Cobertura de equipamiento (0-100)</div>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', minWidth: 800, borderCollapse:'collapse' }}>
+                <thead>
+                  <tr style={{ background:'#f8fafc' }}>
+                    <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Vehículo</th>
+                    {pillars.map(p => (
+                      <th key={p} style={{ textAlign:'center', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>{PILLAR_LABELS[p]}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(({ row, isBase }, idx) => (
+                    <tr key={idx} style={{ background: isBase ? '#f0fdf4' : 'transparent' }}>
+                      <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:isBase?600:500 }}>
+                        {brandLabel(row)} {String(row.model||'')} {row.version ? `– ${row.version}` : ''}
+                      </td>
+                      {pillars.map(p => {
+                        const val = getPillarValue(row, p);
+                        return (
+                          <td key={p} style={{ textAlign:'center', padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
+                            {val != null ? `${Number(val).toFixed(1)} pts` : 'N/D'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         );
       })() : null}
 
-      {/* Charts for desempeño */}
-      <div style={{ display:'grid', gap:16, gridTemplateColumns:'repeat(2, minmax(320px,1fr))', gridAutoRows:'minmax(320px, auto)' }}>
+      {/* Charts: HP y Dimensiones */}
+      <div style={{ display:'grid', gap:16, gridTemplateColumns:'repeat(auto-fit, minmax(320px,1fr))' }}>
         <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
           {EChart && Object.keys(hpPriceOption).length ? (
             <EChart echarts={echarts} option={hpPriceOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
@@ -631,39 +671,19 @@ export default function DealerPanel(){
             <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos de longitud para graficar.</div>
           )}
         </div>
-        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
-          {EChart && Object.keys(screenOption).length ? (
-            <EChart echarts={echarts} option={screenOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
-          ) : (
-            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos de pantalla para graficar.</div>
-          )}
-        </div>
-        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
-          {EChart && Object.keys(safetyOption).length ? (
-            <EChart echarts={echarts} option={safetyOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
-          ) : (
-            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos de seguridad para graficar.</div>
-          )}
-        </div>
-      </div>
-
-      {/* Radar pilares */}
-      <div>
-        {EChart ? <EChart echarts={echarts} option={radarOption} opts={{ renderer: 'svg' }} style={{ height: 360 }} /> : null}
       </div>
 
       {/* Insights (Dealer) */}
       <div style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
         <div className="no-print" style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div style={{ fontWeight:700 }}>Insights</div>
-          <button onClick={genDealer} disabled={loading || !baseRow} style={{ padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor: (loading||!baseRow)?'not-allowed':'pointer', opacity:(loading||!baseRow)?0.6:1 }}>
-            {loading? 'Generando…':'Generar insights'}
+          <div style={{ fontWeight:700 }}>Guion de ventas</div>
+          <button onClick={genDealer} disabled={!baseRow || loading} style={{ padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor: (!baseRow || loading) ? 'not-allowed' : 'pointer', opacity: (!baseRow || loading) ? 0.6 : 1 }}>
+            {loading ? 'Generando…' : 'Generar speech comercial'}
           </button>
         </div>
-        <div style={{ padding:10 }}>
-          {insightsStruct ? (renderStruct(insightsStruct, 'es' as any)) : (
-            <div style={{ color:'#64748b', fontSize:13 }}>Pulsa “Generar insights” para ver highlights del vehículo.</div>
-          )}
+        <div style={{ padding:10, display:'grid', gap:10 }}>
+          {insightsStruct ? renderStruct(insightsStruct, 'es' as any) : null}
+          <div style={{ color:'#64748b', fontSize:13 }}>{insightsNotice}</div>
         </div>
       </div>
 
