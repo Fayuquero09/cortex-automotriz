@@ -549,7 +549,7 @@ export default function DealerPanel(){
 
       {/* Tabla de deltas */}
       {baseRow ? (
-        <div>
+        <div className="print-block">
           <table className="avoid-break" style={{ width:'100%', minWidth: 1100, borderCollapse:'collapse' }}>
             <thead>
               <tr style={{ background:'#f8fafc' }}>
@@ -620,7 +620,7 @@ export default function DealerPanel(){
         const rows = [{ row: baseRow, isBase: true }, ...comps.map(r => ({ row: r, isBase: false }))];
         const pillars = ['seguridad','confort','audio_y_entretenimiento','transmision','energia'];
         return (
-          <div style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
+          <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
             <div style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', fontWeight:600 }}>Cobertura de equipamiento (0-100)</div>
             <div style={{ overflowX:'auto' }}>
               <table style={{ width:'100%', minWidth: 800, borderCollapse:'collapse' }}>
@@ -656,15 +656,15 @@ export default function DealerPanel(){
       })() : null}
 
       {/* Charts: HP y Dimensiones */}
-      <div style={{ display:'grid', gap:16, gridTemplateColumns:'repeat(auto-fit, minmax(320px,1fr))' }}>
-        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
+      <div className="print-block" style={{ display:'grid', gap:16, gridTemplateColumns:'repeat(auto-fit, minmax(320px,1fr))' }}>
+        <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
           {EChart && Object.keys(hpPriceOption).length ? (
             <EChart echarts={echarts} option={hpPriceOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
           ) : (
             <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos suficientes de precio y HP.</div>
           )}
         </div>
-        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
+        <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
           {EChart && Object.keys(lengthOption).length ? (
             <EChart echarts={echarts} option={lengthOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
           ) : (
@@ -674,7 +674,7 @@ export default function DealerPanel(){
       </div>
 
       {/* Insights (Dealer) */}
-      <div style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
+      <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
         <div className="no-print" style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <div style={{ fontWeight:700 }}>Guion de ventas</div>
           <button onClick={genDealer} disabled={!baseRow || loading} style={{ padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor: (!baseRow || loading) ? 'not-allowed' : 'pointer', opacity: (!baseRow || loading) ? 0.6 : 1 }}>
