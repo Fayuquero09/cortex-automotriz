@@ -320,7 +320,7 @@ def _read_text_cached(path: Path) -> _Optional[str]:
     except Exception:
         return None
 
-def _load_prompts_for_lang(lang: str) -> tuple[_Optional[str], _Optional[str]]:
+def _load_prompts_for_lang(lang: str, scope: str | None = None) -> tuple[_Optional[str], _Optional[str]]:
     """Return (system_prompt, user_template) from public/data for a given lang.
 
     Filenames expected:
@@ -330,12 +330,18 @@ def _load_prompts_for_lang(lang: str) -> tuple[_Optional[str], _Optional[str]]:
     lang = (lang or "").strip().lower()
     if lang not in {"es","en","zh"}:
         return None, None
-    name_pairs = [
-        # Preferir prompts estructurados (JSON) para generar acciones accionables
-        (f"prompt_cortex_exec_{lang}_v1.txt", f"user_template_exec_{lang}_v1.txt"),
-        # Fallback a narrativa plana si no existen los anteriores
-        (f"prompt_narrativa_comparativa_{lang}_v1.txt", f"user_template_narrativa_comparativa_{lang}_v1.txt"),
-    ]
+    scope = (scope or "exec").strip().lower()
+    if scope == "dealer_script":
+        name_pairs = [
+            (f"prompt_dealer_script_{lang}_v1.txt", f"user_template_dealer_script_{lang}_v1.txt"),
+        ]
+    else:
+        name_pairs = [
+            # Preferir prompts estructurados (JSON) para generar acciones accionables
+            (f"prompt_cortex_exec_{lang}_v1.txt", f"user_template_exec_{lang}_v1.txt"),
+            # Fallback a narrativa plana si no existen los anteriores
+            (f"prompt_narrativa_comparativa_{lang}_v1.txt", f"user_template_narrativa_comparativa_{lang}_v1.txt"),
+        ]
     for sys_name, usr_name in name_pairs:
         for base in _prompt_search_dirs():
             p_sys = base / sys_name
