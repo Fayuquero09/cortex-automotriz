@@ -62,6 +62,7 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
         />
         <button
           type="button"
+          suppressHydrationWarning
           onClick={()=>{ setManModel(''); setManMake(''); setBrandAlpha(''); setTimeout(()=>manInputRef.current?.focus(), 0); }}
           style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'6px 10px', borderRadius:8, cursor:'pointer' }}
           title="Limpiar"
@@ -73,6 +74,8 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
       <div style={{ display:'flex', gap:6, flexWrap:'wrap', margin:'4px 0' }}>
         {['Todos','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'].map((ch) => (
           <button key={ch}
+            type="button"
+            suppressHydrationWarning
             onClick={()=>setBrandAlpha(ch==='Todos'?'*':ch)}
             style={{ border:'1px solid #e5e7eb', background: (brandAlpha===ch || (ch==='Todos' && brandAlpha==='*')) ? '#eef2ff':'#fff', padding:'2px 6px', borderRadius:6, cursor:'pointer', fontSize:12 }}>
             {ch}
@@ -82,7 +85,7 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
       {brandSugg.length > 0 && (
         <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:4 }}>
           {brandSugg.map((b: string) => (
-            <button key={b} tabIndex={-1} onClick={()=>setManMake(b)} style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'2px 6px', borderRadius:6, cursor:'pointer' }}>{b}</button>
+            <button key={b} type="button" suppressHydrationWarning tabIndex={-1} onClick={()=>setManMake(b)} style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'2px 6px', borderRadius:6, cursor:'pointer' }}>{b}</button>
           ))}
         </div>
       )}
@@ -90,7 +93,7 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
       {manMake && (modelsForMake || []).length > 0 && !manModel && (
         <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:6 }}>
           {(modelsForMake || []).slice(0, 80).map((m: string) => (
-            <button key={m} tabIndex={-1} onClick={()=>setManModel(m)} style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'2px 6px', borderRadius:6, cursor:'pointer' }}>{m}</button>
+            <button key={m} type="button" suppressHydrationWarning tabIndex={-1} onClick={()=>setManModel(m)} style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'2px 6px', borderRadius:6, cursor:'pointer' }}>{m}</button>
           ))}
         </div>
       )}
@@ -98,14 +101,14 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
       {modelSugg.length > 0 && (
         <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:6 }}>
           {modelSugg.map((s: string) => (
-            <button key={s} tabIndex={-1} onClick={()=>setManModel(s)} style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'2px 6px', borderRadius:6, cursor:'pointer' }}>{s}</button>
+            <button key={s} type="button" suppressHydrationWarning tabIndex={-1} onClick={()=>setManModel(s)} style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'2px 6px', borderRadius:6, cursor:'pointer' }}>{s}</button>
           ))}
         </div>
       )}
       {(() => { const q = manModel.trim(); return (list && list.length>0 && q.length>=2); })() && (
         <div style={{ display:'grid', gap:4, marginBottom:6 }}>
           {list.map((r: any, idx: number) => (
-            <button key={idx} tabIndex={-1} onMouseDown={(ev)=>{ ev.preventDefault(); addManual(undefined, r); }} onClick={(ev)=>ev.preventDefault()} title="Agregar" style={{ textAlign:'left', border:'1px solid #e5e7eb', background:(idx===hi?'#eef2ff':'#f8fafc'), padding:'6px 8px', borderRadius:8, cursor:'pointer' }}>
+            <button key={idx} type="button" suppressHydrationWarning tabIndex={-1} onMouseDown={(ev)=>{ ev.preventDefault(); addManual(undefined, r); }} onClick={(ev)=>ev.preventDefault()} title="Agregar" style={{ textAlign:'left', border:'1px solid #e5e7eb', background:(idx===hi?'#eef2ff':'#f8fafc'), padding:'6px 8px', borderRadius:8, cursor:'pointer' }}>
               {vehicleLabel(r)}
             </button>
           ))}
@@ -114,14 +117,14 @@ function ManualBlock({ manModel, setManModel, manMake, ownYear, brandAlpha, setB
       {manVersions.length > 0 && (
         <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:6 }}>
           {manVersions.map((v: string) => (
-            <button key={v} onClick={()=>addManual(v)} style={{ border:'1px solid #e5e7eb', background:'#f8fafc', padding:'4px 8px', borderRadius:14, cursor:'pointer' }}>{v}</button>
+            <button key={v} type="button" suppressHydrationWarning onClick={()=>addManual(v)} style={{ border:'1px solid #e5e7eb', background:'#f8fafc', padding:'4px 8px', borderRadius:14, cursor:'pointer' }}>{v}</button>
           ))}
         </div>
       )}
       {manual.length > 0 && (
         <div style={{ marginTop:4, color:'#64748b' }}>Manuales: {manual.map((m: any,i: number)=> (
           <span key={i} style={{ marginRight:8 }}>
-            {vehicleLabel(m)} <button onClick={()=>removeManual(i)} title="Quitar">×</button>
+            {vehicleLabel(m)} <button type="button" suppressHydrationWarning onClick={()=>removeManual(i)} title="Quitar">×</button>
           </span>
         ))}</div>
       )}
@@ -578,7 +581,7 @@ export default function ComparePanel() {
     setManualNotice('');
     // Si recibimos el renglón directo (de sugerencias), agregamos sin consultar
     if (directRow) {
-      const cand = directRow;
+      const cand = { ...directRow, __allow_zero_sales: true } as Row;
       const candYear = Number(cand?.ano ?? cand?.year ?? NaN);
       if (!filters.includeDifferentYears && own.year && Number(own.year) !== candYear) {
         setManualNotice(`Tu base es ${own.year}; habilita "Incluir años modelo diferentes" para comparar con ${candYear || 'otro año'}.`);
@@ -618,10 +621,11 @@ export default function ComparePanel() {
       setManualNotice(`Tu base es ${own.year}; habilita "Incluir años modelo diferentes" para traer ${candYear || 'otro año'}.`);
       return;
     }
-    const key = keyForRow(cand);
+    const withFlag = { ...cand, __allow_zero_sales: true } as Row;
+    const key = keyForRow(withFlag);
     const exists = manual.some(r => keyForRow(r) === key);
     if (!exists) {
-      setManual(prev => [...prev, cand]);
+      setManual(prev => [...prev, withFlag]);
       restoreDismissed(key);
     }
   };
@@ -2003,7 +2007,7 @@ export default function ComparePanel() {
 
   return (
     <>
-    <section style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff', overflowX:'auto' }}>
+    <section suppressHydrationWarning style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff', overflowX:'auto' }}>
       <div style={{ fontWeight:700, marginBottom:8 }}>Comparar versiones</div>
       <div style={{ marginBottom:10, color:'#64748b', display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
         {ownRow ? (
@@ -2067,6 +2071,7 @@ export default function ComparePanel() {
     <div className="no-print" style={{ margin:'6px 0 12px', display:'flex', justifyContent:'flex-end', gap:8, flexWrap:'wrap' }}>
       <button
         type="button"
+        suppressHydrationWarning
         onClick={exportPdf}
         style={{ padding:'8px 12px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor:'pointer' }}
       >
@@ -2074,6 +2079,7 @@ export default function ComparePanel() {
       </button>
       <button
         type="button"
+        suppressHydrationWarning
         onClick={generateInsights}
         disabled={insightsLoading || !baseRow}
         style={{ padding:'8px 12px', background:'#1d4ed8', color:'#fff', border:'none', borderRadius:8, cursor:(insightsLoading||!baseRow)?'not-allowed':'pointer', opacity:(insightsLoading||!baseRow)?0.6:1 }}
@@ -2122,6 +2128,7 @@ export default function ComparePanel() {
       <div className="no-print" style={{ margin:'8px 0', display:'flex', justifyContent:'flex-end' }}>
         <button
           type="button"
+          suppressHydrationWarning
           onClick={resetDismissed}
           style={{ border:'1px solid #cbd5e1', background:'#fff', color:'#334155', borderRadius:8, padding:'6px 10px', fontSize:12, cursor:'pointer' }}
         >
@@ -2229,6 +2236,7 @@ export default function ComparePanel() {
                     </div>
                     <button
                       type="button"
+                      suppressHydrationWarning
                       onClick={()=>removeCompetitor(r)}
                       title="Quitar competidor"
                       style={{ border:'1px solid #e2e8f0', background:'#fff', color:'#475569', borderRadius:999, width:24, height:24, lineHeight:'21px', textAlign:'center', cursor:'pointer' }}

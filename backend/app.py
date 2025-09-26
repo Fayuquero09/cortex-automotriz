@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 import json
 from datetime import datetime, timedelta
+import re
 from urllib.request import urlopen
 from urllib.error import URLError
 import unicodedata
@@ -403,7 +404,13 @@ def _canon_make(v: Optional[str]) -> Optional[str]:
         return v
     a = _load_aliases()
     vv = str(v).strip().upper()
-    return a["make"].get(vv, vv)
+    # Normalizar separadores para variantes tipo "GM-COMPANY"
+    vv = vv.replace("-", " ").replace("_", " ")
+    vv = re.sub(r"\s+", " ", vv).strip()
+    vv = a["make"].get(vv, vv)
+    if vv in {"GM COMPANY", "GMCOMPANY", "GENERAL MOTORS"}:
+        return "GMC"
+    return vv
 
 def _canon_model(mk: Optional[str], md: Optional[str]) -> Optional[str]:
     if md is None:
@@ -547,7 +554,9 @@ def _options_paths() -> Dict[str, Path]:
         pass
     paths["processed"] = ROOT / "data" / "equipo_veh_limpio_procesado.csv"
     paths["flat"] = ROOT / "data" / "enriched" / "vehiculos_todos_flat.csv"
-    p = ROOT / "data" / "vehiculos-todos.json"
+    p = ROOT / "data" / "vehiculos-todos-augmented.json"
+    if not p.exists():
+        p = ROOT / "data" / "vehiculos-todos.json"
     if not p.exists():
         p = ROOT / "data" / "vehiculos-todos1.json"
     paths["json"] = p
@@ -2701,7 +2710,9 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
             mkset = set()
             for rec in idx["models"].values():
                 for mk in (rec.get("makes") or set()):
-                    mkset.add(str(mk).upper())
+                    mk_norm = _canon_make(str(mk)) or str(mk).strip().upper()
+                    if mk_norm:
+                        mkset.add(mk_norm)
             makes_all = sorted(list(mkset))
     except Exception:
         pass
@@ -2717,7 +2728,10 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
                     t = pd.read_csv(flat, usecols=[c for c in ["make","model","ano"] if True], low_memory=True)
                     t.columns = [str(c).strip().lower() for c in t.columns]
                     if "make" in t.columns:
-                        makes_set.update(t["make"].astype(str).str.upper().dropna().unique().tolist())
+                        for mk in t["make"].astype(str).dropna().unique().tolist():
+                            mk_norm = _canon_make(mk) or str(mk).strip().upper()
+                            if mk_norm:
+                                makes_set.add(mk_norm)
                     if "model" in t.columns:
                         models_set.update(t["model"].astype(str).str.upper().dropna().unique().tolist())
             except Exception:
@@ -2729,7 +2743,10 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
                     t = pd.read_csv(proc, usecols=["make","model","ano"], low_memory=True)
                     t.columns = [str(c).strip().lower() for c in t.columns]
                     if "make" in t.columns:
-                        makes_set.update(t["make"].astype(str).str.upper().dropna().unique().tolist())
+                        for mk in t["make"].astype(str).dropna().unique().tolist():
+                            mk_norm = _canon_make(mk) or str(mk).strip().upper()
+                            if mk_norm:
+                                makes_set.add(mk_norm)
                     if "model" in t.columns:
                         models_set.update(t["model"].astype(str).str.upper().dropna().unique().tolist())
             except Exception:
@@ -2741,7 +2758,10 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
                     t = pd.read_csv(pcat, usecols=["make","model"], low_memory=True)
                     t.columns = [str(c).strip().lower() for c in t.columns]
                     if "make" in t.columns:
-                        makes_set.update(t["make"].astype(str).str.upper().dropna().unique().tolist())
+                        for mk in t["make"].astype(str).dropna().unique().tolist():
+                            mk_norm = _canon_make(mk) or str(mk).strip().upper()
+                            if mk_norm:
+                                makes_set.add(mk_norm)
                     if "model" in t.columns:
                         models_set.update(t["model"].astype(str).str.upper().dropna().unique().tolist())
             except Exception:
@@ -2868,7 +2888,9 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
                         mk_can = _canon_make(mk) or str(mk).strip().upper()
                         if (str(md).strip().upper()==target or _compact(md)==target_c) and ((not make) or (mk_can==make.upper())):
                             if mk:
-                                mf.add(str(mk).strip().upper())
+                                mk_norm = mk_can or _canon_make(mk) or str(mk).strip().upper()
+                                if mk_norm:
+                                    mf.add(mk_norm)
                             try:
                                 years_set.add(int(yr))
                             except Exception:
@@ -5236,6 +5258,16 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
             pass
 
     for c in competitors:
+        allow_zero_sales = False
+        if "__allow_zero_sales" in c:
+            try:
+                allow_zero_sales = bool(c.get("__allow_zero_sales"))
+            except Exception:
+                allow_zero_sales = False
+            try:
+                del c["__allow_zero_sales"]
+            except Exception:
+                pass
         # numeric fallback for comps
         for _c in ("caballos_fuerza","longitud_mm","combinado_kml"):
             _fill_from_model(c, _c)
@@ -5488,7 +5520,7 @@ def post_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Excluir rivales sin ventas (YTD = 0) para evitar ruido en comparaciones
         try:
             sales_ytd = to_num(c.get("ventas_model_ytd"))
-            if sales_ytd is not None and sales_ytd <= 0:
+            if sales_ytd is not None and sales_ytd <= 0 and not allow_zero_sales:
                 continue
         except Exception:
             pass
