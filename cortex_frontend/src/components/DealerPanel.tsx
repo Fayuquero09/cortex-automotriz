@@ -11,6 +11,23 @@ import { brandLabel, vehicleLabel } from '@/lib/vehicleLabels';
 
 type Row = Record<string, any>;
 
+type DealerContextInfo = {
+  id?: string;
+  name?: string;
+  location?: string;
+  contactName?: string;
+  contactPhone?: string;
+};
+
+type DealerStatusInfo = {
+  status?: string;
+  organization_status?: string;
+  blocked?: boolean;
+  dealer_name?: string | null;
+  organization_name?: string | null;
+  brand_name?: string | null;
+};
+
 function num(x: any): number | null {
   if (x === null || x === undefined || (typeof x === 'string' && x.trim() === '')) return null;
   const v = Number(x);
@@ -94,11 +111,17 @@ function DealerManualBlock({ onAdd, year, allowDifferentYears }: { onAdd: (r: Ro
   );
 }
 
-export default function DealerPanel(){
+export default function DealerPanel({ dealerContext, dealerStatus }: { dealerContext?: DealerContextInfo; dealerStatus?: DealerStatusInfo } = {}){
   const { own } = useAppState();
   const { data: cfg } = useSWR<any>('cfg', () => endpoints.config());
   const fuelPrices = cfg?.fuel_prices || {};
-  const ready = !!own.model && !!own.year && (!!own.make || true);
+  const blocked = Boolean(dealerStatus?.blocked);
+  const hasDealerId = Boolean(dealerContext?.id && dealerContext.id.trim());
+  const ready = !blocked && hasDealerId && !!own.model && !!own.year && (!!own.make || true);
+  const dealerNameLabel = dealerContext?.name?.trim() || dealerStatus?.dealer_name || 'Dealer configurado';
+  const dealerLocationLabel = dealerContext?.location?.trim() || '';
+  const dealerContactLabel = dealerContext?.contactName?.trim();
+  const dealerContactPhone = dealerContext?.contactPhone?.trim();
   const { data: ownRows } = useSWR<Row[]>(ready ? ['dealer_own', own.make, own.model, own.year, own.version] : null, async () => {
     const params: Record<string, any> = { make: own.make, model: own.model, year: own.year, limit: 50 };
     const list = await endpoints.catalog(params);
@@ -116,6 +139,10 @@ export default function DealerPanel(){
   const [allowDifferentYears, setAllowDifferentYears] = React.useState<boolean>(false);
   const [allowDifferentSegments, setAllowDifferentSegments] = React.useState<boolean>(false);
   const addComp = async (r: Row) => {
+    if (blocked) {
+      setManualNotice('El acceso del dealer está pausado. Solicita reactivación al superadmin para agregar comparativos.');
+      return;
+    }
     // Regla: mismo año modelo por defecto; permitir diferentes si se activa el toggle
     setManualNotice('');
     try{
@@ -492,60 +519,88 @@ export default function DealerPanel(){
 
   return (
     <section style={{ display:'grid', gap:16 }}>
-      <div className="no-print" style={{ display:'grid', gap:12, gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))' }}>
-        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#f8fafc' }}>
-          <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Vehículo propio</div>
-          {baseRow ? (
-            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-              <div style={{ fontWeight:700, fontSize:16 }}>{brandLabel(baseRow)} {String(baseRow.model||'')}</div>
-              <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:12, color:'#475569' }}>
-                <span>{baseRow.version || 'Versión N/D'}</span>
-                <span>{baseRow.ano ? `MY ${baseRow.ano}` : 'Año N/D'}</span>
-                <span>{propulsionLabel(baseRow)}</span>
-              </div>
-              <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:13 }}>
-                <span>Precio tx: {fmtMoney(baseRow.precio_transaccion ?? baseRow.msrp)}</span>
-                <span>HP: {fmtNum(baseRow.caballos_fuerza)}</span>
-                <span>Equipamiento: {fmtNum(getPillarValue(baseRow, 'seguridad') ?? 0)} pts seguridad</span>
-              </div>
-              <button type="button" onClick={exportPdf} style={{ alignSelf:'flex-start', marginTop:6, padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor:'pointer' }}>Exportar PDF</button>
-            </div>
-          ) : (
-            <div style={{ fontSize:12, color:'#64748b' }}>Selecciona un vehículo en la parte superior para ver detalles.</div>
-          )}
-        </div>
-        <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
-          <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Agregar competidor</div>
-          <DealerManualBlock onAdd={addComp} year={own.year} allowDifferentYears={allowDifferentYears} />
-          <div style={{ display:'flex', gap:12, flexWrap:'wrap', marginTop:8, fontSize:12, color:'#475569' }}>
-            <label style={{ display:'flex', alignItems:'center', gap:6 }}>
-              <input
-                type="checkbox"
-                checked={allowDifferentYears}
-                onChange={e => {
-                  setAllowDifferentYears(e.target.checked);
-                  setManualNotice('');
-                }}
-              />
-              Permitir otros años modelo
-            </label>
-            <label style={{ display:'flex', alignItems:'center', gap:6 }}>
-              <input
-                type="checkbox"
-                checked={allowDifferentSegments}
-                onChange={e => {
-                  setAllowDifferentSegments(e.target.checked);
-                  setManualNotice('');
-                }}
-              />
-              Permitir otros segmentos
-            </label>
-          </div>
-          {manualNotice ? (
-            <div style={{ marginTop:6, fontSize:11, color:'#b91c1c' }}>{manualNotice}</div>
-          ) : null}
-        </div>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12, alignItems:'center', padding:'8px 12px', border:'1px solid #e2e8f0', borderRadius:10, background:'#f8fafc' }}>
+        <span style={{ fontWeight:700 }}>{dealerNameLabel}{dealerLocationLabel ? ` · ${dealerLocationLabel}` : ''}</span>
+        {dealerStatus?.brand_name ? (
+          <span style={{ fontSize:12, color:'#475569' }}>Marca asignada: {dealerStatus.brand_name}</span>
+        ) : null}
+        {dealerStatus?.organization_name ? (
+          <span style={{ fontSize:12, color:'#475569' }}>Organización: {dealerStatus.organization_name}</span>
+        ) : null}
+        {dealerContactLabel ? (
+          <span style={{ fontSize:12, color:'#475569' }}>Asesor: {dealerContactLabel}{dealerContactPhone ? ` · ${dealerContactPhone}` : ''}</span>
+        ) : null}
+        {blocked ? (
+          <span style={{ fontSize:12, color:'#b91c1c', background:'#fee2e2', padding:'2px 8px', borderRadius:999 }}>Acceso pausado</span>
+        ) : hasDealerId ? (
+          <span style={{ fontSize:12, color:'#166534', background:'#dcfce7', padding:'2px 8px', borderRadius:999 }}>Acceso activo</span>
+        ) : null}
       </div>
+
+      {!hasDealerId ? (
+        <div style={{ border:'1px solid #fca5a5', borderRadius:10, padding:16, background:'#fef2f2', color:'#991b1b' }}>
+          Ingresa y guarda el UUID del dealer para habilitar los comparativos y registrar historial.
+        </div>
+      ) : blocked ? (
+        <div style={{ border:'1px solid #f97316', borderRadius:10, padding:16, background:'#fff7ed', color:'#9a3412' }}>
+          El superadmin pausó este dealer u organización. Contacta a tu marca para reactivar el acceso.
+        </div>
+      ) : (
+        <>
+          <div className="no-print" style={{ display:'grid', gap:12, gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))' }}>
+            <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#f8fafc' }}>
+              <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Vehículo propio</div>
+              {baseRow ? (
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  <div style={{ fontWeight:700, fontSize:16 }}>{brandLabel(baseRow)} {String(baseRow.model||'')}</div>
+                  <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:12, color:'#475569' }}>
+                    <span>{baseRow.version || 'Versión N/D'}</span>
+                    <span>{baseRow.ano ? `MY ${baseRow.ano}` : 'Año N/D'}</span>
+                    <span>{propulsionLabel(baseRow)}</span>
+                  </div>
+                  <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:13 }}>
+                    <span>Precio tx: {fmtMoney(baseRow.precio_transaccion ?? baseRow.msrp)}</span>
+                    <span>HP: {fmtNum(baseRow.caballos_fuerza)}</span>
+                    <span>Equipamiento: {fmtNum(getPillarValue(baseRow, 'seguridad') ?? 0)} pts seguridad</span>
+                  </div>
+                  <button type="button" onClick={exportPdf} style={{ alignSelf:'flex-start', marginTop:6, padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor:'pointer' }}>Exportar PDF</button>
+                </div>
+              ) : (
+                <div style={{ fontSize:12, color:'#64748b' }}>Selecciona un vehículo en la parte superior para ver detalles.</div>
+              )}
+            </div>
+            <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
+              <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Agregar competidor</div>
+              <DealerManualBlock onAdd={addComp} year={own.year} allowDifferentYears={allowDifferentYears} />
+              <div style={{ display:'flex', gap:12, flexWrap:'wrap', marginTop:8, fontSize:12, color:'#475569' }}>
+                <label style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <input
+                    type="checkbox"
+                    checked={allowDifferentYears}
+                    onChange={e => {
+                      setAllowDifferentYears(e.target.checked);
+                      setManualNotice('');
+                    }}
+                  />
+                  Permitir otros años modelo
+                </label>
+                <label style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <input
+                    type="checkbox"
+                    checked={allowDifferentSegments}
+                    onChange={e => {
+                      setAllowDifferentSegments(e.target.checked);
+                      setManualNotice('');
+                    }}
+                  />
+                  Permitir otros segmentos
+                </label>
+              </div>
+              {manualNotice ? (
+                <div style={{ marginTop:6, fontSize:11, color:'#b91c1c' }}>{manualNotice}</div>
+              ) : null}
+            </div>
+          </div>
 
       {/* Tabla de deltas */}
       {baseRow ? (
@@ -686,6 +741,8 @@ export default function DealerPanel(){
           <div style={{ color:'#64748b', fontSize:13 }}>{insightsNotice}</div>
         </div>
       </div>
+        </>
+      )}
 
     </section>
   );
