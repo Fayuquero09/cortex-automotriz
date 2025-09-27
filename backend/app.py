@@ -242,6 +242,15 @@ def _normalize_uuid(value: Optional[str]) -> Optional[str]:
         return None
 
 
+def _normalize_address(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = " ".join(str(value).strip().split())
+    if not cleaned:
+        return None
+    return cleaned.lower()
+
+
 def _extract_dealer_id(request: Request, payload: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     header = request.headers.get("x-dealer-id") if request else None
     dealer_id = _normalize_uuid(header)
@@ -347,6 +356,26 @@ class AdminBrandCreate(BaseModel):
     )
     aliases: Optional[List[str]] = Field(
         default=None, description="Lista de sub-marcas o alias contenidos en esta marca"
+    )
+    dealer_limit: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Número máximo de dealers permitidos para esta marca (null = sin límite)",
+    )
+
+
+class AdminBrandUpdate(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    logo_url: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    organization_id: Optional[str] = Field(
+        default=None, description="Nuevo ID de organización a la que pertenece la marca"
+    )
+    dealer_limit: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Número máximo de dealers permitidos para esta marca (null para limpiar)",
     )
 
 
@@ -629,6 +658,22 @@ class AdminDealerUpdate(BaseModel):
     recorded_by: Optional[str] = Field(
         default=None,
         description="UUID del usuario administrador que registra el cambio",
+    )
+
+
+class AdminDealerCreate(BaseModel):
+    brand_id: str = Field(..., description="ID de la marca a la que pertenece el dealer")
+    name: str = Field(..., description="Nombre del dealer o localidad")
+    address: str = Field(..., description="Dirección completa (calle, número, colonia)")
+    city: Optional[str] = Field(default=None, description="Ciudad o localidad")
+    state: Optional[str] = Field(default=None, description="Estado")
+    postal_code: Optional[str] = Field(default=None, description="Código postal")
+    contact_name: Optional[str] = Field(default=None, description="Nombre del asesor de ventas")
+    contact_phone: Optional[str] = Field(default=None, description="Teléfono del asesor de ventas")
+    service_started_at: Optional[datetime] = Field(
+        default=None, description="Fecha de arranque del servicio")
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None, description="Metadata adicional opcional"
     )
 
 
@@ -1658,6 +1703,8 @@ def admin_create_brand(org_id: str, payload: AdminBrandCreate, request: Request)
             if payload.aliases is not None:
                 aliases_clean = [alias.strip() for alias in payload.aliases if alias and alias.strip()]
                 metadata["aliases"] = aliases_clean
+            if payload.dealer_limit is not None:
+                metadata["dealer_limit"] = int(payload.dealer_limit)
 
             try:
                 with conn.cursor() as cur:
@@ -1682,6 +1729,381 @@ def admin_create_brand(org_id: str, payload: AdminBrandCreate, request: Request)
                 raise HTTPException(status_code=409, detail="Slug duplicado dentro de la organización") from exc
 
             return _fetch_admin_org_detail(conn, org_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
+@app.post("/admin/organizations/{org_id}/dealers")
+def admin_create_dealer(org_id: str, payload: AdminDealerCreate, request: Request) -> Dict[str, Any]:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    name = payload.name.strip()
+    address = payload.address.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="El nombre del dealer es obligatorio")
+    if not address:
+        raise HTTPException(status_code=400, detail="La dirección del dealer es obligatoria")
+
+    normalized_address = _normalize_address(address)
+    if not normalized_address:
+        raise HTTPException(status_code=400, detail="La dirección proporcionada no es válida")
+
+    try:
+        with _open_supabase_conn() as conn:
+            brand_row = conn.execute(
+                """
+                select id, organization_id, metadata
+                from cortex.brands
+                where id = %s::uuid
+                """,
+                (payload.brand_id,),
+            ).fetchone()
+            if brand_row is None:
+                raise HTTPException(status_code=404, detail="Marca no encontrada")
+
+            if isinstance(brand_row, Mapping):
+                brand_org_id = str(brand_row["organization_id"])
+                brand_metadata = dict(brand_row.get("metadata") or {})
+                brand_id_str = str(brand_row["id"])
+            else:
+                brand_org_id = str(brand_row[1])
+                brand_metadata = dict(brand_row[2] or {})
+                brand_id_str = str(brand_row[0])
+            if brand_org_id != org_id:
+                raise HTTPException(status_code=400, detail="La marca seleccionada no pertenece a la organización")
+
+            dealer_limit_raw = brand_metadata.get("dealer_limit")
+            dealer_limit: Optional[int]
+            try:
+                dealer_limit = int(dealer_limit_raw) if dealer_limit_raw is not None else None
+            except Exception:
+                dealer_limit = None
+
+            org_row = conn.execute(
+                "select metadata from cortex.organizations where id = %s::uuid",
+                (org_id,),
+            ).fetchone()
+            if org_row is None:
+                raise HTTPException(status_code=404, detail="Organización no encontrada")
+
+            org_metadata = dict(org_row["metadata"] or {})
+            org_kind = str(org_metadata.get("org_type") or "dealer_group").strip().lower()
+
+            existing_rows = conn.execute(
+                """
+                select d.id, d.brand_id
+                from cortex.dealer_locations d
+                where lower(regexp_replace(d.address, '\\s+', ' ', 'g')) = %s
+                """,
+                (normalized_address,),
+            ).fetchall()
+
+            for row in existing_rows:
+                if str(row["brand_id"]) == brand_id_str:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Ya existe un dealer para esta marca en la misma dirección",
+                    )
+
+            distinct_brands = {str(row["brand_id"]) for row in existing_rows}
+            if brand_id_str not in distinct_brands:
+                if len(distinct_brands) >= 2 and org_kind != "oem":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="La dirección ya tiene el máximo de marcas permitidas (2) para un grupo de dealers",
+                    )
+
+            if dealer_limit is not None:
+                brand_dealer_count_row = conn.execute(
+                    "select count(*) from cortex.dealer_locations where brand_id = %s::uuid",
+                    (payload.brand_id,),
+                ).fetchone()
+                if isinstance(brand_dealer_count_row, Mapping):
+                    try:
+                        brand_dealer_count = int(next(iter(brand_dealer_count_row.values())))
+                    except StopIteration:
+                        brand_dealer_count = 0
+                else:
+                    brand_dealer_count = int(brand_dealer_count_row[0])
+                if brand_dealer_count >= dealer_limit:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Se alcanzó el límite de dealers permitidos para esta marca",
+                    )
+
+            metadata = dict(payload.metadata or {})
+            location_data = {
+                key: value
+                for key, value in {
+                    "city": payload.city.strip() if payload.city else None,
+                    "state": payload.state.strip() if payload.state else None,
+                    "postal_code": payload.postal_code.strip() if payload.postal_code else None,
+                }.items()
+                if value
+            }
+            if location_data:
+                existing_location = metadata.get("location")
+                if isinstance(existing_location, dict):
+                    merged = dict(existing_location)
+                    merged.update(location_data)
+                    metadata["location"] = merged
+                else:
+                    metadata["location"] = location_data
+
+            contact_data = {
+                key: value
+                for key, value in {
+                    "name": payload.contact_name.strip() if payload.contact_name else None,
+                    "phone": payload.contact_phone.strip() if payload.contact_phone else None,
+                }.items()
+                if value
+            }
+            if contact_data:
+                metadata["sales_contact"] = contact_data
+
+            metadata["normalized_address"] = normalized_address
+
+            recorded_by = _normalize_uuid(request.headers.get("x-admin-user-id"))
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into cortex.dealer_locations (
+                        brand_id,
+                        name,
+                        address,
+                        metadata,
+                        status,
+                        service_started_at
+                    )
+                    values (%s::uuid, %s, %s, %s::jsonb, 'active', %s)
+                    returning id
+                    """,
+                    (
+                        payload.brand_id,
+                        name,
+                        address,
+                        json.dumps(metadata),
+                        payload.service_started_at,
+                    ),
+                )
+                new_row = cur.fetchone()
+                if not new_row:
+                    raise HTTPException(status_code=500, detail="No se pudo crear el dealer")
+
+                dealer_id = str(new_row["id" if isinstance(new_row, dict) else 0])
+
+                cur.execute(
+                    """
+                    insert into cortex.dealer_billing_events (
+                        dealer_id, event_type, notes, metadata, recorded_by
+                    )
+                    values (%s::uuid, 'activation', %s, %s::jsonb, %s::uuid)
+                    """,
+                    (
+                        dealer_id,
+                        "Alta de dealer desde panel",
+                        json.dumps({"source": "admin_create_dealer"}),
+                        recorded_by,
+                    ),
+                )
+
+            conn.commit()
+            detail = _fetch_admin_org_detail(conn, org_id)
+            detail["dealer_billing"] = {
+                "dealer_id": dealer_id,
+                "events": _fetch_dealer_billing_events(conn, dealer_id, limit=50),
+            }
+            return detail
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
+@app.get("/admin/brands")
+def admin_list_brands(request: Request) -> Dict[str, Any]:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+    sql = """
+        select
+            b.id,
+            b.name,
+            b.slug,
+            b.logo_url,
+            b.organization_id,
+            o.name as organization_name,
+            b.metadata,
+            b.created_at,
+            b.updated_at,
+            count(d.id) as dealer_count
+        from cortex.brands b
+        join cortex.organizations o on o.id = b.organization_id
+        left join cortex.dealer_locations d on d.brand_id = b.id
+        group by b.id, o.name
+        order by b.name
+    """
+    try:
+        with _open_supabase_conn() as conn:
+            rows = conn.execute(sql).fetchall()
+            return {"brands": _rows_to_json(rows)}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
+@app.patch("/admin/brands/{brand_id}")
+def admin_update_brand(brand_id: str, payload: AdminBrandUpdate, request: Request) -> Dict[str, Any]:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+    if (
+        payload.name is None
+        and payload.slug is None
+        and payload.logo_url is None
+        and payload.metadata is None
+        and payload.organization_id is None
+        and "dealer_limit" not in payload.model_fields_set
+    ):
+        raise HTTPException(status_code=400, detail="No hay cambios solicitados")
+
+    try:
+        with _open_supabase_conn() as conn:
+            brand_row = conn.execute(
+                """
+                select id, name, slug, organization_id, metadata
+                from cortex.brands
+                where id = %s::uuid
+                """,
+                (brand_id,),
+            ).fetchone()
+            if brand_row is None:
+                raise HTTPException(status_code=404, detail="Marca no encontrada")
+
+            if isinstance(brand_row, dict):
+                current_org_id = str(brand_row["organization_id"])
+                brand_metadata = dict(brand_row.get("metadata") or {})
+            else:
+                current_org_id = str(brand_row[3])
+                brand_metadata = dict(brand_row[4] or {})
+
+            new_org_id: Optional[str] = None
+            updates: List[str] = []
+            params: List[Any] = []
+            metadata_updated = False
+
+            if payload.name is not None:
+                name = payload.name.strip()
+                if not name:
+                    raise HTTPException(status_code=400, detail="El nombre no puede estar vacío")
+                updates.append("name = %s")
+                params.append(name)
+
+            if payload.slug is not None:
+                base_slug = payload.slug.strip().lower()
+                if not base_slug and payload.name:
+                    base_slug = _slugify(payload.name)
+                if not base_slug:
+                    raise HTTPException(status_code=400, detail="Slug inválido")
+                unique_slug = _ensure_unique_brand_slug(conn, current_org_id, base_slug)
+                updates.append("slug = %s")
+                params.append(unique_slug)
+
+            if payload.logo_url is not None:
+                updates.append("logo_url = %s")
+                params.append(payload.logo_url)
+
+            if payload.metadata is not None:
+                brand_metadata = dict(payload.metadata)
+                metadata_updated = True
+
+            if "dealer_limit" in payload.model_fields_set:
+                metadata_updated = True
+                if payload.dealer_limit is not None:
+                    brand_metadata["dealer_limit"] = int(payload.dealer_limit)
+                else:
+                    brand_metadata.pop("dealer_limit", None)
+
+            if payload.organization_id is not None:
+                target_org_id = str(payload.organization_id)
+                if target_org_id != current_org_id:
+                    row = conn.execute(
+                        "select id from cortex.organizations where id = %s::uuid",
+                        (target_org_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise HTTPException(status_code=404, detail="Organización destino no encontrada")
+                    updates.append("organization_id = %s::uuid")
+                    params.append(target_org_id)
+                    new_org_id = target_org_id
+
+            if metadata_updated:
+                updates.append("metadata = %s::jsonb")
+                params.append(json.dumps(brand_metadata))
+
+            if not updates:
+                return {"brand": _rows_to_json([brand_row])[0], "previous_org_id": current_org_id}
+
+            updates.append("updated_at = now()")
+            set_clause = ", ".join(updates)
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"update cortex.brands set {set_clause} where id = %s::uuid",
+                    (*params, brand_id),
+                )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Marca no encontrada")
+
+                if new_org_id is not None:
+                    cur.execute(
+                        """
+                        update cortex.app_users
+                        set organization_id = %s::uuid, updated_at = now()
+                        where brand_id = %s::uuid
+                        """,
+                        (new_org_id, brand_id),
+                    )
+
+            conn.commit()
+
+            brand_detail = conn.execute(
+                """
+                select
+                    b.id,
+                    b.name,
+                    b.slug,
+                    b.logo_url,
+                    b.organization_id,
+                    o.name as organization_name,
+                    b.metadata,
+                    b.created_at,
+                    b.updated_at,
+                    count(d.id) as dealer_count
+                from cortex.brands b
+                join cortex.organizations o on o.id = b.organization_id
+                left join cortex.dealer_locations d on d.brand_id = b.id
+                where b.id = %s::uuid
+                group by b.id, o.name
+                """,
+                (brand_id,),
+            ).fetchone()
+
+            response: Dict[str, Any] = {
+                "brand": _rows_to_json([brand_detail])[0] if brand_detail else {"id": brand_id},
+                "previous_org_id": current_org_id,
+            }
+            if new_org_id is not None:
+                response["new_org_id"] = new_org_id
+                response["organization"] = _fetch_admin_org_detail(conn, new_org_id)
+
+            return response
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001

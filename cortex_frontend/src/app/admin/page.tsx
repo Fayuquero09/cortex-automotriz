@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react';
-import useSWR from 'swr';
+import useSWR, { mutate as globalMutate } from 'swr';
 import { endpoints } from '@/lib/api';
 
 const SUPERADMIN_TOKEN_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_SUPERADMIN_TOKEN);
@@ -101,6 +101,23 @@ type DealerSummary = {
     paused: number;
   };
   rows: DealerSummaryRow[];
+};
+
+type AdminBrand = {
+  id: string;
+  name: string;
+  slug: string;
+  logo_url?: string | null;
+  metadata?: Record<string, any> | null;
+  organization_id: string;
+  organization_name: string;
+  dealer_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type AdminBrandListResponse = {
+  brands: AdminBrand[];
 };
 
 type FeatureLevel = 'none' | 'view' | 'edit';
@@ -275,14 +292,25 @@ export default function AdminPage(): React.JSX.Element {
   const [updatingPackage, setUpdatingPackage] = React.useState(false);
   const [updateError, setUpdateError] = React.useState<string>('');
   const [showBrandForm, setShowBrandForm] = React.useState(false);
-  const [brandForm, setBrandForm] = React.useState({ name: '', slug: '', logoUrl: '', aliases: '' });
+  const [brandForm, setBrandForm] = React.useState({ name: '', slug: '', logoUrl: '', aliases: '', dealerLimit: '' });
   const [brandLoading, setBrandLoading] = React.useState(false);
   const [brandError, setBrandError] = React.useState('');
+  const [brandAssignSelection, setBrandAssignSelection] = React.useState({ brandId: '', orgId: '' });
+  const [brandAssignLoading, setBrandAssignLoading] = React.useState(false);
+  const [brandAssignError, setBrandAssignError] = React.useState('');
+  const [brandTransferLoading, setBrandTransferLoading] = React.useState<string | null>(null);
+  const [brandTransferError, setBrandTransferError] = React.useState('');
+  const [brandTransferDraft, setBrandTransferDraft] = React.useState<Record<string, string>>({});
+  const [brandLimitDrafts, setBrandLimitDrafts] = React.useState<Record<string, string>>({});
+  const [brandLimitSaving, setBrandLimitSaving] = React.useState<string | null>(null);
+  const [brandLimitError, setBrandLimitError] = React.useState('');
   const [showOrgForm, setShowOrgForm] = React.useState(false);
   const [orgForm, setOrgForm] = React.useState<OrgFormState>({ ...emptyOrgForm });
   const [orgLoading, setOrgLoading] = React.useState(false);
   const [orgError, setOrgError] = React.useState('');
   const [orgSuccess, setOrgSuccess] = React.useState('');
+  const [orgMetadataLoading, setOrgMetadataLoading] = React.useState(false);
+  const [orgMetadataError, setOrgMetadataError] = React.useState('');
   const [userFeatureLoading, setUserFeatureLoading] = React.useState<string | null>(null);
   const [userFeatureError, setUserFeatureError] = React.useState('');
   const [statusLoading, setStatusLoading] = React.useState(false);
@@ -291,6 +319,21 @@ export default function AdminPage(): React.JSX.Element {
   const [deleteError, setDeleteError] = React.useState('');
   const [dealerStatusLoading, setDealerStatusLoading] = React.useState<string | null>(null);
   const [dealerStatusError, setDealerStatusError] = React.useState('');
+  const [showDealerForm, setShowDealerForm] = React.useState(false);
+  const [dealerForm, setDealerForm] = React.useState({
+    brandId: '',
+    name: '',
+    address: '',
+    city: '',
+    state: '',
+    postalCode: '',
+    contactName: '',
+    contactPhone: '',
+    serviceStartedAt: '',
+  });
+  const [dealerError, setDealerError] = React.useState('');
+  const [dealerLoading, setDealerLoading] = React.useState(false);
+  const [dealerSuccess, setDealerSuccess] = React.useState('');
   const [billingPanel, setBillingPanel] = React.useState<{ dealer: DealerInfo; events: DealerBillingEvent[] } | null>(null);
   const [billingLoading, setBillingLoading] = React.useState(false);
   const [billingError, setBillingError] = React.useState('');
@@ -316,6 +359,29 @@ export default function AdminPage(): React.JSX.Element {
     setDealerStatusError('');
     setBillingPanel(null);
     setBillingError('');
+    setBrandTransferDraft({});
+    setBrandTransferError('');
+    setBrandAssignError('');
+    setBrandLimitDrafts({});
+    setBrandLimitError('');
+    setBrandLimitSaving(null);
+    setOrgMetadataLoading(false);
+    setOrgMetadataError('');
+    setShowDealerForm(false);
+    setDealerError('');
+    setDealerLoading(false);
+    setDealerSuccess('');
+    setDealerForm({
+      brandId: '',
+      name: '',
+      address: '',
+      city: '',
+      state: '',
+      postalCode: '',
+      contactName: '',
+      contactPhone: '',
+      serviceStartedAt: '',
+    });
   }, [selectedOrg]);
 
   React.useEffect(() => {
@@ -328,6 +394,14 @@ export default function AdminPage(): React.JSX.Element {
     } catch {}
   }, []);
 
+  React.useEffect(() => {
+    if (!selectedOrg) return;
+    setBrandAssignSelection((prev) => {
+      if (prev.orgId) return prev;
+      return { ...prev, orgId: selectedOrg };
+    });
+  }, [selectedOrg]);
+
   const {
     data: orgDetail,
     error: detailError,
@@ -337,10 +411,83 @@ export default function AdminPage(): React.JSX.Element {
     selectedOrg ? ['admin_org', selectedOrg] : null,
     () => endpoints.adminOrganization(selectedOrg as string)
   );
+  const { data: brandPool, error: brandPoolError, mutate: mutateBrandPool } = useSWR<AdminBrandListResponse>('admin_brands', endpoints.adminBrands);
 
   const dealerSummaryTotals = orgDetail?.dealer_summary?.totals;
   const dealerSummaryRows = orgDetail?.dealer_summary?.rows ?? [];
   const overdueDealers = dealerSummaryRows.filter((row) => (row.days_since_payment ?? 0) > 30).length;
+  const organizations = data?.organizations ?? [];
+  const availableBrands = React.useMemo(() => {
+    if (!brandPool?.brands) return [] as AdminBrand[];
+    const sorted = [...brandPool.brands];
+    sorted.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    return sorted;
+  }, [brandPool]);
+  const selectedAssignBrand = React.useMemo(() => {
+    if (!brandAssignSelection.brandId || !brandPool?.brands) return undefined;
+    return brandPool.brands.find((item) => item.id === brandAssignSelection.brandId);
+  }, [brandAssignSelection.brandId, brandPool]);
+  const getBrandDealerLimit = React.useCallback((meta?: Record<string, any> | null): number | null => {
+    if (!meta) return null;
+    const raw = (meta as any).dealer_limit;
+    if (raw === undefined || raw === null || raw === '') return null;
+    const num = Number(raw);
+    return Number.isFinite(num) && num >= 0 ? Math.floor(num) : null;
+  }, []);
+
+  React.useEffect(() => {
+    if (!orgDetail?.brands?.length) {
+      return;
+    }
+    const defaultBrand = orgDetail.brands.find((brand) => {
+      const limit = getBrandDealerLimit(brand.metadata ?? null);
+      if (limit == null) return true;
+      return (brand.dealer_count || 0) < limit;
+    }) ?? orgDetail.brands[0];
+    const defaultBrandId = defaultBrand?.id ?? '';
+    setDealerForm((prev) => {
+      if (prev.brandId) return prev;
+      return { ...prev, brandId: defaultBrandId };
+    });
+  }, [orgDetail?.brands, getBrandDealerLimit]);
+
+  const selectedDealerBrand = React.useMemo(() => {
+    if (!orgDetail?.brands?.length) return undefined;
+    return orgDetail.brands.find((brand) => brand.id === dealerForm.brandId) ?? orgDetail.brands[0];
+  }, [orgDetail?.brands, dealerForm.brandId]);
+  const selectedDealerBrandLimit = React.useMemo(() => {
+    return getBrandDealerLimit(selectedDealerBrand?.metadata ?? null);
+  }, [selectedDealerBrand, getBrandDealerLimit]);
+  const selectedDealerBrandRemaining = React.useMemo(() => {
+    if (selectedDealerBrandLimit == null || !selectedDealerBrand) return null;
+    const remaining = selectedDealerBrandLimit - (selectedDealerBrand.dealer_count || 0);
+    return remaining;
+  }, [selectedDealerBrandLimit, selectedDealerBrand]);
+  const selectedDealerBrandLimitReached = React.useMemo(() => {
+    if (selectedDealerBrandRemaining == null) return false;
+    return selectedDealerBrandRemaining <= 0;
+  }, [selectedDealerBrandRemaining]);
+
+  const resetDealerForm = React.useCallback(() => {
+    const defaultBrand = orgDetail?.brands?.find((brand) => {
+      const limit = getBrandDealerLimit(brand.metadata ?? null);
+      if (limit == null) return true;
+      return (brand.dealer_count || 0) < limit;
+    }) ?? orgDetail?.brands?.[0];
+    const defaultBrandId = defaultBrand?.id ?? '';
+    setDealerForm({
+      brandId: defaultBrandId,
+      name: '',
+      address: '',
+      city: '',
+      state: '',
+      postalCode: '',
+      contactName: '',
+      contactPhone: '',
+      serviceStartedAt: '',
+    });
+    setDealerError('');
+  }, [orgDetail?.brands, getBrandDealerLimit]);
 
   const handlePackageChange = async (nextValue: string) => {
     if (!selectedOrg || !orgDetail) return;
@@ -355,6 +502,24 @@ export default function AdminPage(): React.JSX.Element {
       setUpdateError(message);
     } finally {
       setUpdatingPackage(false);
+    }
+  };
+
+  const handleOrgTypeChange = async (nextValue: string) => {
+    if (!selectedOrg || !orgDetail) return;
+    const currentType = String((orgDetail.organization.metadata as any)?.org_type || 'dealer_group');
+    if (currentType === nextValue) return;
+    setOrgMetadataLoading(true);
+    setOrgMetadataError('');
+    try {
+      const metadata = { ...(orgDetail.organization.metadata || {}), org_type: nextValue };
+      await endpoints.adminUpdateOrganization(selectedOrg, { metadata });
+      await Promise.all([mutateOrg(), mutateOverview()]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo actualizar el tipo de organización';
+      setOrgMetadataError(message);
+    } finally {
+      setOrgMetadataLoading(false);
     }
   };
 
@@ -379,10 +544,19 @@ export default function AdminPage(): React.JSX.Element {
         .map((alias) => alias.trim())
         .filter((alias) => alias.length > 0);
       if (aliases.length) payload.aliases = aliases;
+      if (brandForm.dealerLimit.trim()) {
+        const limitValue = Number(brandForm.dealerLimit.trim());
+        if (!Number.isFinite(limitValue) || limitValue < 0) {
+          setBrandLoading(false);
+          setBrandError('El límite de dealers debe ser un número mayor o igual a 0');
+          return;
+        }
+        payload.dealer_limit = Math.floor(limitValue);
+      }
 
       await endpoints.adminCreateBrand(selectedOrg, payload);
       await Promise.all([mutateOrg(), mutateOverview()]);
-      setBrandForm({ name: '', slug: '', logoUrl: '', aliases: '' });
+      setBrandForm({ name: '', slug: '', logoUrl: '', aliases: '', dealerLimit: '' });
       setShowBrandForm(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'No se pudo crear la marca';
@@ -402,9 +576,237 @@ export default function AdminPage(): React.JSX.Element {
     if (showBrandForm) {
       cancelBrandForm();
     } else {
-      setBrandForm({ name: '', slug: '', logoUrl: '', aliases: '' });
+      setBrandForm({ name: '', slug: '', logoUrl: '', aliases: '', dealerLimit: '' });
       setBrandError('');
       setShowBrandForm(true);
+    }
+  };
+
+  const submitAssignExistingBrand = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!brandAssignSelection.brandId) {
+      setBrandAssignError('Selecciona una marca a mover');
+      return;
+    }
+    if (!brandAssignSelection.orgId) {
+      setBrandAssignError('Selecciona la organización destino');
+      return;
+    }
+    const brandInfo = brandPool?.brands?.find((item) => item.id === brandAssignSelection.brandId);
+    if (!brandInfo) {
+      setBrandAssignError('Marca no encontrada');
+      return;
+    }
+    if (brandInfo.organization_id === brandAssignSelection.orgId) {
+      setBrandAssignError('La marca ya pertenece a esa organización');
+      return;
+    }
+
+    setBrandAssignLoading(true);
+    setBrandAssignError('');
+    try {
+      const response = await endpoints.adminUpdateBrand(brandAssignSelection.brandId, {
+        organization_id: brandAssignSelection.orgId,
+      });
+      const tasks: Promise<unknown>[] = [mutateBrandPool(), mutateOverview()];
+      if (
+        selectedOrg
+        && (brandInfo.organization_id === selectedOrg || brandAssignSelection.orgId === selectedOrg)
+      ) {
+        tasks.push(mutateOrg());
+      }
+      if (brandInfo.organization_id) {
+        tasks.push(globalMutate(['admin_org', brandInfo.organization_id]));
+      }
+      const newOrgId = (response as any)?.new_org_id ?? brandAssignSelection.orgId;
+      if (newOrgId) {
+        tasks.push(globalMutate(['admin_org', newOrgId]));
+      }
+      await Promise.all(tasks);
+      setBrandAssignSelection((prev) => ({ ...prev, brandId: '' }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo reasignar la marca';
+      setBrandAssignError(message);
+    } finally {
+      setBrandAssignLoading(false);
+    }
+  };
+
+  const handleBrandTransfer = async (brand: BrandInfo, targetOrgId: string) => {
+    if (!targetOrgId || targetOrgId === selectedOrg) {
+      setBrandTransferDraft((prev) => {
+        const next = { ...prev };
+        delete next[brand.id];
+        return next;
+      });
+      return;
+    }
+    const targetOrg = organizations.find((org) => org.id === targetOrgId);
+    const ok = typeof window !== 'undefined'
+      ? window.confirm(`¿Mover ${brand.name} a ${targetOrg?.name ?? 'otra organización'}?`)
+      : true;
+    if (!ok) {
+      setBrandTransferDraft((prev) => {
+        const next = { ...prev };
+        delete next[brand.id];
+        return next;
+      });
+      return;
+    }
+
+    setBrandTransferLoading(brand.id);
+    setBrandTransferError('');
+    try {
+      const response = await endpoints.adminUpdateBrand(brand.id, { organization_id: targetOrgId });
+      const tasks: Promise<unknown>[] = [mutateBrandPool(), mutateOverview()];
+      if (selectedOrg) {
+        tasks.push(mutateOrg());
+      }
+      const previousOrgId = (response as any)?.previous_org_id ?? selectedOrg;
+      const newOrgId = (response as any)?.new_org_id ?? targetOrgId;
+      if (previousOrgId) {
+        tasks.push(globalMutate(['admin_org', previousOrgId]));
+      }
+      if (newOrgId) {
+        tasks.push(globalMutate(['admin_org', newOrgId]));
+      }
+      await Promise.all(tasks);
+      setBrandTransferDraft((prev) => {
+        const next = { ...prev };
+        delete next[brand.id];
+        return next;
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo mover la marca';
+      setBrandTransferError(message);
+      setBrandTransferDraft((prev) => {
+        const next = { ...prev };
+        delete next[brand.id];
+        return next;
+      });
+    } finally {
+      setBrandTransferLoading(null);
+    }
+  };
+
+  const handleBrandLimitChange = (brandId: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setBrandLimitDrafts((prev) => ({ ...prev, [brandId]: value }));
+    setBrandLimitError('');
+  };
+
+  const saveBrandLimit = async (brand: BrandInfo) => {
+    const rawDraft = brandLimitDrafts[brand.id] ?? '';
+    const trimmed = rawDraft.trim();
+    let limitValue: number | null;
+    if (!trimmed) {
+      limitValue = null;
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setBrandLimitError('El límite de dealers debe ser un número mayor o igual a 0');
+        return;
+      }
+      limitValue = Math.floor(parsed);
+    }
+    setBrandLimitSaving(brand.id);
+    setBrandLimitError('');
+    try {
+      await endpoints.adminUpdateBrand(brand.id, { dealer_limit: limitValue });
+      await Promise.all([mutateOrg(), mutateOverview(), mutateBrandPool()]);
+      setBrandLimitDrafts((prev) => {
+        const next = { ...prev };
+        delete next[brand.id];
+        return next;
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo actualizar el límite de dealers';
+      setBrandLimitError(message);
+    } finally {
+      setBrandLimitSaving(null);
+    }
+  };
+
+  const toggleDealerForm = () => {
+    if (showDealerForm) {
+      setShowDealerForm(false);
+      resetDealerForm();
+    } else {
+      setDealerSuccess('');
+      resetDealerForm();
+      setShowDealerForm(true);
+    }
+  };
+
+  const handleDealerField = (field: keyof typeof dealerForm) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const value = event.target.value;
+    setDealerForm((prev) => ({ ...prev, [field]: value }));
+    setDealerError('');
+    if (field === 'brandId') {
+      setDealerSuccess('');
+    }
+  };
+
+  const submitDealer = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedOrg) {
+      setDealerError('Selecciona una organización');
+      return;
+    }
+    if (!dealerForm.brandId) {
+      setDealerError('Selecciona la marca a la que pertenece el dealer');
+      return;
+    }
+    if (!dealerForm.name.trim()) {
+      setDealerError('El nombre del dealer es obligatorio');
+      return;
+    }
+    if (!dealerForm.address.trim()) {
+      setDealerError('La dirección es obligatoria');
+      return;
+    }
+    const brandInfo = orgDetail?.brands?.find((brand) => brand.id === dealerForm.brandId);
+    const brandLimit = getBrandDealerLimit(brandInfo?.metadata ?? null);
+    if (brandLimit != null && (brandInfo?.dealer_count || 0) >= brandLimit) {
+      setDealerError('Esta marca ya alcanzó el límite de dealers permitidos. Ajusta el límite antes de agregar más.');
+      return;
+    }
+    setDealerLoading(true);
+    setDealerError('');
+    setDealerSuccess('');
+    try {
+      const payload: Record<string, any> = {
+        brand_id: dealerForm.brandId,
+        name: dealerForm.name.trim(),
+        address: dealerForm.address.trim(),
+      };
+      if (dealerForm.city.trim()) payload.city = dealerForm.city.trim();
+      if (dealerForm.state.trim()) payload.state = dealerForm.state.trim();
+      if (dealerForm.postalCode.trim()) payload.postal_code = dealerForm.postalCode.trim();
+      if (dealerForm.contactName.trim()) payload.contact_name = dealerForm.contactName.trim();
+      if (dealerForm.contactPhone.trim()) payload.contact_phone = dealerForm.contactPhone.trim();
+      if (dealerForm.serviceStartedAt) {
+        try {
+          payload.service_started_at = new Date(`${dealerForm.serviceStartedAt}T00:00:00`).toISOString();
+        } catch {
+          payload.service_started_at = undefined;
+        }
+      }
+
+      const response = await endpoints.adminCreateDealer(selectedOrg, payload);
+      await Promise.all([mutateOrg(response as AdminOrganizationResponse, { revalidate: false }), mutateOverview()]);
+      const dealerId = (response as any)?.dealer_billing?.dealer_id as string | undefined;
+      if (dealerId) {
+        await mutateOrg();
+      }
+      setDealerSuccess('Dealer creado correctamente.');
+      resetDealerForm();
+      setShowDealerForm(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo crear el dealer';
+      setDealerError(message);
+    } finally {
+      setDealerLoading(false);
     }
   };
 
@@ -1025,8 +1427,23 @@ export default function AdminPage(): React.JSX.Element {
                       <option value="black_ops">Black Ops</option>
                     </select>
                   </label>
+                  <label style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Tipo de organización:
+                    <select
+                      value={String((orgDetail.organization.metadata as any)?.org_type || 'dealer_group')}
+                      onChange={(event) => handleOrgTypeChange(event.target.value)}
+                      disabled={orgMetadataLoading}
+                      style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                    >
+                      <option value="dealer_group">Grupo de dealers</option>
+                      <option value="oem">OEM / Marca</option>
+                    </select>
+                  </label>
                   {updatingPackage ? (
                     <span style={{ fontSize: 12, color: '#2563eb' }}>Guardando...</span>
+                  ) : null}
+                  {orgMetadataLoading ? (
+                    <span style={{ fontSize: 12, color: '#047857' }}>Actualizando tipo...</span>
                   ) : null}
                   <button
                     onClick={() => updateOrgStatus(orgDetail.organization.status === 'paused' ? 'resume' : 'pause')}
@@ -1065,6 +1482,9 @@ export default function AdminPage(): React.JSX.Element {
                 </div>
                 {updateError ? (
                   <p style={{ marginTop: 8, fontSize: 12, color: '#dc2626' }}>{updateError}</p>
+                ) : null}
+                {orgMetadataError ? (
+                  <p style={{ marginTop: 4, fontSize: 12, color: '#dc2626' }}>{orgMetadataError}</p>
                 ) : null}
                 {statusError ? (
                   <p style={{ marginTop: 4, fontSize: 12, color: '#dc2626' }}>{statusError}</p>
@@ -1166,6 +1586,20 @@ export default function AdminPage(): React.JSX.Element {
                         Usa esto para listar marcas que dependen de este grupo u OEM (ejemplo: Ford, Lincoln).
                       </span>
                     </div>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <label style={{ fontSize: 13, fontWeight: 600 }}>Límite de dealers (opcional)</label>
+                      <input
+                        value={brandForm.dealerLimit}
+                        onChange={(event) => setBrandForm((prev) => ({ ...prev, dealerLimit: event.target.value }))}
+                        placeholder="Ej. 55"
+                        type="number"
+                        min={0}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>
+                        Déjalo en blanco para permitir dealers ilimitados.
+                      </span>
+                    </div>
                     {brandError ? (
                       <p style={{ fontSize: 12, color: '#dc2626' }}>{brandError}</p>
                     ) : null}
@@ -1195,39 +1629,226 @@ export default function AdminPage(): React.JSX.Element {
                     </div>
                   </form>
                 ) : null}
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f8fafc', marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Asignar marca existente</div>
+                  {brandPoolError ? (
+                    <p style={{ fontSize: 12, color: '#dc2626' }}>
+                      No se pudieron cargar las marcas globales:{' '}
+                      {brandPoolError instanceof Error ? brandPoolError.message : String(brandPoolError)}
+                    </p>
+                  ) : null}
+                  <form onSubmit={submitAssignExistingBrand} style={{ display: 'grid', gap: 12 }}>
+                    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Marca disponible
+                        <select
+                          value={brandAssignSelection.brandId}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setBrandAssignSelection((prev) => ({ ...prev, brandId: value }));
+                            setBrandAssignError('');
+                          }}
+                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                        >
+                          <option value="">Selecciona marca</option>
+                          {availableBrands.map((brand) => (
+                            <option key={brand.id} value={brand.id}>
+                              {brand.name} · actual: {brand.organization_name || 'Sin organización'}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Organización destino
+                        <select
+                          value={brandAssignSelection.orgId}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setBrandAssignSelection((prev) => ({ ...prev, orgId: value }));
+                            setBrandAssignError('');
+                          }}
+                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                        >
+                          <option value="">Selecciona organización</option>
+                          {organizations.map((org) => (
+                            <option key={org.id} value={org.id}>
+                              {org.name}{org.id === selectedOrg ? ' (actual)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    {selectedAssignBrand ? (
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>
+                        Actualmente en: {selectedAssignBrand.organization_name || 'Sin organización'}
+                      </span>
+                    ) : null}
+                    {brandAssignError ? (
+                      <p style={{ fontSize: 12, color: '#dc2626' }}>{brandAssignError}</p>
+                    ) : null}
+                    <div>
+                      <button
+                        type="submit"
+                        disabled={
+                          brandAssignLoading
+                          || !brandAssignSelection.brandId
+                          || !brandAssignSelection.orgId
+                        }
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: 'none',
+                          background: brandAssignLoading ? '#cbd5f5' : '#1d4ed8',
+                          color: '#fff',
+                          fontWeight: 600,
+                          cursor: brandAssignLoading ? 'default' : 'pointer',
+                        }}
+                      >
+                        {brandAssignLoading ? 'Moviendo…' : 'Mover marca seleccionada'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr style={{ background: '#f3f4f6', textAlign: 'left' }}>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Nombre</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Slug</th>
-                        <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Dealers</th>
+                        <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Dealers actuales</th>
+                        <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Límite dealers</th>
+                        <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Reasignar</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Actualizado</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {orgDetail.brands.map((brand) => (
-                        <tr key={brand.id}>
-                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{brand.name}</td>
-                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6', fontFamily: 'monospace' }}>{brand.slug}</td>
-                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{brand.dealer_count}</td>
-                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{formatDate(brand.updated_at)}</td>
-                        </tr>
-                      ))}
+                      {orgDetail.brands.map((brand) => {
+                        const brandMeta = (brand.metadata || {}) as Record<string, any>;
+                        const dealerLimit = getBrandDealerLimit(brandMeta);
+                        const baseLimitValue = dealerLimit != null ? String(dealerLimit) : '';
+                        const hasDraft = Object.prototype.hasOwnProperty.call(brandLimitDrafts, brand.id);
+                        const draftValue = hasDraft ? brandLimitDrafts[brand.id] : baseLimitValue;
+                        const hasDraftChanged = hasDraft && draftValue !== baseLimitValue;
+                        const savingLimit = brandLimitSaving === brand.id;
+                        const remaining = dealerLimit != null ? Math.max(dealerLimit - (brand.dealer_count || 0), 0) : null;
+                        return (
+                          <tr key={brand.id}>
+                            <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{brand.name}</td>
+                            <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6', fontFamily: 'monospace' }}>{brand.slug}</td>
+                            <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{brand.dealer_count}</td>
+                            <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
+                              <div style={{ display: 'grid', gap: 6 }}>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={draftValue}
+                                  onChange={handleBrandLimitChange(brand.id)}
+                                  placeholder="Sin límite"
+                                  style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5f5', width: 110 }}
+                                />
+                                <div style={{ fontSize: 11, color: '#6b7280' }}>
+                                  {dealerLimit != null ? `Límite ${dealerLimit} • Restan ${remaining}` : 'Sin límite definido'}
+                                </div>
+                                <div style={{ display: 'flex', gap: 6 }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => saveBrandLimit(brand)}
+                                    disabled={savingLimit || !hasDraft}
+                                    style={{
+                                      padding: '4px 10px',
+                                      borderRadius: 6,
+                                      border: '1px solid #059669',
+                                      background: savingLimit ? '#bbf7d0' : hasDraft ? '#047857' : '#e2e8f0',
+                                      color: hasDraft ? '#fff' : '#475569',
+                                      fontSize: 11,
+                                      cursor: savingLimit || !hasDraft ? 'default' : 'pointer',
+                                    }}
+                                  >
+                                    {savingLimit ? 'Guardando…' : 'Guardar'}
+                                  </button>
+                                  {hasDraft ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setBrandLimitDrafts((prev) => {
+                                          const next = { ...prev };
+                                          delete next[brand.id];
+                                          return next;
+                                        });
+                                      }}
+                                      disabled={savingLimit}
+                                      style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', fontSize: 11, cursor: savingLimit ? 'default' : 'pointer' }}
+                                    >
+                                      Cancelar
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </td>
+                            <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
+                              <select
+                                value={brandTransferDraft[brand.id] ?? (selectedOrg ?? '')}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setBrandTransferDraft((prev) => ({ ...prev, [brand.id]: value }));
+                                  handleBrandTransfer(brand, value);
+                                }}
+                                disabled={brandTransferLoading === brand.id || !organizations.length}
+                                style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5f5', minWidth: 180 }}
+                              >
+                                {organizations.map((org) => (
+                                  <option key={org.id} value={org.id}>
+                                    {org.name}{org.id === selectedOrg ? ' (actual)' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              {brandTransferLoading === brand.id ? (
+                                <div style={{ fontSize: 11, color: '#2563eb', marginTop: 4 }}>Actualizando...</div>
+                              ) : (
+                                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Selecciona una organización destino</div>
+                              )}
+                            </td>
+                            <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{formatDate(brand.updated_at)}</td>
+                          </tr>
+                        );
+                      })}
                       {orgDetail.brands.length === 0 ? (
                         <tr>
-                          <td colSpan={4} style={{ padding: '12px 16px', textAlign: 'center', color: '#6b7280' }}>Sin marcas registradas.</td>
+                          <td colSpan={6} style={{ padding: '12px 16px', textAlign: 'center', color: '#6b7280' }}>Sin marcas registradas.</td>
                         </tr>
                       ) : null}
                     </tbody>
                   </table>
                 </div>
+                {brandLimitError ? (
+                  <p style={{ marginTop: 12, fontSize: 12, color: '#dc2626' }}>{brandLimitError}</p>
+                ) : null}
+                {brandTransferError ? (
+                  <p style={{ marginTop: 12, fontSize: 12, color: '#dc2626' }}>{brandTransferError}</p>
+                ) : null}
               </section>
 
               <section style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: 16 }}>
-                <header style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-                  <h3 style={{ fontSize: 18, fontWeight: 600 }}>Dealers</h3>
-                  <span style={{ fontSize: 12, color: '#6b7280' }}>{orgDetail.dealers.length} registrados</span>
+                <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    <h3 style={{ fontSize: 18, fontWeight: 600 }}>Dealers</h3>
+                    <span style={{ fontSize: 12, color: '#6b7280' }}>{orgDetail.dealers.length} registrados</span>
+                  </div>
+                  <button
+                    onClick={toggleDealerForm}
+                    disabled={!orgDetail.brands.length}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 6,
+                      border: '1px solid #059669',
+                      background: showDealerForm ? '#d1fae5' : '#047857',
+                      color: showDealerForm ? '#065f46' : '#fff',
+                      fontSize: 13,
+                      cursor: orgDetail.brands.length ? 'pointer' : 'not-allowed',
+                    }}
+                  >
+                    {showDealerForm ? 'Cancelar alta' : 'Agregar dealer'}
+                  </button>
                 </header>
                 {dealerSummaryTotals ? (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12, fontSize: 12 }}>
@@ -1237,6 +1858,126 @@ export default function AdminPage(): React.JSX.Element {
                       Sin pago &gt;30 días {overdueDealers}
                     </span>
                   </div>
+                ) : null}
+                {dealerSuccess ? (
+                  <p style={{ marginBottom: 12, fontSize: 12, color: '#047857', background: '#d1fae5', border: '1px solid #34d399', borderRadius: 6, padding: '8px 10px' }}>{dealerSuccess}</p>
+                ) : null}
+                {dealerError ? (
+                  <p style={{ marginBottom: 12, fontSize: 12, color: '#b91c1c', background: '#fee2e2', border: '1px solid #f87171', borderRadius: 6, padding: '8px 10px' }}>{dealerError}</p>
+                ) : null}
+                {showDealerForm ? (
+                  <form onSubmit={submitDealer} style={{ display: 'grid', gap: 12, marginBottom: 16, border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
+                    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Marca asignada *
+                        <select
+                          value={dealerForm.brandId}
+                          onChange={handleDealerField('brandId')}
+                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                        >
+                          {orgDetail.brands.length === 0 ? (
+                            <option value="">Registra una marca primero</option>
+                          ) : null}
+                          {orgDetail.brands.map((brand) => (
+                            <option key={brand.id} value={brand.id}>
+                              {(() => {
+                                const limit = getBrandDealerLimit((brand.metadata || {}) as Record<string, any>);
+                                const count = brand.dealer_count || 0;
+                                const base = `${brand.name} (${count}`;
+                                return limit != null ? `${base}/${limit})` : `${base})`;
+                              })()}
+                            </option>
+                          ))}
+                        </select>
+                        {selectedDealerBrand ? (
+                          <span style={{ fontSize: 11, color: selectedDealerBrandLimitReached ? '#b91c1c' : '#6b7280' }}>
+                            {selectedDealerBrandLimit != null
+                              ? selectedDealerBrandLimitReached
+                                ? 'Sin cupo disponible. Ajusta el límite para agregar más dealers.'
+                                : `Disponible: ${selectedDealerBrandRemaining} dealers`
+                              : 'Sin límite establecido para esta marca.'}
+                          </span>
+                        ) : null}
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Nombre del dealer *
+                        <input
+                          value={dealerForm.name}
+                          onChange={handleDealerField('name')}
+                          placeholder="Mazda Hermosillo"
+                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                        />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Fecha inicio servicio
+                        <input
+                          type="date"
+                          value={dealerForm.serviceStartedAt}
+                          onChange={handleDealerField('serviceStartedAt')}
+                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                        />
+                      </label>
+                    </div>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Dirección completa *
+                      <textarea
+                        value={dealerForm.address}
+                        onChange={handleDealerField('address')}
+                        placeholder="Av. Siempre Viva 742, Col. Centro"
+                        rows={2}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5', resize: 'vertical' }}
+                      />
+                      <span style={{ fontSize: 11, color: '#6b7280' }}>Un dealer con la misma dirección no puede tener más de dos marcas (excepto OEM).</span>
+                    </label>
+                    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Ciudad
+                        <input value={dealerForm.city} onChange={handleDealerField('city')} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }} />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Estado
+                        <input value={dealerForm.state} onChange={handleDealerField('state')} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }} />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Código postal
+                        <input value={dealerForm.postalCode} onChange={handleDealerField('postalCode')} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }} />
+                      </label>
+                    </div>
+                    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Asesor de ventas
+                        <input value={dealerForm.contactName} onChange={handleDealerField('contactName')} placeholder="Nombre completo" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }} />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                        Teléfono asesor
+                        <input value={dealerForm.contactPhone} onChange={handleDealerField('contactPhone')} placeholder="55 1234 5678" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }} />
+                      </label>
+                    </div>
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <button
+                        type="submit"
+                        disabled={dealerLoading || selectedDealerBrandLimitReached}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: 'none',
+                          background: dealerLoading || selectedDealerBrandLimitReached ? '#cbd5f5' : '#047857',
+                          color: dealerLoading || selectedDealerBrandLimitReached ? '#475569' : '#fff',
+                          fontWeight: 600,
+                          cursor: dealerLoading || selectedDealerBrandLimitReached ? 'default' : 'pointer',
+                        }}
+                      >
+                        {dealerLoading ? 'Guardando…' : selectedDealerBrandLimitReached ? 'Sin cupo' : 'Guardar dealer'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={toggleDealerForm}
+                        style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
                 ) : null}
                 {dealerStatusError ? (
                   <p style={{ marginBottom: 12, color: '#dc2626', fontSize: 12 }}>{dealerStatusError}</p>
@@ -1249,6 +1990,7 @@ export default function AdminPage(): React.JSX.Element {
                           <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Dealer</th>
                           <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Marca</th>
                           <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Dirección</th>
+                          <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Contacto</th>
                           <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Estado</th>
                           <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Inicio servicio</th>
                           <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Último pago</th>
@@ -1263,6 +2005,9 @@ export default function AdminPage(): React.JSX.Element {
                           const lastEventType = dealer.last_event_type as DealerBillingEventType | undefined;
                           const lastEventLabel = lastEventType ? billingEventLabels[lastEventType] ?? lastEventType : null;
                           const isActiveBillingPanel = billingPanel?.dealer.id === dealer.id;
+                          const metadata = dealer.metadata && typeof dealer.metadata === 'object' ? (dealer.metadata as Record<string, any>) : {};
+                          const locationMeta = metadata?.location && typeof metadata.location === 'object' ? metadata.location as Record<string, any> : undefined;
+                          const contactMeta = metadata?.sales_contact && typeof metadata.sales_contact === 'object' ? metadata.sales_contact as Record<string, any> : undefined;
                           return (
                             <tr
                               key={dealer.id}
@@ -1270,7 +2015,20 @@ export default function AdminPage(): React.JSX.Element {
                             >
                               <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6', fontWeight: 500 }}>{dealer.name}</td>
                               <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{brand?.name ?? '—'}</td>
-                              <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6', color: '#4b5563' }}>{dealer.address || '—'}</td>
+                              <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6', color: '#4b5563' }}>
+                                <div>{dealer.address || '—'}</div>
+                                {locationMeta?.city || locationMeta?.state || locationMeta?.postal_code ? (
+                                  <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                    {[locationMeta?.city, locationMeta?.state, locationMeta?.postal_code].filter(Boolean).join(', ')}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6', color: '#4b5563' }}>
+                                {contactMeta?.name ? <div>{contactMeta.name}</div> : <div>—</div>}
+                                {contactMeta?.phone ? (
+                                  <div style={{ fontSize: 12, color: '#6b7280' }}>{contactMeta.phone}</div>
+                                ) : null}
+                              </td>
                               <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
                                 <div style={{ fontWeight: 600 }}>{paused ? 'Pausado' : 'Activo'}</div>
                                 {paused && dealer.paused_at ? (

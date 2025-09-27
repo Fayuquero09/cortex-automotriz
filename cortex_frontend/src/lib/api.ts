@@ -97,9 +97,34 @@ export const endpoints = {
       }
       return res.json();
     }),
+  adminCreateDealer: (orgId: string, body: Record<string, any>) =>
+    fetch(buildUrl(`/admin/organizations/${orgId}/dealers`), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
   adminCreateBrand: (orgId: string, body: Record<string, any>) =>
     fetch(buildUrl(`/admin/organizations/${orgId}/brands`), withAuth({
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
+  adminBrands: () => apiGet('/admin/brands'),
+  adminUpdateBrand: (brandId: string, body: Record<string, any>) =>
+    fetch(buildUrl(`/admin/brands/${brandId}`), withAuth({
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })).then(async (res) => {
