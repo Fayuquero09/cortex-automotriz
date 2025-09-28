@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import { useSearchParams } from 'next/navigation';
 import useSWR, { mutate as globalMutate } from 'swr';
 import { endpoints } from '@/lib/api';
 
@@ -104,20 +105,48 @@ type DealerSummary = {
 };
 
 type AdminBrand = {
-  id: string;
+  id: string | null;
   name: string;
   slug: string;
   logo_url?: string | null;
   metadata?: Record<string, any> | null;
-  organization_id: string;
-  organization_name: string;
+  organization_id: string | null;
+  organization_name: string | null;
   dealer_count: number;
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 type AdminBrandListResponse = {
   brands: AdminBrand[];
+};
+
+type BrandAssignSelectionState = {
+  brandId: string;
+  limit: string;
+  source: 'existing' | 'catalog';
+  name: string;
+  slug: string;
+  orgName: string | null;
+  optionValue: string;
+};
+
+const EMPTY_BRAND_ASSIGN_SELECTION: BrandAssignSelectionState = {
+  brandId: '',
+  limit: '',
+  source: 'existing',
+  name: '',
+  slug: '',
+  orgName: null,
+  optionValue: '',
+};
+
+type BrandOption = {
+  value: string;
+  brand: AdminBrand;
+  slug: string;
+  assignedOrgId: string | null;
+  assignedOrgName: string | null;
 };
 
 type FeatureLevel = 'none' | 'view' | 'edit';
@@ -184,6 +213,7 @@ type AdminOrganizationResponse = {
 type OrgFormState = {
   name: string;
   package: 'marca' | 'black_ops';
+  orgType: 'oem' | 'dealer_group';
   displayName: string;
   legalName: string;
   taxId: string;
@@ -207,6 +237,7 @@ type OrgFormState = {
 const emptyOrgForm: OrgFormState = {
   name: '',
   package: 'marca',
+  orgType: 'oem',
   displayName: '',
   legalName: '',
   taxId: '',
@@ -269,6 +300,44 @@ const billingEventLabels: Record<DealerBillingEventType, string> = {
   activation: 'Activación',
 };
 
+function slugify(input: string): string {
+  const base = String(input || '').trim();
+  if (!base) return 'brand';
+  try {
+    return base
+      .normalize('NFD')
+      .replace(/\p{Diacritic}+/gu, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'brand';
+  } catch {
+    return base
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'brand';
+  }
+}
+
+function toTitleCase(value: string): string {
+  const base = String(value || '').trim();
+  if (!base) return '';
+  const lower = base.toLowerCase();
+  return lower.replace(/(^|\s|[-_/])(\p{L})/gu, (match, p1, p2) => `${p1}${p2.toUpperCase()}`);
+}
+
+function normalizeBrandName(value: string): string {
+  const base = String(value || '').trim();
+  if (!base) return '';
+  const isAllCaps = base === base.toUpperCase();
+  if (isAllCaps) {
+    if (base.length <= 4) return base;
+    if (/^[A-Z0-9\s&.-]+$/.test(base)) {
+      return toTitleCase(base);
+    }
+  }
+  return base;
+}
+
 function normalizeFeatureLevel(value: any): FeatureLevel {
   if (value === 'edit' || value === 'view' || value === 'none') return value;
   if (value === true || value === 'enabled' || value === 'full' || value === 'yes') return 'edit';
@@ -287,6 +356,12 @@ function extractFeatureLevels(flags?: Record<string, any> | null): Record<string
 }
 
 export default function AdminPage(): React.JSX.Element {
+  const searchParams = useSearchParams();
+  const impersonateOrgId = searchParams?.get('org') || '';
+  const isOemView = searchParams?.get('view') === 'oem';
+  const canManageBrandDistribution = !isOemView;
+  const canManageDealers = isOemView;
+  const canManageBilling = !isOemView;
   const { data, error, isLoading, mutate: mutateOverview } = useSWR<AdminOverviewResponse>('admin_overview', endpoints.adminOverview);
   const [selectedOrg, setSelectedOrg] = React.useState<string | null>(null);
   const [updatingPackage, setUpdatingPackage] = React.useState(false);
@@ -295,7 +370,7 @@ export default function AdminPage(): React.JSX.Element {
   const [brandForm, setBrandForm] = React.useState({ name: '', slug: '', logoUrl: '', aliases: '', dealerLimit: '' });
   const [brandLoading, setBrandLoading] = React.useState(false);
   const [brandError, setBrandError] = React.useState('');
-  const [brandAssignSelection, setBrandAssignSelection] = React.useState({ brandId: '', orgId: '' });
+  const [brandAssignSelection, setBrandAssignSelection] = React.useState<BrandAssignSelectionState>(() => ({ ...EMPTY_BRAND_ASSIGN_SELECTION }));
   const [brandAssignLoading, setBrandAssignLoading] = React.useState(false);
   const [brandAssignError, setBrandAssignError] = React.useState('');
   const [brandTransferLoading, setBrandTransferLoading] = React.useState<string | null>(null);
@@ -319,6 +394,8 @@ export default function AdminPage(): React.JSX.Element {
   const [deleteError, setDeleteError] = React.useState('');
   const [dealerStatusLoading, setDealerStatusLoading] = React.useState<string | null>(null);
   const [dealerStatusError, setDealerStatusError] = React.useState('');
+  const [impersonateInfo, setImpersonateInfo] = React.useState('');
+  const [impersonateError, setImpersonateError] = React.useState('');
   const [showDealerForm, setShowDealerForm] = React.useState(false);
   const [dealerForm, setDealerForm] = React.useState({
     brandId: '',
@@ -347,11 +424,41 @@ export default function AdminPage(): React.JSX.Element {
   const [adminUserId, setAdminUserId] = React.useState('');
   const [adminUserEmail, setAdminUserEmail] = React.useState('');
 
-  React.useEffect(() => {
-    if (!selectedOrg && data?.organizations?.length) {
-      setSelectedOrg(data.organizations[0].id);
+  const organizationsData = React.useMemo(() => {
+    const list = data?.organizations ?? [];
+    if (isOemView && impersonateOrgId) {
+      return list.filter((org) => org.id === impersonateOrgId);
     }
-  }, [data, selectedOrg]);
+    return list;
+  }, [data?.organizations, impersonateOrgId, isOemView]);
+
+  React.useEffect(() => {
+    if (isOemView) {
+      setShowOrgForm(false);
+    }
+  }, [isOemView]);
+
+  React.useEffect(() => {
+    if (!canManageBilling) {
+      setBillingPanel(null);
+      setBillingError('');
+      setBillingLoading(false);
+      setBillingForm({ event_type: 'payment', amount: '', currency: 'MXN', notes: '' });
+      setBillingNotesDraft('');
+    }
+  }, [canManageBilling]);
+
+  React.useEffect(() => {
+    if (impersonateOrgId) {
+      if (organizationsData.some((org) => org.id === impersonateOrgId)) {
+        setSelectedOrg(impersonateOrgId);
+      }
+      return;
+    }
+    if (!selectedOrg && organizationsData.length) {
+      setSelectedOrg(organizationsData[0].id);
+    }
+  }, [impersonateOrgId, organizationsData, selectedOrg]);
 
   React.useEffect(() => {
     setStatusError('');
@@ -382,7 +489,23 @@ export default function AdminPage(): React.JSX.Element {
       contactPhone: '',
       serviceStartedAt: '',
     });
+    setImpersonateInfo('');
+    setImpersonateError('');
   }, [selectedOrg]);
+
+  React.useEffect(() => {
+    if (!impersonateInfo) return;
+    if (typeof window === 'undefined') return;
+    const timer = window.setTimeout(() => setImpersonateInfo(''), 6000);
+    return () => window.clearTimeout(timer);
+  }, [impersonateInfo]);
+
+  React.useEffect(() => {
+    if (!impersonateError) return;
+    if (typeof window === 'undefined') return;
+    const timer = window.setTimeout(() => setImpersonateError(''), 6000);
+    return () => window.clearTimeout(timer);
+  }, [impersonateError]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -395,11 +518,8 @@ export default function AdminPage(): React.JSX.Element {
   }, []);
 
   React.useEffect(() => {
-    if (!selectedOrg) return;
-    setBrandAssignSelection((prev) => {
-      if (prev.orgId) return prev;
-      return { ...prev, orgId: selectedOrg };
-    });
+    setBrandAssignSelection({ ...EMPTY_BRAND_ASSIGN_SELECTION });
+    setBrandAssignError('');
   }, [selectedOrg]);
 
   const {
@@ -417,16 +537,68 @@ export default function AdminPage(): React.JSX.Element {
   const dealerSummaryRows = orgDetail?.dealer_summary?.rows ?? [];
   const overdueDealers = dealerSummaryRows.filter((row) => (row.days_since_payment ?? 0) > 30).length;
   const organizations = data?.organizations ?? [];
+  const organizationMetadata = React.useMemo(() => {
+    const meta = orgDetail?.organization?.metadata;
+    return meta && typeof meta === 'object' ? (meta as Record<string, any>) : {};
+  }, [orgDetail?.organization?.metadata]);
+  const isDealerGroupOrg = React.useMemo(() => {
+    const raw = String(organizationMetadata?.org_type || '').toLowerCase().trim();
+    return raw === 'dealer_group';
+  }, [organizationMetadata]);
   const availableBrands = React.useMemo(() => {
     if (!brandPool?.brands) return [] as AdminBrand[];
-    const sorted = [...brandPool.brands];
+    const source = selectedOrg
+      ? brandPool.brands.filter((item) => item.organization_id !== selectedOrg)
+      : [...brandPool.brands];
+    const sorted = [...source];
     sorted.sort((a, b) => a.name.localeCompare(b.name, 'es'));
     return sorted;
-  }, [brandPool]);
-  const selectedAssignBrand = React.useMemo(() => {
-    if (!brandAssignSelection.brandId || !brandPool?.brands) return undefined;
-    return brandPool.brands.find((item) => item.id === brandAssignSelection.brandId);
-  }, [brandAssignSelection.brandId, brandPool]);
+  }, [brandPool, selectedOrg]);
+  const availableBrandOptions = React.useMemo(() => {
+    const duplicates = new Map<string, number>();
+    return availableBrands.map<BrandOption>((brand) => {
+      const baseSlug = brand.slug ? String(brand.slug) : slugify(brand.name);
+      if (brand.id) {
+        return {
+          value: `existing:${brand.id}`,
+          brand,
+          slug: baseSlug,
+          assignedOrgId: brand.organization_id || null,
+          assignedOrgName: brand.organization_name || null,
+        };
+      }
+      const seen = duplicates.get(baseSlug) ?? 0;
+      duplicates.set(baseSlug, seen + 1);
+      const suffix = seen === 0 ? '' : `:${seen}`;
+      return {
+        value: `catalog:${baseSlug}${suffix}`,
+        brand,
+        slug: baseSlug,
+        assignedOrgId: brand.organization_id || null,
+        assignedOrgName: brand.organization_name || null,
+      };
+    });
+  }, [availableBrands]);
+  const brandOptionMap = React.useMemo(() => {
+    const map = new Map<string, BrandOption>();
+    for (const option of availableBrandOptions) {
+      map.set(option.value, option);
+    }
+    return map;
+  }, [availableBrandOptions]);
+  const displayBrands = React.useMemo(() => {
+    if (!orgDetail?.brands?.length) return [] as typeof orgDetail.brands;
+    return orgDetail.brands.filter((brand) => {
+      const meta = (brand.metadata || {}) as Record<string, any>;
+      const isSyntheticCatalog = !brand.id && !brand.organization_id;
+      if (isSyntheticCatalog) return false;
+      if (!brand.id && brand.organization_id && brand.slug && brand.name) {
+        return true;
+      }
+      return true;
+    });
+  }, [orgDetail]);
+
   const getBrandDealerLimit = React.useCallback((meta?: Record<string, any> | null): number | null => {
     if (!meta) return null;
     const raw = (meta as any).dealer_limit;
@@ -436,25 +608,27 @@ export default function AdminPage(): React.JSX.Element {
   }, []);
 
   React.useEffect(() => {
-    if (!orgDetail?.brands?.length) {
+    const candidates = displayBrands.length ? displayBrands : (orgDetail?.brands ?? []);
+    if (!candidates.length) {
       return;
     }
-    const defaultBrand = orgDetail.brands.find((brand) => {
+    const defaultBrand = candidates.find((brand) => {
       const limit = getBrandDealerLimit(brand.metadata ?? null);
       if (limit == null) return true;
       return (brand.dealer_count || 0) < limit;
-    }) ?? orgDetail.brands[0];
+    }) ?? candidates[0];
     const defaultBrandId = defaultBrand?.id ?? '';
     setDealerForm((prev) => {
       if (prev.brandId) return prev;
       return { ...prev, brandId: defaultBrandId };
     });
-  }, [orgDetail?.brands, getBrandDealerLimit]);
+  }, [displayBrands, orgDetail?.brands, getBrandDealerLimit]);
 
   const selectedDealerBrand = React.useMemo(() => {
-    if (!orgDetail?.brands?.length) return undefined;
-    return orgDetail.brands.find((brand) => brand.id === dealerForm.brandId) ?? orgDetail.brands[0];
-  }, [orgDetail?.brands, dealerForm.brandId]);
+    const candidates = displayBrands.length ? displayBrands : (orgDetail?.brands ?? []);
+    if (!candidates.length) return undefined;
+    return candidates.find((brand) => brand.id === dealerForm.brandId) ?? candidates[0];
+  }, [displayBrands, orgDetail?.brands, dealerForm.brandId]);
   const selectedDealerBrandLimit = React.useMemo(() => {
     return getBrandDealerLimit(selectedDealerBrand?.metadata ?? null);
   }, [selectedDealerBrand, getBrandDealerLimit]);
@@ -469,11 +643,12 @@ export default function AdminPage(): React.JSX.Element {
   }, [selectedDealerBrandRemaining]);
 
   const resetDealerForm = React.useCallback(() => {
-    const defaultBrand = orgDetail?.brands?.find((brand) => {
+    const candidates = displayBrands.length ? displayBrands : (orgDetail?.brands ?? []);
+    const defaultBrand = candidates.find((brand) => {
       const limit = getBrandDealerLimit(brand.metadata ?? null);
       if (limit == null) return true;
       return (brand.dealer_count || 0) < limit;
-    }) ?? orgDetail?.brands?.[0];
+    }) ?? candidates[0];
     const defaultBrandId = defaultBrand?.id ?? '';
     setDealerForm({
       brandId: defaultBrandId,
@@ -487,7 +662,7 @@ export default function AdminPage(): React.JSX.Element {
       serviceStartedAt: '',
     });
     setDealerError('');
-  }, [orgDetail?.brands, getBrandDealerLimit]);
+  }, [displayBrands, orgDetail?.brands, getBrandDealerLimit]);
 
   const handlePackageChange = async (nextValue: string) => {
     if (!selectedOrg || !orgDetail) return;
@@ -584,48 +759,91 @@ export default function AdminPage(): React.JSX.Element {
 
   const submitAssignExistingBrand = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!brandAssignSelection.brandId) {
-      setBrandAssignError('Selecciona una marca a mover');
+    if (!selectedOrg) {
+      setBrandAssignError('Selecciona primero una organización.');
       return;
     }
-    if (!brandAssignSelection.orgId) {
-      setBrandAssignError('Selecciona la organización destino');
+    if (!brandAssignSelection.brandId && brandAssignSelection.source !== 'catalog') {
+      setBrandAssignError('Selecciona una marca para agregar.');
       return;
     }
-    const brandInfo = brandPool?.brands?.find((item) => item.id === brandAssignSelection.brandId);
-    if (!brandInfo) {
-      setBrandAssignError('Marca no encontrada');
-      return;
+    const isCatalogBrand = brandAssignSelection.source === 'catalog';
+    const brandInfo = !isCatalogBrand && brandAssignSelection.brandId
+      ? brandPool?.brands?.find((item) => item.id === brandAssignSelection.brandId)
+      : undefined;
+    if (!isCatalogBrand) {
+      if (!brandInfo) {
+        setBrandAssignError('Marca no encontrada');
+        return;
+      }
+      if (brandInfo.organization_id === selectedOrg) {
+        setBrandAssignError('La marca ya está asignada a esta organización.');
+        return;
+      }
     }
-    if (brandInfo.organization_id === brandAssignSelection.orgId) {
-      setBrandAssignError('La marca ya pertenece a esa organización');
-      return;
+
+    const trimmedLimit = brandAssignSelection.limit.trim();
+    let limitValue: number | null | undefined = undefined;
+    if (trimmedLimit) {
+      const parsed = Number(trimmedLimit);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setBrandAssignError('El límite de dealers debe ser un número mayor o igual a 0.');
+        return;
+      }
+      limitValue = Math.floor(parsed);
+    } else if (brandAssignSelection.brandId || isCatalogBrand) {
+      limitValue = null;
+    }
+
+    if (!isCatalogBrand && brandInfo?.organization_id && brandInfo.organization_id !== selectedOrg) {
+      const sourceName = brandInfo.organization_name || 'otra organización';
+      const ok = typeof window === 'undefined'
+        ? true
+        : window.confirm(`Esta marca pertenece actualmente a ${sourceName}. ¿Deseas moverla a esta organización?`);
+      if (!ok) {
+        return;
+      }
     }
 
     setBrandAssignLoading(true);
     setBrandAssignError('');
     try {
-      const response = await endpoints.adminUpdateBrand(brandAssignSelection.brandId, {
-        organization_id: brandAssignSelection.orgId,
-      });
-      const tasks: Promise<unknown>[] = [mutateBrandPool(), mutateOverview()];
-      if (
-        selectedOrg
-        && (brandInfo.organization_id === selectedOrg || brandAssignSelection.orgId === selectedOrg)
-      ) {
-        tasks.push(mutateOrg());
+      if (isCatalogBrand) {
+        const rawName = brandAssignSelection.name.trim();
+        if (!rawName) {
+          throw new Error('Selecciona una marca válida.');
+        }
+        const name = normalizeBrandName(rawName);
+        const slug = (brandAssignSelection.slug || slugify(name)).trim() || slugify(name);
+        const payload: Record<string, any> = { name, slug };
+        if (limitValue !== undefined) {
+          payload.dealer_limit = limitValue;
+        }
+        await endpoints.adminCreateBrand(selectedOrg, payload);
+        await Promise.all([mutateOrg(), mutateOverview(), mutateBrandPool()]);
+      } else {
+        const payload: Record<string, any> = { organization_id: selectedOrg };
+        if (limitValue !== undefined) {
+          payload.dealer_limit = limitValue;
+        }
+        const response = await endpoints.adminUpdateBrand(brandAssignSelection.brandId, payload);
+        const tasks: Promise<unknown>[] = [mutateBrandPool(), mutateOverview()];
+        if (selectedOrg) {
+          tasks.push(mutateOrg());
+        }
+        const previousOrgId = (response as any)?.previous_org_id ?? brandInfo?.organization_id;
+        const newOrgId = (response as any)?.new_org_id ?? selectedOrg;
+        if (previousOrgId && previousOrgId !== newOrgId) {
+          tasks.push(globalMutate(['admin_org', previousOrgId]));
+        }
+        if (newOrgId) {
+          tasks.push(globalMutate(['admin_org', newOrgId]));
+        }
+        await Promise.all(tasks);
       }
-      if (brandInfo.organization_id) {
-        tasks.push(globalMutate(['admin_org', brandInfo.organization_id]));
-      }
-      const newOrgId = (response as any)?.new_org_id ?? brandAssignSelection.orgId;
-      if (newOrgId) {
-        tasks.push(globalMutate(['admin_org', newOrgId]));
-      }
-      await Promise.all(tasks);
-      setBrandAssignSelection((prev) => ({ ...prev, brandId: '' }));
+      setBrandAssignSelection({ ...EMPTY_BRAND_ASSIGN_SELECTION });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'No se pudo reasignar la marca';
+      const message = err instanceof Error ? err.message : 'No se pudo asignar la marca';
       setBrandAssignError(message);
     } finally {
       setBrandAssignLoading(false);
@@ -633,6 +851,10 @@ export default function AdminPage(): React.JSX.Element {
   };
 
   const handleBrandTransfer = async (brand: BrandInfo, targetOrgId: string) => {
+    if (!canManageBrandDistribution) {
+      setBrandTransferError('Solo el superadmin global puede reasignar marcas.');
+      return;
+    }
     if (!targetOrgId || targetOrgId === selectedOrg) {
       setBrandTransferDraft((prev) => {
         const next = { ...prev };
@@ -690,12 +912,17 @@ export default function AdminPage(): React.JSX.Element {
   };
 
   const handleBrandLimitChange = (brandId: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canManageBrandDistribution) return;
     const value = event.target.value;
     setBrandLimitDrafts((prev) => ({ ...prev, [brandId]: value }));
     setBrandLimitError('');
   };
 
   const saveBrandLimit = async (brand: BrandInfo) => {
+    if (!canManageBrandDistribution) {
+      setBrandLimitError('Solo el superadmin global puede ajustar límites de dealers.');
+      return;
+    }
     const rawDraft = brandLimitDrafts[brand.id] ?? '';
     const trimmed = rawDraft.trim();
     let limitValue: number | null;
@@ -728,6 +955,7 @@ export default function AdminPage(): React.JSX.Element {
   };
 
   const toggleDealerForm = () => {
+    if (!canManageDealers) return;
     if (showDealerForm) {
       setShowDealerForm(false);
       resetDealerForm();
@@ -737,6 +965,15 @@ export default function AdminPage(): React.JSX.Element {
       setShowDealerForm(true);
     }
   };
+
+  const openOemPanel = React.useCallback(() => {
+    if (!selectedOrg) return;
+    if (typeof window === 'undefined') return;
+    const url = new URL('/admin', window.location.origin);
+    url.searchParams.set('org', selectedOrg);
+    url.searchParams.set('view', 'oem');
+    window.open(url.toString(), '_blank', 'noopener');
+  }, [selectedOrg]);
 
   const handleDealerField = (field: keyof typeof dealerForm) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const value = event.target.value;
@@ -749,6 +986,10 @@ export default function AdminPage(): React.JSX.Element {
 
   const submitDealer = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageDealers) {
+      setDealerError('Solo el superadmin de la organización puede crear dealers.');
+      return;
+    }
     if (!selectedOrg) {
       setDealerError('Selecciona una organización');
       return;
@@ -879,7 +1120,9 @@ export default function AdminPage(): React.JSX.Element {
       if (orgForm.contactPhone.trim()) contactInfo.phone = orgForm.contactPhone.trim();
       if (Object.keys(contactInfo).length) payload.contact_info = contactInfo;
 
-      if (orgForm.metadataNotes.trim()) payload.metadata = { notes: orgForm.metadataNotes.trim() };
+      const metadata: Record<string, any> = { org_type: orgForm.orgType };
+      if (orgForm.metadataNotes.trim()) metadata.notes = orgForm.metadataNotes.trim();
+      payload.metadata = metadata;
 
       if (orgForm.superEmail.trim()) {
         payload.superadmin = {
@@ -994,6 +1237,7 @@ export default function AdminPage(): React.JSX.Element {
   };
 
   const openBillingHistory = async (dealer: DealerInfo) => {
+    if (!canManageBilling) return;
     if (billingPanel?.dealer.id === dealer.id) {
       closeBillingPanel();
       return;
@@ -1016,6 +1260,7 @@ export default function AdminPage(): React.JSX.Element {
   };
 
   const closeBillingPanel = () => {
+    if (!canManageBilling) return;
     setBillingPanel(null);
     setBillingError('');
     setBillingLoading(false);
@@ -1041,6 +1286,10 @@ export default function AdminPage(): React.JSX.Element {
 
   const submitBillingEvent = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canManageBilling) {
+      setBillingError('Solo el superadmin Cortex puede registrar pagos.');
+      return;
+    }
     if (!billingPanel?.dealer) return;
     setBillingError('');
     setBillingSaving(true);
@@ -1088,6 +1337,10 @@ export default function AdminPage(): React.JSX.Element {
   };
 
   const saveBillingNotes = async () => {
+    if (!canManageBilling) {
+      setBillingError('Solo el superadmin Cortex puede actualizar notas de facturación.');
+      return;
+    }
     if (!billingPanel?.dealer) return;
     setBillingError('');
     setBillingNotesSaving(true);
@@ -1148,6 +1401,28 @@ export default function AdminPage(): React.JSX.Element {
     }
   };
 
+  const impersonateUser = (user: UserInfo) => {
+    setImpersonateError('');
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('CORTEX_SUPERADMIN_USER_ID', user.id);
+      if (user.email && user.email.trim()) {
+        window.localStorage.setItem('CORTEX_SUPERADMIN_EMAIL', user.email.trim());
+      } else {
+        window.localStorage.removeItem('CORTEX_SUPERADMIN_EMAIL');
+      }
+      setAdminUserId(user.id);
+      setAdminUserEmail(user.email || '');
+      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(user.id).catch(() => {});
+      }
+      const label = user.email || user.id;
+      setImpersonateInfo(`Identidad actualizada. Ahora operas como ${label}`);
+    } catch (err) {
+      setImpersonateError('No se pudo actualizar la identidad en este navegador.');
+    }
+  };
+
   const deleteOrganization = async () => {
     if (!selectedOrg) return;
     const ok = typeof window !== 'undefined'
@@ -1173,10 +1448,11 @@ export default function AdminPage(): React.JSX.Element {
     <>
       <main style={{ display: 'grid', gap: 24, padding: 24 }}>
       <header style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <h1 style={{ fontSize: 26, fontWeight: 600 }}>Panel Superadmin Global</h1>
+        <h1 style={{ fontSize: 26, fontWeight: 600 }}>{isOemView ? 'Panel Superadmin OEM' : 'Panel Superadmin Global'}</h1>
         <p style={{ maxWidth: 720, color: '#4b5563' }}>
-          Revisa organizaciones, marcas, dealers y usuarios configurados en Supabase. Usa este
-          panel para detectar huecos antes de delegar accesos.
+          {isOemView
+            ? 'Administra marcas, dealers y usuarios de esta organización sin ver el resto del catálogo.'
+            : 'Revisa organizaciones, marcas, dealers y usuarios configurados en Supabase. Usa este panel para detectar huecos antes de delegar accesos.'}
         </p>
         {!SUPERADMIN_TOKEN_CONFIGURED ? (
           <div style={{ padding: '8px 12px', background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 6 }}>
@@ -1184,35 +1460,39 @@ export default function AdminPage(): React.JSX.Element {
             <code> NEXT_PUBLIC_SUPERADMIN_TOKEN</code> en el frontend para proteger estas APIs.
           </div>
         ) : null}
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
-          <button
-            onClick={toggleOrgForm}
-            style={{
-              padding: '8px 16px',
-              borderRadius: 8,
-              border: '1px solid #2563eb',
-              background: showOrgForm ? '#dbeafe' : '#2563eb',
-              color: showOrgForm ? '#1d4ed8' : '#fff',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            {showOrgForm ? 'Cancelar creación' : 'Crear nueva organización'}
-          </button>
-        </div>
-        {orgSuccess ? (
-          <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 6, background: '#ecfdf5', border: '1px solid #22c55e', color: '#166534' }}>
-            {orgSuccess}
-          </div>
-        ) : null}
-        {orgError ? (
-          <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 6, background: '#fee2e2', border: '1px solid #f87171', color: '#b91c1c' }}>
-            {orgError}
-          </div>
+        {!isOemView ? (
+          <>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
+              <button
+                onClick={toggleOrgForm}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #2563eb',
+                  background: showOrgForm ? '#dbeafe' : '#2563eb',
+                  color: showOrgForm ? '#1d4ed8' : '#fff',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {showOrgForm ? 'Cancelar creación' : 'Crear nueva organización'}
+              </button>
+            </div>
+            {orgSuccess ? (
+              <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 6, background: '#ecfdf5', border: '1px solid #22c55e', color: '#166534' }}>
+                {orgSuccess}
+              </div>
+            ) : null}
+            {orgError ? (
+              <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 6, background: '#fee2e2', border: '1px solid #f87171', color: '#b91c1c' }}>
+                {orgError}
+              </div>
+            ) : null}
+          </>
         ) : null}
       </header>
 
-      {showOrgForm ? (
+      {!isOemView && showOrgForm ? (
         <form onSubmit={submitOrganization} style={{ border: '1px solid #d1d5db', borderRadius: 10, padding: 20, display: 'grid', gap: 16, background: '#fff' }}>
           <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
             <div style={{ display: 'grid', gap: 6 }}>
@@ -1229,6 +1509,20 @@ export default function AdminPage(): React.JSX.Element {
                 <option value="marca">Paquete Marca</option>
                 <option value="black_ops">Black Ops</option>
               </select>
+            </div>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <label style={{ fontWeight: 600, fontSize: 13 }}>Tipo de organización</label>
+              <select
+                value={orgForm.orgType}
+                onChange={handleOrgField('orgType')}
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+              >
+                <option value="oem">OEM / Marca</option>
+                <option value="dealer_group">Grupo de dealers / Importador</option>
+              </select>
+              <span style={{ fontSize: 11, color: '#6b7280' }}>
+                Elige OEM para marcas que gestionan sus propios distribuidores; usa Grupo cuando administran múltiples marcas o franquicias.
+              </span>
             </div>
             <div style={{ display: 'grid', gap: 6 }}>
               <label style={{ fontWeight: 600, fontSize: 13 }}>Razón social</label>
@@ -1348,13 +1642,13 @@ export default function AdminPage(): React.JSX.Element {
       <section style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24, alignItems: 'start' }}>
         <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', fontWeight: 600 }}>
-            Organizaciones ({data?.organizations?.length ?? 0})
+            Organizaciones ({organizationsData.length})
           </div>
           <div style={{ display: 'grid' }}>
             {isLoading ? (
               <p style={{ padding: 16 }}>Cargando...</p>
-            ) : data?.organizations?.length ? (
-              data.organizations.map((org) => {
+            ) : organizationsData.length ? (
+              organizationsData.map((org) => {
                 const active = selectedOrg === org.id;
                 return (
                   <button
@@ -1415,70 +1709,97 @@ export default function AdminPage(): React.JSX.Element {
                   <span><strong>Usuarios:</strong> {orgDetail.users.length}</span>
                 </div>
                 <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-                  <label style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Cambiar paquete:
-                    <select
-                      value={orgDetail.organization.package}
-                      onChange={(event) => handlePackageChange(event.target.value)}
-                      disabled={updatingPackage}
-                      style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                  {!isOemView ? (
+                    <>
+                      <label style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        Cambiar paquete:
+                        <select
+                          value={orgDetail.organization.package}
+                          onChange={(event) => handlePackageChange(event.target.value)}
+                          disabled={updatingPackage}
+                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                        >
+                          <option value="marca">Paquete Marca</option>
+                          <option value="black_ops">Black Ops</option>
+                        </select>
+                      </label>
+                      <label style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        Tipo de organización:
+                        <select
+                          value={String((orgDetail.organization.metadata as any)?.org_type || 'oem')}
+                          onChange={(event) => handleOrgTypeChange(event.target.value)}
+                          disabled={orgMetadataLoading}
+                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                        >
+                          <option value="dealer_group">Grupo de dealers</option>
+                          <option value="oem">OEM / Marca</option>
+                        </select>
+                      </label>
+                    </>
+                  ) : null}
+                  {!isOemView ? (
+                    <>
+                      <button
+                        onClick={() => updateOrgStatus(orgDetail.organization.status === 'paused' ? 'resume' : 'pause')}
+                        disabled={statusLoading}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: '1px solid #f97316',
+                          background: orgDetail.organization.status === 'paused' ? '#fef3c7' : '#f97316',
+                          color: orgDetail.organization.status === 'paused' ? '#b45309' : '#fff',
+                          fontSize: 13,
+                          cursor: statusLoading ? 'default' : 'pointer',
+                        }}
+                      >
+                        {statusLoading
+                          ? 'Actualizando...'
+                          : orgDetail.organization.status === 'paused'
+                            ? 'Reactivar acceso'
+                            : 'Pausar acceso'}
+                      </button>
+                      <button
+                        onClick={deleteOrganization}
+                        disabled={deleteLoading}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: '1px solid #dc2626',
+                          background: deleteLoading ? '#fecaca' : '#dc2626',
+                          color: deleteLoading ? '#7f1d1d' : '#fff',
+                          fontSize: 13,
+                          cursor: deleteLoading ? 'default' : 'pointer',
+                        }}
+                      >
+                        {deleteLoading ? 'Eliminando...' : 'Eliminar organización'}
+                      </button>
+                    </>
+                  ) : null}
+                  {!isOemView ? (
+                    <button
+                      onClick={openOemPanel}
+                      style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #047857', background: '#d1fae5', color: '#047857', fontSize: 13, cursor: 'pointer' }}
                     >
-                      <option value="marca">Paquete Marca</option>
-                      <option value="black_ops">Black Ops</option>
-                    </select>
-                  </label>
-                  <label style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Tipo de organización:
-                    <select
-                      value={String((orgDetail.organization.metadata as any)?.org_type || 'dealer_group')}
-                      onChange={(event) => handleOrgTypeChange(event.target.value)}
-                      disabled={orgMetadataLoading}
-                      style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      Impersonar superadmin OEM/Grupo
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        if (typeof window !== 'undefined') {
+                          window.location.href = '/admin';
+                        }
+                      }}
+                      style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #2563eb', background: '#eff6ff', color: '#1d4ed8', fontSize: 13, cursor: 'pointer' }}
                     >
-                      <option value="dealer_group">Grupo de dealers</option>
-                      <option value="oem">OEM / Marca</option>
-                    </select>
-                  </label>
+                      Salir de impersonación
+                    </button>
+                  )}
                   {updatingPackage ? (
                     <span style={{ fontSize: 12, color: '#2563eb' }}>Guardando...</span>
                   ) : null}
                   {orgMetadataLoading ? (
                     <span style={{ fontSize: 12, color: '#047857' }}>Actualizando tipo...</span>
                   ) : null}
-                  <button
-                    onClick={() => updateOrgStatus(orgDetail.organization.status === 'paused' ? 'resume' : 'pause')}
-                    disabled={statusLoading}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 6,
-                      border: '1px solid #f97316',
-                      background: orgDetail.organization.status === 'paused' ? '#fef3c7' : '#f97316',
-                      color: orgDetail.organization.status === 'paused' ? '#b45309' : '#fff',
-                      fontSize: 13,
-                      cursor: statusLoading ? 'default' : 'pointer',
-                    }}
-                  >
-                    {statusLoading
-                      ? 'Actualizando...'
-                      : orgDetail.organization.status === 'paused'
-                        ? 'Reactivar acceso'
-                        : 'Pausar acceso'}
-                  </button>
-                  <button
-                    onClick={deleteOrganization}
-                    disabled={deleteLoading}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 6,
-                      border: '1px solid #dc2626',
-                      background: deleteLoading ? '#fecaca' : '#dc2626',
-                      color: deleteLoading ? '#7f1d1d' : '#fff',
-                      fontSize: 13,
-                      cursor: deleteLoading ? 'default' : 'pointer',
-                    }}
-                  >
-                    {deleteLoading ? 'Eliminando...' : 'Eliminar organización'}
-                  </button>
                 </div>
                 {updateError ? (
                   <p style={{ marginTop: 8, fontSize: 12, color: '#dc2626' }}>{updateError}</p>
@@ -1520,6 +1841,12 @@ export default function AdminPage(): React.JSX.Element {
                       />
                     </label>
                   </div>
+                  {impersonateInfo ? (
+                    <p style={{ margin: 0, fontSize: 12, color: '#047857' }}>{impersonateInfo}</p>
+                  ) : null}
+                  {impersonateError ? (
+                    <p style={{ margin: 0, fontSize: 12, color: '#dc2626' }}>{impersonateError}</p>
+                  ) : null}
                 </div>
               </section>
 
@@ -1527,7 +1854,7 @@ export default function AdminPage(): React.JSX.Element {
                 <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12 }}>
                   <div style={{ display: 'grid', gap: 4 }}>
                     <h3 style={{ fontSize: 18, fontWeight: 600 }}>Marcas</h3>
-                    <span style={{ fontSize: 12, color: '#6b7280' }}>{orgDetail.brands.length} registradas</span>
+                    <span style={{ fontSize: 12, color: '#6b7280' }}>{displayBrands.length} registradas</span>
                   </div>
                   <button
                     onClick={toggleBrandForm}
@@ -1629,86 +1956,128 @@ export default function AdminPage(): React.JSX.Element {
                     </div>
                   </form>
                 ) : null}
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f8fafc', marginBottom: 16 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Asignar marca existente</div>
-                  {brandPoolError ? (
-                    <p style={{ fontSize: 12, color: '#dc2626' }}>
-                      No se pudieron cargar las marcas globales:{' '}
-                      {brandPoolError instanceof Error ? brandPoolError.message : String(brandPoolError)}
+                {!isOemView ? (
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f8fafc', marginBottom: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Agregar marca existente a esta organización</div>
+                    {brandPoolError ? (
+                      <p style={{ fontSize: 12, color: '#dc2626' }}>
+                        No se pudieron cargar las marcas globales:{' '}
+                        {brandPoolError instanceof Error ? brandPoolError.message : String(brandPoolError)}
+                      </p>
+                    ) : null}
+                    <p style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
+                      Elige una marca disponible del catálogo, define cuántos dealers podrá abrir esta organización y da clic en «Agregar».
                     </p>
-                  ) : null}
-                  <form onSubmit={submitAssignExistingBrand} style={{ display: 'grid', gap: 12 }}>
-                    <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                        Marca disponible
-                        <select
-                          value={brandAssignSelection.brandId}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setBrandAssignSelection((prev) => ({ ...prev, brandId: value }));
-                            setBrandAssignError('');
+                    <form onSubmit={submitAssignExistingBrand} style={{ display: 'grid', gap: 12 }}>
+                      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                        <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                          Marca disponible
+                          <select
+                            value={brandAssignSelection.optionValue}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              if (!value) {
+                                setBrandAssignSelection({ ...EMPTY_BRAND_ASSIGN_SELECTION });
+                                setBrandAssignError('');
+                                return;
+                              }
+
+                              const option = brandOptionMap.get(value);
+                              if (!option) {
+                                setBrandAssignSelection({ ...EMPTY_BRAND_ASSIGN_SELECTION });
+                                setBrandAssignError('Marca no encontrada');
+                                return;
+                              }
+
+                              const limitVal = getBrandDealerLimit(option.brand.metadata ?? null);
+                              setBrandAssignSelection({
+                                brandId: option.brand.id ?? '',
+                                limit: limitVal != null ? String(limitVal) : '',
+                                source: option.brand.id ? 'existing' : 'catalog',
+                                name: option.brand.name,
+                                slug: option.slug,
+                                orgName: option.assignedOrgName || null,
+                                optionValue: value,
+                              });
+                              setBrandAssignError('');
+                            }}
+                            style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                          >
+                            <option value="">Selecciona marca</option>
+                            {availableBrandOptions.map((option) => {
+                              const orgLabel = option.assignedOrgName
+                                ? `Asignada a ${option.assignedOrgName}`
+                                : 'Disponible';
+                              return (
+                                <option key={option.value} value={option.value}>
+                                  {toTitleCase(option.brand.name)} · {orgLabel}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </label>
+                        <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                          Límite de dealers (opcional)
+                          <input
+                            value={brandAssignSelection.limit}
+                            onChange={(event) => setBrandAssignSelection((prev) => ({ ...prev, limit: event.target.value }))}
+                            placeholder="Ej. 10"
+                            type="number"
+                            min={0}
+                            style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                            disabled={!brandAssignSelection.name}
+                          />
+                        </label>
+                      </div>
+                      {brandAssignSelection.name ? (
+                        <>
+                          <span style={{ fontSize: 12, color: '#6b7280' }}>
+                            Marca: {toTitleCase(brandAssignSelection.name)} · {
+                              brandAssignSelection.source === 'existing'
+                                ? `Asignada a ${brandAssignSelection.orgName || 'sin organización'}`
+                                : 'Disponible para asignar'
+                            }
+                            {' · '}
+                            {brandAssignSelection.limit
+                              ? `Cupo asignado: ${brandAssignSelection.limit} dealers`
+                              : 'Cupo asignado: sin límite'}
+                          </span>
+                          {brandAssignSelection.source === 'existing'
+                            && brandAssignSelection.orgName
+                            && brandAssignSelection.orgName !== orgDetail?.organization?.name ? (
+                              <span style={{ fontSize: 11, color: '#b45309' }}>
+                                Esta acción moverá la marca desde {brandAssignSelection.orgName} hacia {orgDetail?.organization?.name}.
+                              </span>
+                            ) : null}
+                        </>
+                      ) : null}
+                      {brandAssignError ? (
+                        <p style={{ fontSize: 12, color: '#dc2626' }}>{brandAssignError}</p>
+                      ) : null}
+                      <div>
+                        <button
+                          type="submit"
+                          disabled={
+                            brandAssignLoading
+                            || (!brandAssignSelection.name)
+                            || (brandAssignSelection.source !== 'catalog' && !brandAssignSelection.brandId)
+                          }
+                          style={{
+                            padding: '6px 12px',
+                            borderRadius: 6,
+                            border: 'none',
+                            background: brandAssignLoading ? '#cbd5f5' : '#1d4ed8',
+                            color: '#fff',
+                            fontWeight: 600,
+                            cursor: brandAssignLoading ? 'default' : 'pointer',
                           }}
-                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
                         >
-                          <option value="">Selecciona marca</option>
-                          {availableBrands.map((brand) => (
-                            <option key={brand.id} value={brand.id}>
-                              {brand.name} · actual: {brand.organization_name || 'Sin organización'}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-                        Organización destino
-                        <select
-                          value={brandAssignSelection.orgId}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setBrandAssignSelection((prev) => ({ ...prev, orgId: value }));
-                            setBrandAssignError('');
-                          }}
-                          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
-                        >
-                          <option value="">Selecciona organización</option>
-                          {organizations.map((org) => (
-                            <option key={org.id} value={org.id}>
-                              {org.name}{org.id === selectedOrg ? ' (actual)' : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    {selectedAssignBrand ? (
-                      <span style={{ fontSize: 12, color: '#6b7280' }}>
-                        Actualmente en: {selectedAssignBrand.organization_name || 'Sin organización'}
-                      </span>
-                    ) : null}
-                    {brandAssignError ? (
-                      <p style={{ fontSize: 12, color: '#dc2626' }}>{brandAssignError}</p>
-                    ) : null}
-                    <div>
-                      <button
-                        type="submit"
-                        disabled={
-                          brandAssignLoading
-                          || !brandAssignSelection.brandId
-                          || !brandAssignSelection.orgId
-                        }
-                        style={{
-                          padding: '6px 12px',
-                          borderRadius: 6,
-                          border: 'none',
-                          background: brandAssignLoading ? '#cbd5f5' : '#1d4ed8',
-                          color: '#fff',
-                          fontWeight: 600,
-                          cursor: brandAssignLoading ? 'default' : 'pointer',
-                        }}
-                      >
-                        {brandAssignLoading ? 'Moviendo…' : 'Mover marca seleccionada'}
-                      </button>
-                    </div>
-                  </form>
-                </div>
+                          {brandAssignLoading ? 'Asignando…' : 'Agregar marca a la organización'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                ) : null}
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
@@ -1717,13 +2086,20 @@ export default function AdminPage(): React.JSX.Element {
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Slug</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Dealers actuales</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Límite dealers</th>
-                        <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Reasignar</th>
+                        {!isDealerGroupOrg && canManageBrandDistribution ? (
+                          <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Reasignar</th>
+                        ) : null}
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Actualizado</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {orgDetail.brands.map((brand) => {
+                      {displayBrands.map((brand) => {
                         const brandMeta = (brand.metadata || {}) as Record<string, any>;
+                        const aliases = Array.isArray(brandMeta.aliases) ? brandMeta.aliases : [];
+                        const isUmbrella = aliases.length > 0 && !brand.dealer_count;
+                        if (!brand.id && !isUmbrella) {
+                          return null;
+                        }
                         const dealerLimit = getBrandDealerLimit(brandMeta);
                         const baseLimitValue = dealerLimit != null ? String(dealerLimit) : '';
                         const hasDraft = Object.prototype.hasOwnProperty.call(brandLimitDrafts, brand.id);
@@ -1732,89 +2108,113 @@ export default function AdminPage(): React.JSX.Element {
                         const savingLimit = brandLimitSaving === brand.id;
                         const remaining = dealerLimit != null ? Math.max(dealerLimit - (brand.dealer_count || 0), 0) : null;
                         return (
-                          <tr key={brand.id}>
+                          <tr key={brand.id || brand.slug}>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{brand.name}</td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6', fontFamily: 'monospace' }}>{brand.slug}</td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{brand.dealer_count}</td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
-                              <div style={{ display: 'grid', gap: 6 }}>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  value={draftValue}
-                                  onChange={handleBrandLimitChange(brand.id)}
-                                  placeholder="Sin límite"
-                                  style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5f5', width: 110 }}
-                                />
-                                <div style={{ fontSize: 11, color: '#6b7280' }}>
-                                  {dealerLimit != null ? `Límite ${dealerLimit} • Restan ${remaining}` : 'Sin límite definido'}
+                              {isUmbrella ? (
+                                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                  Submarcas: {aliases.join(', ')}
                                 </div>
-                                <div style={{ display: 'flex', gap: 6 }}>
-                                  <button
-                                    type="button"
-                                    onClick={() => saveBrandLimit(brand)}
-                                    disabled={savingLimit || !hasDraft}
-                                    style={{
-                                      padding: '4px 10px',
-                                      borderRadius: 6,
-                                      border: '1px solid #059669',
-                                      background: savingLimit ? '#bbf7d0' : hasDraft ? '#047857' : '#e2e8f0',
-                                      color: hasDraft ? '#fff' : '#475569',
-                                      fontSize: 11,
-                                      cursor: savingLimit || !hasDraft ? 'default' : 'pointer',
-                                    }}
-                                  >
-                                    {savingLimit ? 'Guardando…' : 'Guardar'}
-                                  </button>
-                                  {hasDraft ? (
+                              ) : canManageBrandDistribution ? (
+                                <div style={{ display: 'grid', gap: 6 }}>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={draftValue}
+                                    onChange={handleBrandLimitChange(brand.id)}
+                                    placeholder="Sin límite"
+                                    style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5f5', width: 110 }}
+                                  />
+                                  <div style={{ fontSize: 11, color: '#6b7280' }}>
+                                    {dealerLimit != null ? `Límite ${dealerLimit} • Restan ${remaining}` : 'Sin límite definido'}
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 6 }}>
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        setBrandLimitDrafts((prev) => {
-                                          const next = { ...prev };
-                                          delete next[brand.id];
-                                          return next;
-                                        });
+                                      onClick={() => saveBrandLimit(brand)}
+                                      disabled={savingLimit || !hasDraft}
+                                      style={{
+                                        padding: '4px 10px',
+                                        borderRadius: 6,
+                                        border: '1px solid #059669',
+                                        background: savingLimit ? '#bbf7d0' : hasDraft ? '#047857' : '#e2e8f0',
+                                        color: hasDraft ? '#fff' : '#475569',
+                                        fontSize: 11,
+                                        cursor: savingLimit || !hasDraft ? 'default' : 'pointer',
                                       }}
-                                      disabled={savingLimit}
-                                      style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', fontSize: 11, cursor: savingLimit ? 'default' : 'pointer' }}
                                     >
-                                      Cancelar
+                                      {savingLimit ? 'Guardando…' : 'Guardar'}
                                     </button>
-                                  ) : null}
+                                    {hasDraft ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setBrandLimitDrafts((prev) => {
+                                            const next = { ...prev };
+                                            delete next[brand.id];
+                                            return next;
+                                          });
+                                        }}
+                                        disabled={savingLimit}
+                                        style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', fontSize: 11, cursor: savingLimit ? 'default' : 'pointer' }}
+                                      >
+                                        Cancelar
+                                      </button>
+                                    ) : null}
+                                  </div>
                                 </div>
-                              </div>
-                            </td>
-                            <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
-                              <select
-                                value={brandTransferDraft[brand.id] ?? (selectedOrg ?? '')}
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  setBrandTransferDraft((prev) => ({ ...prev, [brand.id]: value }));
-                                  handleBrandTransfer(brand, value);
-                                }}
-                                disabled={brandTransferLoading === brand.id || !organizations.length}
-                                style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5f5', minWidth: 180 }}
-                              >
-                                {organizations.map((org) => (
-                                  <option key={org.id} value={org.id}>
-                                    {org.name}{org.id === selectedOrg ? ' (actual)' : ''}
-                                  </option>
-                                ))}
-                              </select>
-                              {brandTransferLoading === brand.id ? (
-                                <div style={{ fontSize: 11, color: '#2563eb', marginTop: 4 }}>Actualizando...</div>
                               ) : (
-                                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Selecciona una organización destino</div>
+                                <div style={{ display: 'grid', gap: 6 }}>
+                                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                                    {dealerLimit != null ? `Límite ${dealerLimit}` : 'Sin límite definido'}
+                                  </div>
+                                  {dealerLimit != null ? (
+                                    <div style={{ fontSize: 11, color: '#6b7280' }}>Restan {remaining}</div>
+                                  ) : null}
+                                  <span style={{ fontSize: 11, color: '#9ca3af' }}>Cambios únicamente desde el superadmin Cortex.</span>
+                                </div>
                               )}
                             </td>
+                            {!isDealerGroupOrg && canManageBrandDistribution ? (
+                              <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
+                                {isUmbrella ? (
+                                  <span style={{ fontSize: 11, color: '#9ca3af' }}>Usa las sub-marcas para reasignar.</span>
+                                ) : (
+                                  <>
+                                    <select
+                                      value={brandTransferDraft[brand.id] ?? (selectedOrg ?? '')}
+                                      onChange={(event) => {
+                                        const value = event.target.value;
+                                        setBrandTransferDraft((prev) => ({ ...prev, [brand.id]: value }));
+                                        handleBrandTransfer(brand, value);
+                                      }}
+                                      disabled={brandTransferLoading === brand.id || !organizations.length}
+                                      style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5f5', minWidth: 180 }}
+                                    >
+                                      {organizations.map((org) => (
+                                        <option key={org.id} value={org.id}>
+                                          {org.name}{org.id === selectedOrg ? ' (actual)' : ''}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    {brandTransferLoading === brand.id ? (
+                                      <div style={{ fontSize: 11, color: '#2563eb', marginTop: 4 }}>Actualizando...</div>
+                                    ) : (
+                                      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Selecciona una organización destino</div>
+                                    )}
+                                  </>
+                                )}
+                              </td>
+                            ) : null}
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{formatDate(brand.updated_at)}</td>
                           </tr>
                         );
                       })}
-                      {orgDetail.brands.length === 0 ? (
+                      {displayBrands.length === 0 ? (
                         <tr>
-                          <td colSpan={6} style={{ padding: '12px 16px', textAlign: 'center', color: '#6b7280' }}>Sin marcas registradas.</td>
+                          <td colSpan={(!isDealerGroupOrg && canManageBrandDistribution) ? 6 : 5} style={{ padding: '12px 16px', textAlign: 'center', color: '#6b7280' }}>Sin marcas registradas.</td>
                         </tr>
                       ) : null}
                     </tbody>
@@ -1834,21 +2234,27 @@ export default function AdminPage(): React.JSX.Element {
                     <h3 style={{ fontSize: 18, fontWeight: 600 }}>Dealers</h3>
                     <span style={{ fontSize: 12, color: '#6b7280' }}>{orgDetail.dealers.length} registrados</span>
                   </div>
-                  <button
-                    onClick={toggleDealerForm}
-                    disabled={!orgDetail.brands.length}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 6,
-                      border: '1px solid #059669',
-                      background: showDealerForm ? '#d1fae5' : '#047857',
-                      color: showDealerForm ? '#065f46' : '#fff',
-                      fontSize: 13,
-                      cursor: orgDetail.brands.length ? 'pointer' : 'not-allowed',
-                    }}
-                  >
-                    {showDealerForm ? 'Cancelar alta' : 'Agregar dealer'}
-                  </button>
+                  {canManageDealers ? (
+                    <button
+                      onClick={toggleDealerForm}
+                      disabled={!displayBrands.length}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        border: '1px solid #059669',
+                        background: showDealerForm ? '#d1fae5' : '#047857',
+                        color: showDealerForm ? '#065f46' : '#fff',
+                        fontSize: 13,
+                        cursor: displayBrands.length ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      {showDealerForm ? 'Cancelar alta' : 'Agregar dealer'}
+                    </button>
+                  ) : (
+                    <span style={{ fontSize: 12, color: '#6b7280' }}>
+                      Impersona a la organización con «Impersonar superadmin OEM/Grupo» para dar de alta dealers desde su panel dedicado.
+                    </span>
+                  )}
                 </header>
                 {dealerSummaryTotals ? (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12, fontSize: 12 }}>
@@ -1865,7 +2271,7 @@ export default function AdminPage(): React.JSX.Element {
                 {dealerError ? (
                   <p style={{ marginBottom: 12, fontSize: 12, color: '#b91c1c', background: '#fee2e2', border: '1px solid #f87171', borderRadius: 6, padding: '8px 10px' }}>{dealerError}</p>
                 ) : null}
-                {showDealerForm ? (
+                {canManageDealers && showDealerForm ? (
                   <form onSubmit={submitDealer} style={{ display: 'grid', gap: 12, marginBottom: 16, border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
                     <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
                       <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
@@ -1894,7 +2300,7 @@ export default function AdminPage(): React.JSX.Element {
                             {selectedDealerBrandLimit != null
                               ? selectedDealerBrandLimitReached
                                 ? 'Sin cupo disponible. Ajusta el límite para agregar más dealers.'
-                                : `Disponible: ${selectedDealerBrandRemaining} dealers`
+                              : `Disponible: ${Math.max(selectedDealerBrandRemaining, 0)} dealers`
                               : 'Sin límite establecido para esta marca.'}
                           </span>
                         ) : null}
@@ -2070,20 +2476,24 @@ export default function AdminPage(): React.JSX.Element {
                                         ? 'Reactivar'
                                         : 'Pausar'}
                                   </button>
-                                  <button
-                                    onClick={() => openBillingHistory(dealer)}
-                                    style={{
-                                      padding: '4px 10px',
-                                      borderRadius: 6,
-                                      border: '1px solid #4f46e5',
-                                      background: isActiveBillingPanel ? '#eef2ff' : '#fff',
-                                      color: '#312e81',
-                                      fontSize: 12,
-                                      cursor: 'pointer',
-                                    }}
-                                  >
-                                    {isActiveBillingPanel ? 'Ocultar historial' : 'Ver historial'}
-                                  </button>
+                                  {canManageBilling ? (
+                                    <button
+                                      onClick={() => openBillingHistory(dealer)}
+                                      style={{
+                                        padding: '4px 10px',
+                                        borderRadius: 6,
+                                        border: '1px solid #4f46e5',
+                                        background: isActiveBillingPanel ? '#eef2ff' : '#fff',
+                                        color: '#312e81',
+                                        fontSize: 12,
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      {isActiveBillingPanel ? 'Ocultar historial' : 'Ver historial'}
+                                    </button>
+                                  ) : (
+                                    <span style={{ fontSize: 11, color: '#9ca3af' }}>Pagos administrados por superadmin Cortex</span>
+                                  )}
                                 </div>
                               </td>
                             </tr>
@@ -2097,7 +2507,7 @@ export default function AdminPage(): React.JSX.Element {
                 </div>
               </section>
 
-              {billingPanel ? (
+              {canManageBilling && billingPanel ? (
                 <section style={{ border: '1px solid #a855f7', borderRadius: 8, padding: 16, background: '#faf5ff' }}>
                   <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <div style={{ display: 'grid', gap: 4 }}>
@@ -2357,20 +2767,36 @@ export default function AdminPage(): React.JSX.Element {
                                   <span style={{ fontSize: 12, color: '#94a3b8' }}>Sin permisos activos</span>
                                 )}
                               </div>
-                              <button
-                                onClick={() => openPermissionModal(user)}
-                                style={{
-                                  padding: '6px 10px',
-                                  borderRadius: 6,
-                                  border: '1px solid #0f172a',
-                                  background: '#0f172a',
-                                  color: '#fff',
-                                  fontSize: 12,
-                                  cursor: 'pointer',
-                                }}
-                              >
-                                Ajustar permisos
-                              </button>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                <button
+                                  onClick={() => openPermissionModal(user)}
+                                  style={{
+                                    padding: '6px 10px',
+                                    borderRadius: 6,
+                                    border: '1px solid #0f172a',
+                                    background: '#0f172a',
+                                    color: '#fff',
+                                    fontSize: 12,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Ajustar permisos
+                                </button>
+                                <button
+                                  onClick={() => impersonateUser(user)}
+                                  style={{
+                                    padding: '6px 10px',
+                                    borderRadius: 6,
+                                    border: '1px solid #2563eb',
+                                    background: '#eff6ff',
+                                    color: '#1d4ed8',
+                                    fontSize: 12,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Impersonar
+                                </button>
+                              </div>
                             </td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{formatDate(user.updated_at)}</td>
                           </tr>
