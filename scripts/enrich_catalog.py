@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import csv
 import json
 import math
 import re
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import pandas as pd
 
@@ -19,10 +19,401 @@ ENRICHED_DIR = DATA / "enriched"
 OVERRIDES_DIR = DATA / "overrides"
 ALIASES_DIR = DATA / "aliases"
 ALIASES_FILE = ALIASES_DIR / "alias_names.csv"
+STRAPI_NORMALIZED_PATH = ROOT.parent / "Strapi" / "data" / "autoradar" / "normalized.json"
 
 
 ACRONYMS = {"BMW","VW","GMC","RAM","BYD","GWM","MG","JAC","BAIC","MINI","DS"}
 UPPER_TOKENS = {"CX-5","CX-3","CX-30","ID.4","RAV4","RAV-4","X-Trail","Q5","Q3","GLA","GLC"}
+FUEL_OVERRIDES = {
+    "8459173": "diesel",
+    "845917320250604": "diesel",
+}
+
+
+def to_bool(val) -> Optional[bool]:
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        try:
+            if pd.isna(val):
+                return None
+        except Exception:
+            pass
+        return bool(val)
+    try:
+        s = str(val).strip().lower()
+    except Exception:
+        return None
+    if not s:
+        return None
+    true_tokens = {"1","true","yes","si","sí","y","on","available","present","standard","serie","incluido","included"}
+    false_tokens = {"0","false","no","n","off","none","null","na","n/a","sin","-"}
+    if s in true_tokens:
+        return True
+    if s in false_tokens:
+        return False
+    return None
+
+
+def to_float(val) -> Optional[float]:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        try:
+            if pd.isna(val):
+                return None
+        except Exception:
+            pass
+        return float(val)
+    try:
+        s = str(val).strip()
+    except Exception:
+        return None
+    if not s or s in {"nan","null","none","-"}:
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def to_int(val) -> Optional[int]:
+    f = to_float(val)
+    if f is None:
+        return None
+    try:
+        return int(round(f))
+    except Exception:
+        return None
+
+
+def load_strapi_catalog() -> pd.DataFrame:
+    path_env = os.getenv("STRAPI_NORMALIZED_PATH")
+    path = Path(path_env) if path_env else STRAPI_NORMALIZED_PATH
+    if not path.exists():
+        raise SystemExit(f"Strapi catalog not found: {path}")
+    payload = json.loads(path.read_text())
+    vehicles = payload.get("vehicles") or []
+
+    meta = payload.get("metadata") or {}
+    fuel_prices = meta.get("fuelPrices") or {}
+    if fuel_prices:
+        os.environ.setdefault("PRECIO_GASOLINA_MAGNA_LITRO", str(fuel_prices.get("regular", "23.57")))
+        os.environ.setdefault("PRECIO_GASOLINA_PREMIUM_LITRO", str(fuel_prices.get("premium", "25.00")))
+        os.environ.setdefault("PRECIO_DIESEL_LITRO", str(fuel_prices.get("diesel", "25.33")))
+
+    rows: list[dict[str, Any]] = []
+    for veh in vehicles:
+        row: Dict[str, Any] = {}
+        row["vehicle_id"] = veh.get("vehicle_id") or veh.get("uid")
+        row["uid_strapi"] = veh.get("uid")
+        row["make"] = veh.get("make")
+        row["model"] = veh.get("model")
+        row["version"] = veh.get("version") or veh.get("trim")
+        row["trim"] = veh.get("trim")
+        year_val = veh.get("year")
+        row["ano"] = year_val
+        row["year"] = year_val
+        row["region"] = veh.get("region")
+        row["body_style"] = veh.get("body_style")
+        row["make_slug"] = veh.get("make_slug")
+        row["model_slug"] = veh.get("model_slug")
+        row["version_slug"] = veh.get("version_slug") if "version_slug" in veh else None
+
+        drivetrain = veh.get("drivetrain")
+        if drivetrain:
+            row["traccion_original"] = drivetrain
+            row["driven_wheels"] = str(drivetrain).strip().lower()
+        transmission = veh.get("transmission")
+        if transmission:
+            row["transmision"] = transmission
+
+        row["msrp"] = to_float(veh.get("price_msrp"))
+        row["precio_transaccion"] = to_float(veh.get("price_transaction"))
+        row["precio_factura"] = to_float(veh.get("price_invoice"))
+        row["precio_delivery"] = to_float(veh.get("price_delivery"))
+        row["price_currency"] = veh.get("price_currency")
+
+        row["combinado_kml"] = to_float(veh.get("fuel_combined_kml"))
+        row["ciudad_kml"] = to_float(veh.get("fuel_city_kml"))
+        row["fuel_combined_l_100km"] = to_float(veh.get("fuel_combined_l_100km"))
+        row["fuel_tank_l"] = to_float(veh.get("fuel_tank_l"))
+        row["fuel_cost_60k_mxn"] = to_float(veh.get("fuel_cost_60k_mxn"))
+        row["service_cost_60k_mxn"] = to_float(veh.get("service_cost_60k_mxn"))
+        row["tco_60k_mxn"] = to_float(veh.get("tco_60k_mxn"))
+
+        fuel_type = str(veh.get("fuel_type") or "").strip()
+        fuel_detail = str(veh.get("fuel_type_detail") or "").strip()
+        induction = str(veh.get("engine_induction") or "").strip()
+        phev_flag = to_bool(veh.get("phev_plug_in"))
+        row["phev_plug_in"] = phev_flag
+
+        cat = fuel_detail or fuel_type or induction
+        cat_norm = cat.lower()
+        if "electric" in cat_norm or "bev" in cat_norm:
+            categoria = "bev"
+        elif phev_flag:
+            categoria = "phev"
+        elif "hybrid" in cat_norm or "hev" in cat_norm:
+            categoria = "hev"
+        elif "diesel" in cat_norm:
+            categoria = "diesel"
+        else:
+            categoria = cat
+
+        # Fallback: infer from equipment block when top-level fields are empty
+        if not categoria or categoria.strip().lower() in {"", "no disponible", "no_disponible", "none", "null", "otro", "other"}:
+            try:
+                equip = veh.get("equipment") or {}
+                fuel_sections = []
+                for key in ("Combustible", "consumo de combustible", "Motor", "motor"):
+                    sec = equip.get(key)
+                    if isinstance(sec, list):
+                        fuel_sections.extend(sec)
+                tokens: list[str] = []
+                for item in fuel_sections:
+                    if not isinstance(item, dict):
+                        continue
+                    for val in (item.get("value"), item.get("name")):
+                        if val:
+                            tokens.append(str(val))
+                    for attr in item.get("attributes", []) or []:
+                        tokens.append(str(attr.get("value") or ""))
+                joined = " ".join(tokens).lower()
+                if any(tok in joined for tok in ("diesel", "diésel", "dsl")):
+                    categoria = "diesel"
+                elif any(tok in joined for tok in ("híbrido", "hibrido", "hev")):
+                    categoria = "hev"
+                elif any(tok in joined for tok in ("phev", "enchuf")):
+                    categoria = "phev"
+                elif any(tok in joined for tok in ("eléctrico", "electrico", "bev")):
+                    categoria = "bev"
+            except Exception:
+                pass
+
+        invalid_tokens = {"", "no disponible", "no_disponible", "none", "null", "otro", "other"}
+        search_tokens: list[str] = []
+        for key in ("version", "trim", "marketing_name", "description", "model_display", "catalog_name"):
+            val = veh.get(key)
+            if val:
+                search_tokens.append(str(val))
+        for key in ("labels", "tags"):
+            val = veh.get(key)
+            if isinstance(val, (list, tuple)):
+                for item in val:
+                    if item:
+                        search_tokens.append(str(item))
+        composite = " ".join(search_tokens).lower()
+        inferred_from_name = None
+        if "diesel" in composite:
+            inferred_from_name = "diesel"
+        elif any(tok in composite for tok in ("plug-in", "plug in", "phev", "híbrido enchuf", "hibrido enchuf")):
+            inferred_from_name = "phev"
+        elif any(tok in composite for tok in ("mhev", "mild hybrid", "mild-hybrid")):
+            inferred_from_name = "mhev"
+        elif any(tok in composite for tok in ("híbrido", "hibrido", "hev")):
+            inferred_from_name = "hev"
+        elif any(tok in composite for tok in ("eléctrico", "electrico", "bev", "battery electric")):
+            inferred_from_name = "bev"
+        elif any(tok in composite for tok in ("gasolina", "petrol", "nafta")):
+            inferred_from_name = "gasolina"
+
+        if not categoria or str(categoria).strip().lower() in invalid_tokens:
+            categoria = inferred_from_name or categoria
+        elif inferred_from_name:
+            current = str(categoria).strip().lower()
+            # Corrige inconsistencias obvias, p.ej. versión dice Diesel pero fuel_type=gasoline
+            mismatch = (
+                (inferred_from_name == "diesel" and "diesel" not in current) or
+                (inferred_from_name == "phev" and "phev" not in current) or
+                (inferred_from_name in {"hev", "mhev"} and not any(tok in current for tok in ("hev", "híbrid", "hibrid"))) or
+                (inferred_from_name == "bev" and "elect" not in current)
+            )
+            if mismatch:
+                categoria = inferred_from_name if inferred_from_name != "mhev" else "hev"
+
+        # Manual overrides for casos donde JATO/Strapi entrega fuel_type incorrecto
+        override_candidates = [
+            veh.get("uid"),
+            veh.get("uid_strapi"),
+            veh.get("vehicle_id"),
+            veh.get("vehicleId"),
+            row.get("uid_strapi"),
+            row.get("vehicle_id"),
+        ]
+        for candidate in override_candidates:
+            if candidate is None:
+                continue
+            key_str = str(candidate)
+            if key_str in FUEL_OVERRIDES:
+                categoria = FUEL_OVERRIDES[key_str]
+                break
+            if isinstance(candidate, int) and candidate in FUEL_OVERRIDES:
+                categoria = FUEL_OVERRIDES[candidate]
+                break
+
+        row["tipo_de_combustible_original"] = fuel_type or fuel_detail or induction or categoria
+        row["categoria_combustible_final"] = categoria
+
+        # Basic dimensions
+        row["longitud_mm"] = to_float(veh.get("length_mm"))
+        row["anchura_mm"] = to_float(veh.get("width_mm"))
+        row["altura_mm"] = to_float(veh.get("height_mm"))
+        row["wheelbase_mm"] = to_float(veh.get("wheelbase_mm"))
+        row["peso_kg"] = to_float(veh.get("curb_weight_kg"))
+
+        # Warranty mapping
+        row["warranty_full_months"] = to_float(veh.get("warranty_basic_months"))
+        row["warranty_full_km"] = to_float(veh.get("warranty_basic_km"))
+        row["warranty_powertrain_months"] = to_float(veh.get("warranty_powertrain_months"))
+        row["warranty_powertrain_km"] = to_float(veh.get("warranty_powertrain_km"))
+        row["warranty_roadside_months"] = to_float(veh.get("warranty_roadside_months"))
+        row["warranty_corrosion_months"] = to_float(veh.get("warranty_corrosion_months"))
+        elec_months = veh.get("warranty_electrical_months") or veh.get("warranty_battery_months")
+        row["warranty_electric_months"] = to_float(elec_months)
+
+        # Scores from Strapi direct
+        for dst, src in (
+            ("infotainment_score", "infotainment_score"),
+            ("convenience_score", "convenience_score"),
+            ("hvac_score", "hvac_score"),
+            ("adas_score", "adas_score"),
+            ("safety_score", "safety_score"),
+        ):
+            if src in veh:
+                row[dst] = to_float(veh.get(src))
+
+        # Feature booleans
+        bool_pairs = (
+            ("tiene_pantalla_tactil", "infotainment_touchscreen"),
+            ("android_auto", "infotainment_android_auto"),
+            ("android_auto_wireless", "infotainment_android_auto_wireless"),
+            ("apple_carplay", "infotainment_carplay"),
+            ("carplay_wireless", "infotainment_carplay_wireless"),
+            ("wireless_charging", "comfort_wireless_charging"),
+            ("hud", "infotainment_hud"),
+            ("ambient_lighting", "comfort_ambient_lighting"),
+            ("asistente_estac_frontal", "adas_parking_sensors_front"),
+            ("asistente_estac_trasero", "adas_parking_sensors_rear"),
+            ("sensor_punto_ciego", "adas_blind_spot_warning"),
+            ("camara_360", "adas_surround_view"),
+            ("alerta_colision", "adas_forward_collision_warning"),
+            ("control_frenado_curvas", "adas_emergency_braking"),
+            ("control_estabilidad", "safety_esc"),
+            ("control_electrico_de_traccion", "safety_traction_control"),
+            ("abs", "safety_abs"),
+            ("limpiaparabrisas_lluvia", "comfort_rain_sensor"),
+            ("apertura_remota_maletero", "comfort_power_tailgate"),
+            ("cierre_automatico_maletero", "comfort_auto_door_close"),
+            ("memoria_asientos", "comfort_memory_settings"),
+        )
+        for dst, src in bool_pairs:
+            val = to_bool(veh.get(src))
+            if val is not None:
+                row[dst] = val
+
+        seat_heat = to_bool(veh.get("comfort_front_seat_heating"))
+        seat_vent = to_bool(veh.get("comfort_front_seat_ventilation"))
+        if seat_heat is not None:
+            row["asientos_calefaccion_conductor"] = seat_heat
+            row["asientos_calefaccion_pasajero"] = seat_heat
+        if seat_vent is not None:
+            row["asientos_ventilacion_conductor"] = seat_vent
+            row["asientos_ventilacion_pasajero"] = seat_vent
+        rear_heat = to_bool(veh.get("comfort_rear_seat_heating"))
+        if rear_heat:
+            row["asientos_calefaccion_fila2"] = True
+        rear_vent = to_bool(veh.get("comfort_rear_seat_ventilation"))
+        if rear_vent:
+            row["asientos_ventilacion_fila2"] = True
+
+        zones = to_int(veh.get("hvac_zones"))
+        if zones is not None:
+            row["zonas_clima"] = zones
+        if to_bool(veh.get("hvac_rear_controls")):
+            row["clima_controles_traseros"] = True
+        if to_bool(veh.get("hvac_filter_active_carbon")) or to_bool(veh.get("hvac_filter_pollen")):
+            row["clima_filtro"] = True
+        if to_bool(veh.get("hvac_ionizer")):
+            row["clima_ionizador"] = True
+        if veh.get("hvac_type"):
+            row["aire_acondicionado"] = True
+
+        speakers = to_int(veh.get("infotainment_audio_speakers"))
+        if speakers is not None:
+            row["speakers_count"] = speakers
+            row["bocinas"] = speakers
+        if to_bool(veh.get("infotainment_audio_subwoofer")):
+            row["subwoofer"] = True
+        if to_bool(veh.get("infotainment_audio_surround")):
+            row["audio_surround"] = True
+        screen_main = to_float(veh.get("infotainment_screen_main_in"))
+        if screen_main is not None:
+            row["screen_main_in"] = screen_main
+        # USB presence is boolean in Strapi; approximate counts when available
+        if to_bool(veh.get("infotainment_usb_front")):
+            row["usb_a_count"] = max(row.get("usb_a_count") or 0, 2)
+        if to_bool(veh.get("infotainment_usb_rear")):
+            row["usb_a_count"] = max(row.get("usb_a_count") or 0, 4)
+
+        if to_bool(veh.get("comfort_parking_assist_auto")):
+            row["asistente_estacionamiento_automatico"] = True
+
+        airbags_map = (
+            ("bolsas_aire_delanteras_conductor", "airbags_front_driver"),
+            ("bolsas_aire_delanteras_pasajero", "airbags_front_passenger"),
+            ("bolsas_aire_laterales_adelante", "airbags_side_front"),
+            ("bolsas_aire_laterales_atras", "airbags_side_rear"),
+            ("bolsas_rodillas_conductor", "airbags_knee_driver"),
+            ("bolsas_rodillas_pasajero", "airbags_knee_passenger"),
+        )
+        for dst, src in airbags_map:
+            val = to_bool(veh.get(src))
+            if val:
+                row[dst] = True
+        curtain_vals = [to_bool(veh.get(k)) for k in ("airbags_curtain_row1","airbags_curtain_row2","airbags_curtain_row3")]
+        if any(v is True for v in curtain_vals):
+            row["bolsas_cortina_todas_filas"] = True
+
+        # Lighting / exterior helpers
+        if to_bool(veh.get("lighting_fog_front")) or to_bool(veh.get("lighting_fog_rear")):
+            row["luces_antiniebla"] = True
+        if to_bool(veh.get("lighting_auto_headlights")):
+            row["luces_auto"] = True
+        head_desc = veh.get("lighting_headlight_type") or ""
+        if head_desc:
+            row["tipo_faros"] = head_desc
+
+        # Cruise description for heuristics
+        if to_bool(veh.get("adas_adaptive_cruise")):
+            row["control_crucero_original"] = "Control crucero adaptativo"
+        elif to_bool(veh.get("adas_cruise_control")):
+            row["control_crucero_original"] = "Control crucero"
+
+        # Header description seed with make/model/version for text heuristics
+        header_parts = [veh.get("make"), veh.get("model"), veh.get("version"), veh.get("trim"), head_desc]
+        row["header_description"] = " ".join(str(p) for p in header_parts if p)
+
+        # Include any remaining raw keys from the normalized payload so we leverage
+        # the complete Strapi schema (without overwriting mapped fields).
+        for raw_key, raw_value in veh.items():
+            key = str(raw_key).strip()
+            if not key:
+                continue
+            key_lower = key.lower()
+            if key_lower not in row:
+                row[key_lower] = raw_value
+
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["make","model","version","ano"])
+
+    df = pd.DataFrame(rows)
+    df.columns = [str(c).lower() for c in df.columns]
+    return df
 
 
 def normalize_token(tok: str) -> str:
@@ -66,7 +457,16 @@ def normalize_year(val) -> int:
 
 
 def segment_from_body_style(bs: str) -> str:
-    s = (bs or "").strip().lower()
+    if bs is None:
+        s = ""
+    elif isinstance(bs, float):
+        if math.isnan(bs):
+            s = ""
+        else:
+            s = str(bs)
+    else:
+        s = str(bs)
+    s = s.strip().lower()
     if "pick" in s or "cab" in s:
         return "pickup"
     if "todo terreno" in s or "suv" in s or "crossover" in s:
@@ -146,6 +546,9 @@ def compute_pillars(df: pd.DataFrame) -> pd.DataFrame:
         return False
 
     def score_adas(row) -> float:
+        direct = _num(row.get('adas_score'))
+        if direct is not None and direct > 0:
+            return round(min(100.0, direct), 1)
         s = 0
         s += adas_weights['alerta_colision'] if _truthy(row.get('alerta_colision')) or _truthy(row.get('alerta_colision_original')) else 0
         s += adas_weights['sensor_punto_ciego'] if _truthy(row.get('sensor_punto_ciego')) or _truthy(row.get('sensor_punto_ciego_original')) or _truthy(row.get('tiene_camara_punto_ciego')) else 0
@@ -186,6 +589,9 @@ def compute_pillars(df: pd.DataFrame) -> pd.DataFrame:
         return cnt
 
     def score_safety(row) -> float:
+        direct = _num(row.get('safety_score'))
+        if direct is not None and direct > 0:
+            return round(min(100.0, direct), 1)
         s = 0.0
         # ABS y ESC
         if _truthy(row.get('abs')) or _truthy(row.get('abs_original')):
@@ -210,6 +616,14 @@ def compute_pillars(df: pd.DataFrame) -> pd.DataFrame:
 
     # ----- Confort -----
     def score_comfort(row) -> float:
+        conv = _num(row.get('convenience_score'))
+        hv = _num(row.get('hvac_score'))
+        if conv is not None and conv > 0:
+            if hv is not None and hv > 0:
+                val = min(100.0, (conv + hv) / 2.0)
+            else:
+                val = conv
+            return round(min(100.0, val), 1)
         s = 0.0
         for c in ('asientos_calefaccion_conductor','asientos_calefaccion_pasajero','asientos_ventilacion_conductor','asientos_ventilacion_pasajero'):
             if _truthy(row.get(c)):
@@ -250,6 +664,9 @@ def compute_pillars(df: pd.DataFrame) -> pd.DataFrame:
 
     # ----- Info‑entretenimiento -----
     def score_infotainment(row) -> float:
+        direct = _num(row.get('infotainment_score'))
+        if direct is not None and direct > 0:
+            return round(min(100.0, direct), 1)
         s = 0.0
         if _truthy(row.get('tiene_pantalla_tactil')):
             s += 18
@@ -572,11 +989,17 @@ def apply_alias_cols(df: pd.DataFrame, aliases: pd.DataFrame) -> pd.DataFrame:
 def main():
     ENRICHED_DIR.mkdir(parents=True, exist_ok=True)
     OVERRIDES_DIR.mkdir(parents=True, exist_ok=True)
-    base_path = DATA / "equipo_veh_limpio_procesado.csv"
-    if not base_path.exists():
-        raise SystemExit(f"Base catalog not found: {base_path}")
-    base = pd.read_csv(base_path, low_memory=False)
-    base.columns = [c.lower() for c in base.columns]
+    output_csv = DATA / "equipo_veh_limpio_procesado.csv"
+    use_strapi = os.getenv("USE_STRAPI_CATALOG", "1").lower() not in {"0","false"}
+    if use_strapi:
+        print(f"[catalog] Loading Strapi normalized catalog: {os.getenv('STRAPI_NORMALIZED_PATH', STRAPI_NORMALIZED_PATH)}")
+        base = load_strapi_catalog()
+    else:
+        if not output_csv.exists():
+            raise SystemExit(f"Base catalog not found: {output_csv}")
+        base = pd.read_csv(output_csv, low_memory=False)
+        base.columns = [c.lower() for c in base.columns]
+
     base = build_key_cols(base)
     aliases = load_aliases()
     base = apply_alias_cols(base, aliases)
@@ -615,8 +1038,35 @@ def main():
     base = compute_scores(base)
     base = fuel_costs(base)
 
+    # Cobertura de pilares: porcentaje de versiones con score > 0
+    pillar_cols = [
+        "equip_p_adas",
+        "equip_p_safety",
+        "equip_p_comfort",
+        "equip_p_infotainment",
+        "equip_p_traction",
+        "equip_p_utility",
+    ]
+    coverage_summary: list[str] = []
+    low_coverage: list[str] = []
+    for col in pillar_cols:
+        if col in base.columns:
+            series = pd.to_numeric(base[col], errors="coerce").fillna(0)
+            pct = float((series > 0).sum()) / float(len(series)) * 100.0 if len(series) else 0.0
+            coverage_summary.append(f"{col}: {pct:.1f}%")
+            if pct < 60.0:
+                low_coverage.append(f"{col} ({pct:.1f}%)")
+    if coverage_summary:
+        print("[catalog] Cobertura pilares:", ", ".join(coverage_summary))
+    if low_coverage:
+        print("[catalog][WARN] Cobertura baja en:", ", ".join(low_coverage))
+
+    # Persist processed catalog for backend consumption
+    base.to_csv(output_csv, index=False)
+    print(f"[catalog] Actualizado {output_csv}")
+
     # Metadata
-    ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     # Ensure metadata columns exist before fillna
     for col, default in (
         ("specs_source", "OEM_OR_JATO"),
