@@ -26,12 +26,105 @@ export default function VehicleSelect() {
   const model = own.model;
   const year = own.year;
   const version = own.version;
+  const [allowedBrand, setAllowedBrand] = React.useState('');
+  const [allowedBrandList, setAllowedBrandList] = React.useState<string[]>([]);
   const modelRef = React.useRef<HTMLInputElement>(null);
   const brandRef = React.useRef<HTMLInputElement>(null);
   const [openModelSugg, setOpenModelSugg] = React.useState(false);
   const [hiModel, setHiModel] = React.useState(-1);
   const [openBrandSugg, setOpenBrandSugg] = React.useState(false);
   const [hiBrand, setHiBrand] = React.useState(-1);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const read = () => {
+      try {
+        const stored = window.localStorage.getItem('CORTEX_DEALER_ALLOWED_BRAND') || '';
+        setAllowedBrand(stored.trim());
+      } catch {
+        setAllowedBrand('');
+      }
+    };
+    read();
+    const onCustom = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (typeof detail === 'string') {
+        setAllowedBrand(detail.trim());
+      } else {
+        read();
+      }
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === 'CORTEX_DEALER_ALLOWED_BRAND') read();
+    };
+    window.addEventListener('cortex:dealer_brand', onCustom as EventListener);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('cortex:dealer_brand', onCustom as EventListener);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const normalizeList = (value: unknown): string[] => {
+      if (Array.isArray(value)) {
+        return Array.from(new Set(
+          value
+            .map((item) => String(item || '').trim())
+            .filter((item) => item.length > 0)
+        ));
+      }
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed ? [trimmed] : [];
+      }
+      return [];
+    };
+
+    const read = () => {
+      try {
+        const raw = window.localStorage.getItem('CORTEX_ALLOWED_BRANDS');
+        if (!raw || !raw.length) {
+          setAllowedBrandList([]);
+          return;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          setAllowedBrandList(normalizeList(parsed));
+        } catch {
+          setAllowedBrandList(normalizeList(raw));
+        }
+      } catch {
+        setAllowedBrandList([]);
+      }
+    };
+
+    const onCustom = (event: Event) => {
+      try {
+        const detail = (event as CustomEvent).detail;
+        setAllowedBrandList(normalizeList(detail));
+      } catch {
+        read();
+      }
+    };
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === 'CORTEX_ALLOWED_BRANDS' || event.key === 'CORTEX_DEALER_ALLOWED_BRAND') {
+        read();
+      }
+    };
+
+    read();
+    window.addEventListener('cortex:allowed_brands', onCustom as EventListener);
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      window.removeEventListener('cortex:allowed_brands', onCustom as EventListener);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   const { data: base } = useSWR<OptionsPayload>('options_base', () => endpoints.options());
   const baseReady = base !== undefined;
@@ -86,12 +179,28 @@ export default function VehicleSelect() {
     rows.forEach(r => { const mk = String(r?.make || '').trim().toUpperCase(); if (mk) set.add(mk); });
     return Array.from(set).sort();
   });
+  const brandNorm = (s: string) => {
+    try { return s.normalize('NFD').replace(/\p{Diacritic}+/gu,'').toLowerCase(); } catch { return s.toLowerCase(); }
+  };
+  const allowedBrandSet = React.useMemo(() => {
+    if (!allowedBrandList.length) return null;
+    const set = new Set<string>();
+    allowedBrandList.forEach((item) => {
+      const key = brandNorm(String(item || ''));
+      if (key) set.add(key);
+    });
+    return set.size ? set : null;
+  }, [allowedBrandList]);
   const allBrands = React.useMemo(() => {
+    if (allowedBrand) return [allowedBrand];
+    const allowedSet = allowedBrandSet;
     const a = (base?.brands || base?.makes || []) as string[];
     const b = (brandsFallback || []) as string[];
     const push = (out: string[], seen: Set<string>, val: any) => {
       const label = String(val || '').trim();
       if (!label) return;
+      const normalized = brandNorm(label);
+      if (allowedSet && !allowedSet.has(normalized)) return;
       const key = label.toUpperCase();
       if (seen.has(key)) return;
       seen.add(key);
@@ -99,21 +208,35 @@ export default function VehicleSelect() {
     };
     const out: string[] = [];
     const seen = new Set<string>();
-    a.forEach(x => push(out, seen, x));
-    b.forEach(x => push(out, seen, x));
+    a.forEach((x) => push(out, seen, x));
+    b.forEach((x) => push(out, seen, x));
+    if (allowedSet && allowedBrandList.length) {
+      const haveSet = new Set(out.map((item) => brandNorm(item)));
+      allowedBrandList.forEach((value) => {
+        const normalized = brandNorm(value);
+        if (!haveSet.has(normalized)) {
+          out.push(value);
+          haveSet.add(normalized);
+        }
+      });
+    }
     return out;
-  }, [base, brandsFallback]);
-  const brandNorm = (s: string) => {
-    try { return s.normalize('NFD').replace(/\p{Diacritic}+/gu,'').toLowerCase(); } catch { return s.toLowerCase(); }
-  };
+  }, [base, brandsFallback, allowedBrand, allowedBrandSet, allowedBrandList]);
   const brandSuggest = React.useMemo(() => {
+    if (allowedBrand) return [allowedBrand];
     const q = (brand || '').trim();
     const src = (allBrands || []) as string[];
     if (!q) return src.slice(0, 18);
     const nq = brandNorm(q);
     return src.filter(b => brandNorm(String(b)).includes(nq)).slice(0, 18);
-  }, [brand, allBrands]);
+  }, [brand, allBrands, allowedBrand]);
   const brandApi = React.useMemo(() => {
+    if (allowedBrand) {
+      const brands = (allBrands || []) as string[];
+      const needle = brandNorm(allowedBrand);
+      const match = brands.find((m) => brandNorm(String(m)) === needle);
+      return match || allowedBrand;
+    }
     const raw = (brand || '').trim();
     if (!raw) return '';
     const needle = brandNorm(raw);
@@ -122,10 +245,31 @@ export default function VehicleSelect() {
     if (exact) return exact;
     const matches = brands.filter((m) => brandNorm(String(m)).startsWith(needle));
     return matches.length === 1 ? matches[0] : '';
-  }, [brand, allBrands]);
+  }, [brand, allBrands, allowedBrand]);
+
+  React.useEffect(() => {
+    if (allowedBrand) return;
+    if (!allowedBrandList.length) return;
+    if (!allowedBrandSet) return;
+    const current = String(brand || '').trim();
+    if (current) {
+      const isAllowed = allowedBrandSet.has(brandNorm(current));
+      if (!isAllowed) {
+        if (allowedBrandList.length === 1) {
+          setOwn({ make: allowedBrandList[0], model: '', year: '', version: '' });
+        } else {
+          setOwn({ make: '', model: '', year: '', version: '' });
+        }
+      }
+    } else if (allowedBrandList.length === 1) {
+      setOwn({ make: allowedBrandList[0], model: '', year: '', version: '' });
+    }
+  }, [allowedBrand, allowedBrandList, allowedBrandSet, brand, setOwn]);
   // Models filtered by selected brand (if any)
   const { data: forBrand } = useSWR<OptionsPayload>(brandApi ? ['options_brand', brandApi] : null, () => endpoints.options({ make: brandApi }));
-  const brandTyping = (brand || '').trim().length > 0 && !brandApi;
+  const brandLocked = Boolean(allowedBrand);
+  const brandTyping = brandLocked ? false : ((brand || '').trim().length > 0 && !brandApi);
+  const brandDisplay = brandLocked ? allowedBrand : brand;
   // Mostrar modelos mientras se escribe la marca; filtrar solo cuando haya match único (brandApi)
   const modelsForBrand = React.useMemo(() => {
     if (brandApi) {
@@ -186,6 +330,13 @@ export default function VehicleSelect() {
     // Evita ciclos si ya está seteado
     if (next.make !== own.make || next.year !== own.year) setOwn(next);
   }, [model, forModel, catalogForModel]);
+
+  React.useEffect(() => {
+    if (!allowedBrand) return;
+    if (!brand || brand.toLowerCase() !== allowedBrand.toLowerCase()) {
+      setOwn({ make: allowedBrand, model: '', year: '', version: '' });
+    }
+  }, [allowedBrand, brand, setOwn]);
 
   // When brand changes, set most recent year using SWR brand options (no extra request)
   React.useEffect(() => {
@@ -280,6 +431,10 @@ export default function VehicleSelect() {
     else if (e.key === 'Escape') { setOpenModelSugg(false); }
   }
 
+  React.useEffect(() => {
+    if (brandLocked) setOpenBrandSugg(false);
+  }, [brandLocked]);
+
   return (
     <section suppressHydrationWarning style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff' }}>
       <div style={{ display:'grid', gridTemplateColumns:'auto minmax(180px,1fr) minmax(140px,1fr) minmax(180px,1fr) minmax(180px,1fr)', gap:12, alignItems:'end' }}>
@@ -291,11 +446,16 @@ export default function VehicleSelect() {
           <input
             ref={brandRef}
             placeholder="Marca"
-            value={brand}
-            onChange={e=>{ setOwn({ ...own, make: e.target.value, model: '', year: '', version: '' }); setOpenBrandSugg(true); }}
-            onFocus={()=> setOpenBrandSugg(true)}
+            value={brandDisplay}
+            onChange={e=>{
+              if (brandLocked) return;
+              setOwn({ ...own, make: e.target.value, model: '', year: '', version: '' });
+              setOpenBrandSugg(true);
+            }}
+            onFocus={()=> { if (!brandLocked) setOpenBrandSugg(true); }}
             onBlur={()=> setTimeout(()=>setOpenBrandSugg(false), 120)}
             onKeyDown={(e)=>{
+              if (brandLocked) return;
               const N = brandSuggest.length;
               if (!N) return;
               if (e.key === 'ArrowDown') { e.preventDefault(); setOpenBrandSugg(true); setHiBrand(h => (h+1>=N?0:h+1)); }
@@ -304,9 +464,10 @@ export default function VehicleSelect() {
               else if (e.key === 'Escape') { setOpenBrandSugg(false); }
             }}
             style={{ width:'100%' }}
+            disabled={brandLocked}
             suppressHydrationWarning
           />
-          {(openBrandSugg) && (
+          {(openBrandSugg && !brandLocked) && (
             <div style={{ position:'absolute', left:0, right:0, zIndex:10, background:'#fff', border:'1px solid #e5e7eb', borderRadius:8, marginTop:4, boxShadow:'0 4px 10px rgba(0,0,0,0.06)', maxHeight:220, overflowY:'auto' }}>
               {brandSuggest.length>0 ? brandSuggest.map((m, idx) => (
                 <button

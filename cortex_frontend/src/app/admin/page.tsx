@@ -196,9 +196,16 @@ type AdminOrganizationResponse = {
   organization: {
     id: string;
     name: string;
+    display_name?: string | null;
+    legal_name?: string | null;
+    tax_id?: string | null;
     package: string;
     status?: string;
     paused_at?: string | null;
+    billing_email?: string | null;
+    billing_phone?: string | null;
+    billing_address?: Record<string, any> | null;
+    contact_info?: Record<string, any> | null;
     metadata?: Record<string, any> | null;
     created_at: string;
     updated_at: string;
@@ -208,6 +215,14 @@ type AdminOrganizationResponse = {
   users: UserInfo[];
   dealer_billing?: DealerBillingDetail;
   dealer_summary?: DealerSummary;
+  created_user?: {
+    id: string;
+    email?: string | null;
+    role: string;
+    feature_flags?: Record<string, any> | null;
+    metadata?: Record<string, any> | null;
+    temp_password?: string;
+  };
 };
 
 type OrgFormState = {
@@ -256,6 +271,58 @@ const emptyOrgForm: OrgFormState = {
   superPassword: '',
   superName: '',
   superPhone: '',
+};
+
+type OrgEditState = {
+  name: string;
+  displayName: string;
+  legalName: string;
+  taxId: string;
+  billingEmail: string;
+  billingPhone: string;
+  billingLine1: string;
+  billingLine2: string;
+  billingCity: string;
+  billingState: string;
+  billingZip: string;
+  billingCountry: string;
+  contactName: string;
+  contactPhone: string;
+  metadataNotes: string;
+};
+
+const emptyOrgEdit: OrgEditState = {
+  name: '',
+  displayName: '',
+  legalName: '',
+  taxId: '',
+  billingEmail: '',
+  billingPhone: '',
+  billingLine1: '',
+  billingLine2: '',
+  billingCity: '',
+  billingState: '',
+  billingZip: '',
+  billingCountry: '',
+  contactName: '',
+  contactPhone: '',
+  metadataNotes: '',
+};
+
+type OrgUserFormState = {
+  email: string;
+  name: string;
+  phone: string;
+  role: 'oem_user' | 'superadmin_oem';
+  dealerAdmin: boolean;
+};
+
+const emptyOrgUserForm: OrgUserFormState = {
+  email: '',
+  name: '',
+  phone: '',
+  role: 'oem_user',
+  dealerAdmin: false,
 };
 
 function formatDate(value?: string | null) {
@@ -386,6 +453,16 @@ export default function AdminPage(): React.JSX.Element {
   const [orgSuccess, setOrgSuccess] = React.useState('');
   const [orgMetadataLoading, setOrgMetadataLoading] = React.useState(false);
   const [orgMetadataError, setOrgMetadataError] = React.useState('');
+  const [orgEditMode, setOrgEditMode] = React.useState(false);
+  const [orgEditState, setOrgEditState] = React.useState<OrgEditState>({ ...emptyOrgEdit });
+  const [orgEditLoading, setOrgEditLoading] = React.useState(false);
+  const [orgEditError, setOrgEditError] = React.useState('');
+  const [orgEditSuccess, setOrgEditSuccess] = React.useState('');
+  const [showOrgUserForm, setShowOrgUserForm] = React.useState(false);
+  const [orgUserForm, setOrgUserForm] = React.useState<OrgUserFormState>({ ...emptyOrgUserForm });
+  const [orgUserLoading, setOrgUserLoading] = React.useState(false);
+  const [orgUserError, setOrgUserError] = React.useState('');
+  const [orgUserSuccess, setOrgUserSuccess] = React.useState('');
   const [userFeatureLoading, setUserFeatureLoading] = React.useState<string | null>(null);
   const [userFeatureError, setUserFeatureError] = React.useState('');
   const [statusLoading, setStatusLoading] = React.useState(false);
@@ -421,8 +498,30 @@ export default function AdminPage(): React.JSX.Element {
   const [permissionModal, setPermissionModal] = React.useState<{ user: UserInfo; levels: Record<string, FeatureLevel> } | null>(null);
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [permissionError, setPermissionError] = React.useState('');
+  const [contactModal, setContactModal] = React.useState<{ user: UserInfo; name: string; phone: string } | null>(null);
+  const [contactSaving, setContactSaving] = React.useState(false);
+  const [contactError, setContactError] = React.useState('');
   const [adminUserId, setAdminUserId] = React.useState('');
   const [adminUserEmail, setAdminUserEmail] = React.useState('');
+
+  const applyAllowedBrands = React.useCallback((brands: string[]) => {
+    if (typeof window === 'undefined') return;
+    const unique = Array.from(
+      new Set(
+        (brands || [])
+          .map((value) => String(value || '').trim())
+          .filter((value) => value.length > 0)
+      )
+    );
+    try {
+      if (unique.length) {
+        window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(unique));
+      } else {
+        window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
+      }
+      window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: unique }));
+    } catch {}
+  }, []);
 
   const organizationsData = React.useMemo(() => {
     const list = data?.organizations ?? [];
@@ -541,10 +640,103 @@ export default function AdminPage(): React.JSX.Element {
     const meta = orgDetail?.organization?.metadata;
     return meta && typeof meta === 'object' ? (meta as Record<string, any>) : {};
   }, [orgDetail?.organization?.metadata]);
+  const hydrateOrgEditState = React.useCallback((): OrgEditState => {
+    const org = orgDetail?.organization;
+    if (!org) return { ...emptyOrgEdit };
+    const billingAddress = (org.billing_address ?? {}) as Record<string, any>;
+    const contactInfo = (org.contact_info ?? {}) as Record<string, any>;
+    const metadata = (org.metadata ?? {}) as Record<string, any>;
+    return {
+      name: org.name || '',
+      displayName: org.display_name || '',
+      legalName: org.legal_name || '',
+      taxId: org.tax_id || '',
+      billingEmail: org.billing_email || '',
+      billingPhone: org.billing_phone || '',
+      billingLine1: String(billingAddress.line1 ?? ''),
+      billingLine2: String(billingAddress.line2 ?? ''),
+      billingCity: String(billingAddress.city ?? ''),
+      billingState: String(billingAddress.state ?? ''),
+      billingZip: String(billingAddress.postal_code ?? ''),
+      billingCountry: String(billingAddress.country ?? ''),
+      contactName: String(contactInfo.name ?? ''),
+      contactPhone: String(contactInfo.phone ?? ''),
+      metadataNotes: typeof metadata?.notes === 'string' ? metadata.notes : '',
+    };
+  }, [orgDetail]);
+
+  React.useEffect(() => {
+    if (!orgDetail) {
+      setOrgEditMode(false);
+      setOrgEditState({ ...emptyOrgEdit });
+      setOrgEditError('');
+      setOrgEditSuccess('');
+      return;
+    }
+    if (!orgEditMode) {
+      setOrgEditState(hydrateOrgEditState());
+    }
+  }, [orgDetail, orgEditMode, hydrateOrgEditState]);
+
+  React.useEffect(() => {
+    if (isOemView) {
+      setOrgEditMode(false);
+      setOrgEditError('');
+      setOrgEditSuccess('');
+    }
+  }, [isOemView]);
+
+  const organizationBillingAddress = React.useMemo(() => {
+    const addr = orgDetail?.organization?.billing_address;
+    return addr && typeof addr === 'object' ? (addr as Record<string, any>) : {};
+  }, [orgDetail?.organization?.billing_address]);
+  const organizationContactInfo = React.useMemo(() => {
+    const info = orgDetail?.organization?.contact_info;
+    return info && typeof info === 'object' ? (info as Record<string, any>) : {};
+  }, [orgDetail?.organization?.contact_info]);
+  const billingAddressDisplay = React.useMemo(() => {
+    const addr = organizationBillingAddress;
+    const parts: string[] = [];
+    const push = (value: unknown) => {
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) parts.push(trimmed);
+      }
+    };
+    push(addr.line1);
+    push(addr.line2);
+    const city = typeof addr.city === 'string' ? addr.city.trim() : '';
+    const state = typeof addr.state === 'string' ? addr.state.trim() : '';
+    if (city && state) push(`${city}, ${state}`);
+    else {
+      push(city);
+      push(state);
+    }
+    push(addr.postal_code);
+    push(addr.country);
+    return parts.length ? parts.join(' · ') : '—';
+  }, [organizationBillingAddress]);
+  const contactInfoDisplay = React.useMemo(() => {
+    const name = typeof organizationContactInfo.name === 'string' ? organizationContactInfo.name.trim() : '';
+    const phone = typeof organizationContactInfo.phone === 'string' ? organizationContactInfo.phone.trim() : '';
+    if (name && phone) return `${name} · ${phone}`;
+    if (name) return name;
+    if (phone) return phone;
+    return '—';
+  }, [organizationContactInfo]);
   const isDealerGroupOrg = React.useMemo(() => {
     const raw = String(organizationMetadata?.org_type || '').toLowerCase().trim();
     return raw === 'dealer_group';
   }, [organizationMetadata]);
+  const canCreateOrgUsers = React.useMemo(() => !isDealerGroupOrg, [isDealerGroupOrg]);
+  const metadataNotesDisplay = React.useMemo(() => {
+    const note = organizationMetadata?.notes;
+    return typeof note === 'string' && note.trim() ? note.trim() : '—';
+  }, [organizationMetadata]);
+  const canManageUserPermissions = React.useMemo(() => {
+    if (!isOemView) return true;
+    return !isDealerGroupOrg;
+  }, [isOemView, isDealerGroupOrg]);
   const availableBrands = React.useMemo(() => {
     if (!brandPool?.brands) return [] as AdminBrand[];
     const source = selectedOrg
@@ -975,6 +1167,53 @@ export default function AdminPage(): React.JSX.Element {
     window.open(url.toString(), '_blank', 'noopener');
   }, [selectedOrg]);
 
+  const openDealerPanel = React.useCallback((dealer: DealerInfo) => {
+    if (!dealer?.id || typeof window === 'undefined') return;
+    const url = new URL('/dealers', window.location.origin);
+    url.searchParams.set('dealer', dealer.id);
+    if (dealer.name) url.searchParams.set('name', dealer.name);
+    if (dealer.address) url.searchParams.set('address', dealer.address);
+    const meta = (dealer.metadata || {}) as Record<string, any>;
+    const locationMeta = meta.location;
+    if (locationMeta) {
+      if (locationMeta.city) url.searchParams.set('city', String(locationMeta.city));
+      if (locationMeta.state) url.searchParams.set('state', String(locationMeta.state));
+    }
+    if (meta.normalized_address) url.searchParams.set('normalizedAddress', String(meta.normalized_address));
+    const contact = meta.sales_contact;
+    if (contact) {
+      if (contact.name) url.searchParams.set('contact', String(contact.name));
+      if (contact.phone) url.searchParams.set('phone', String(contact.phone));
+    }
+    const brand = orgDetail?.brands.find((item) => item.id === dealer.brand_id);
+    if (dealer.brand_id) url.searchParams.set('brandId', dealer.brand_id);
+    const brandName = String(brand?.name || '').trim();
+    if (brandName) {
+      url.searchParams.set('brand', brandName);
+      try {
+        window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', brandName);
+        window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: brandName }));
+      } catch {}
+      applyAllowedBrands([brandName]);
+    } else {
+      try {
+        window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+        window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
+      } catch {}
+      applyAllowedBrands([]);
+    }
+    const dealerAdmins = (orgDetail?.users || []).filter((user) => {
+      if (!user.feature_flags?.dealer_admin) return false;
+      return user.dealer_location_id === dealer.id;
+    });
+    if (dealerAdmins.length === 1) {
+      const adminUser = dealerAdmins[0];
+      url.searchParams.set('admin', adminUser.id);
+      if (adminUser.email) url.searchParams.set('adminEmail', String(adminUser.email));
+    }
+    window.open(url.toString(), '_blank', 'noopener');
+  }, [applyAllowedBrands, orgDetail?.brands, orgDetail?.users]);
+
   const handleDealerField = (field: keyof typeof dealerForm) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const value = event.target.value;
     setDealerForm((prev) => ({ ...prev, [field]: value }));
@@ -1086,6 +1325,14 @@ export default function AdminPage(): React.JSX.Element {
       setOrgForm((prev) => ({ ...prev, [field]: value }));
     };
 
+  const handleOrgEditField = (field: keyof OrgEditState) =>
+    (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      const value = event.target.value;
+      setOrgEditState((prev) => ({ ...prev, [field]: value }));
+      setOrgEditError('');
+      setOrgEditSuccess('');
+    };
+
   const submitOrganization = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!orgForm.name.trim()) {
@@ -1156,6 +1403,275 @@ export default function AdminPage(): React.JSX.Element {
     }
   };
 
+  const toggleOrgEdit = () => {
+    if (!orgDetail) {
+      return;
+    }
+    if (orgEditMode) {
+      setOrgEditMode(false);
+      setOrgEditState(hydrateOrgEditState());
+      setOrgEditError('');
+      setOrgEditSuccess('');
+    } else {
+      setOrgEditState(hydrateOrgEditState());
+      setOrgEditError('');
+      setOrgEditSuccess('');
+      setOrgEditMode(true);
+    }
+  };
+
+  const submitOrgEdit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!orgDetail || !selectedOrg) {
+      setOrgEditError('Selecciona una organización para actualizar.');
+      return;
+    }
+    const org = orgDetail.organization;
+    const payload: Record<string, any> = {};
+
+    const requiredName = orgEditState.name.trim();
+    if (!requiredName) {
+      setOrgEditError('El nombre interno es obligatorio.');
+      return;
+    }
+    if (requiredName !== (org.name || '')) {
+      payload.name = requiredName;
+    }
+
+    const assignOptional = (value: string, original: string | null | undefined, key: string) => {
+      const next = value.trim();
+      const prev = (original || '').trim();
+      if (next !== prev) {
+        payload[key] = next ? next : null;
+      }
+    };
+
+    assignOptional(orgEditState.displayName, org.display_name, 'display_name');
+    assignOptional(orgEditState.legalName, org.legal_name, 'legal_name');
+    assignOptional(orgEditState.taxId, org.tax_id, 'tax_id');
+    assignOptional(orgEditState.billingEmail, org.billing_email, 'billing_email');
+    assignOptional(orgEditState.billingPhone, org.billing_phone, 'billing_phone');
+
+    const buildAddress = (state: OrgEditState) => {
+      const out: Record<string, string> = {};
+      const push = (key: string, value: string) => {
+        const trimmed = value.trim();
+        if (trimmed) out[key] = trimmed;
+      };
+      push('line1', state.billingLine1);
+      push('line2', state.billingLine2);
+      push('city', state.billingCity);
+      push('state', state.billingState);
+      push('postal_code', state.billingZip);
+      push('country', state.billingCountry);
+      return out;
+    };
+
+    const normalizeAddress = (addr: Record<string, any> | null | undefined) => {
+      const out: Record<string, string> = {};
+      if (!addr || typeof addr !== 'object') return out;
+      const keys = ['line1', 'line2', 'city', 'state', 'postal_code', 'country'];
+      for (const key of keys) {
+        const raw = addr[key];
+        if (typeof raw === 'string' && raw.trim()) {
+          out[key] = raw.trim();
+        }
+      }
+      return out;
+    };
+
+    const newAddress = buildAddress(orgEditState);
+    const currentAddress = normalizeAddress(org.billing_address as Record<string, any> | null);
+    if (JSON.stringify(newAddress) !== JSON.stringify(currentAddress)) {
+      payload.billing_address = newAddress;
+    }
+
+    const buildContact = (state: OrgEditState) => {
+      const out: Record<string, string> = {};
+      if (state.contactName.trim()) out.name = state.contactName.trim();
+      if (state.contactPhone.trim()) out.phone = state.contactPhone.trim();
+      return out;
+    };
+
+    const normalizeContact = (contact: Record<string, any> | null | undefined) => {
+      const out: Record<string, string> = {};
+      if (!contact || typeof contact !== 'object') return out;
+      if (typeof contact.name === 'string' && contact.name.trim()) out.name = contact.name.trim();
+      if (typeof contact.phone === 'string' && contact.phone.trim()) out.phone = contact.phone.trim();
+      return out;
+    };
+
+    const newContact = buildContact(orgEditState);
+    const currentContact = normalizeContact(org.contact_info as Record<string, any> | null);
+    if (JSON.stringify(newContact) !== JSON.stringify(currentContact)) {
+      payload.contact_info = newContact;
+    }
+
+    const metadata = (org.metadata ?? {}) as Record<string, any>;
+    const currentNotes = typeof metadata?.notes === 'string' ? metadata.notes.trim() : '';
+    const nextNotes = orgEditState.metadataNotes.trim();
+    if (nextNotes !== currentNotes) {
+      const nextMetadata = { ...metadata };
+      if (nextNotes) {
+        nextMetadata.notes = nextNotes;
+      } else {
+        delete nextMetadata.notes;
+      }
+      payload.metadata = nextMetadata;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      setOrgEditSuccess('No hay cambios para guardar.');
+      setOrgEditMode(false);
+      setOrgEditState(hydrateOrgEditState());
+      return;
+    }
+
+    setOrgEditLoading(true);
+    setOrgEditError('');
+    setOrgEditSuccess('');
+    try {
+      const response = await endpoints.adminUpdateOrganization(selectedOrg, payload);
+      await Promise.all([
+        mutateOrg(response as AdminOrganizationResponse, { revalidate: false }),
+        mutateOverview(),
+      ]);
+      setOrgEditMode(false);
+      setOrgEditState(hydrateOrgEditState());
+      setOrgEditSuccess('Información actualizada correctamente.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo actualizar la organización';
+      setOrgEditError(message);
+    } finally {
+      setOrgEditLoading(false);
+    }
+  };
+
+  const toggleOrgUserForm = () => {
+    if (showOrgUserForm) {
+      setShowOrgUserForm(false);
+      setOrgUserForm({ ...emptyOrgUserForm });
+      setOrgUserError('');
+      setOrgUserSuccess('');
+    } else {
+      setShowOrgUserForm(true);
+      setOrgUserForm({ ...emptyOrgUserForm });
+      setOrgUserError('');
+      setOrgUserSuccess('');
+    }
+  };
+
+  const handleOrgUserField = (field: 'email' | 'name' | 'phone') => (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setOrgUserForm((prev) => ({ ...prev, [field]: value }));
+    if (orgUserError) setOrgUserError('');
+    if (orgUserSuccess) setOrgUserSuccess('');
+  };
+
+  const handleOrgUserRoleChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = event.target.value as OrgUserFormState['role'];
+    setOrgUserForm((prev) => ({
+      ...prev,
+      role: value,
+      dealerAdmin: value === 'superadmin_oem' ? true : false,
+    }));
+    setOrgUserError('');
+    setOrgUserSuccess('');
+  };
+
+  const handleOrgUserDealerAdmin = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = event.target.checked;
+    setOrgUserForm((prev) => ({ ...prev, dealerAdmin: checked }));
+  };
+
+  const submitOrgUser = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedOrg) {
+      setOrgUserError('Selecciona una organización antes de crear usuarios.');
+      return;
+    }
+    const email = orgUserForm.email.trim();
+    if (!email) {
+      setOrgUserError('El correo del usuario es obligatorio.');
+      return;
+    }
+    setOrgUserLoading(true);
+    setOrgUserError('');
+    setOrgUserSuccess('');
+    try {
+      const payload: Record<string, any> = {
+        email,
+        role: orgUserForm.role,
+      };
+      if (orgUserForm.name.trim()) payload.name = orgUserForm.name.trim();
+      if (orgUserForm.phone.trim()) payload.phone = orgUserForm.phone.trim();
+      if (orgUserForm.role === 'superadmin_oem') {
+        payload.dealer_admin = orgUserForm.dealerAdmin;
+      } else if (orgUserForm.dealerAdmin) {
+        payload.dealer_admin = true;
+      }
+      const response = await endpoints.adminCreateOrgUser(selectedOrg, payload);
+      await mutateOrg(response as AdminOrganizationResponse, { revalidate: false });
+      await mutateOverview();
+      const created = (response as any)?.created_user;
+      if (created?.temp_password) {
+        setOrgUserSuccess(`Usuario creado. Contraseña temporal: ${created.temp_password}`);
+      } else {
+        setOrgUserSuccess('Usuario creado correctamente.');
+      }
+      setOrgUserForm({ ...emptyOrgUserForm });
+      setShowOrgUserForm(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo crear el usuario';
+      setOrgUserError(message);
+    } finally {
+      setOrgUserLoading(false);
+    }
+  };
+
+  const openContactModal = (user: UserInfo) => {
+    const metadata = (user.metadata || {}) as Record<string, any>;
+    setContactModal({
+      user,
+      name: typeof metadata.name === 'string' ? metadata.name : '',
+      phone: typeof metadata.phone === 'string' ? metadata.phone : '',
+    });
+    setContactError('');
+  };
+
+  const closeContactModal = () => {
+    if (contactSaving) return;
+    setContactModal(null);
+    setContactError('');
+  };
+
+  const handleContactField = (field: 'name' | 'phone') => (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setContactModal((prev) => (prev ? { ...prev, [field]: value } : prev));
+  };
+
+  const submitContactModal = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!contactModal) return;
+    const { user, name, phone } = contactModal;
+    setContactSaving(true);
+    setContactError('');
+    try {
+      const payload: Record<string, any> = {
+        name: name.trim(),
+        phone: phone.trim(),
+      };
+      const response = await endpoints.adminUpdateUser(user.id, payload);
+      await mutateOrg(response as AdminOrganizationResponse, { revalidate: false });
+      setContactModal(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo actualizar el contacto';
+      setContactError(message);
+    } finally {
+      setContactSaving(false);
+    }
+  };
+
   const toggleOrgForm = () => {
     if (showOrgForm) {
       setShowOrgForm(false);
@@ -1172,6 +1688,10 @@ export default function AdminPage(): React.JSX.Element {
   };
 
   const toggleDealerAdmin = async (userId: string, currentValue: boolean) => {
+    if (!canManageUserPermissions) {
+      setUserFeatureError('Solo el superadmin Cortex u OEM puede modificar estos permisos.');
+      return;
+    }
     if (!selectedOrg) return;
     setUserFeatureLoading(userId);
     setUserFeatureError('');
@@ -1366,6 +1886,10 @@ export default function AdminPage(): React.JSX.Element {
   };
 
   const openPermissionModal = (user: UserInfo) => {
+    if (!canManageUserPermissions) {
+      setPermissionError('Solo el superadmin Cortex u OEM puede ajustar permisos.');
+      return;
+    }
     setPermissionError('');
     setPermissionSaving(false);
     setPermissionModal({ user, levels: extractFeatureLevels(user.feature_flags || {}) });
@@ -1386,6 +1910,10 @@ export default function AdminPage(): React.JSX.Element {
 
   const savePermissionModal = async () => {
     if (!permissionModal) return;
+    if (!canManageUserPermissions) {
+      setPermissionError('Solo el superadmin Cortex u OEM puede ajustar permisos.');
+      return;
+    }
     setPermissionSaving(true);
     setPermissionError('');
     try {
@@ -1405,19 +1933,118 @@ export default function AdminPage(): React.JSX.Element {
     setImpersonateError('');
     if (typeof window === 'undefined') return;
     try {
+      const trimmedEmail = user.email?.trim() ?? '';
       window.localStorage.setItem('CORTEX_SUPERADMIN_USER_ID', user.id);
-      if (user.email && user.email.trim()) {
-        window.localStorage.setItem('CORTEX_SUPERADMIN_EMAIL', user.email.trim());
+      if (trimmedEmail) {
+        window.localStorage.setItem('CORTEX_SUPERADMIN_EMAIL', trimmedEmail);
       } else {
         window.localStorage.removeItem('CORTEX_SUPERADMIN_EMAIL');
       }
+
+      const isDealerUser = Boolean(user.dealer_location_id);
+      if (isDealerUser) {
+        window.localStorage.setItem('CORTEX_DEALER_ADMIN_USER_ID', user.id);
+        if (trimmedEmail) {
+          window.localStorage.setItem('CORTEX_DEALER_ADMIN_EMAIL', trimmedEmail);
+        } else {
+          window.localStorage.removeItem('CORTEX_DEALER_ADMIN_EMAIL');
+        }
+      }
+
       setAdminUserId(user.id);
-      setAdminUserEmail(user.email || '');
+      setAdminUserEmail(trimmedEmail);
+
       if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
         navigator.clipboard.writeText(user.id).catch(() => {});
       }
-      const label = user.email || user.id;
-      setImpersonateInfo(`Identidad actualizada. Ahora operas como ${label}`);
+
+      const label = trimmedEmail || user.id;
+      let openedPanel = false;
+      const target = new URL('/ui', window.location.origin);
+
+      if (isDealerUser && user.dealer_location_id) {
+        target.searchParams.set('dealer', user.dealer_location_id);
+        target.searchParams.set('admin', user.id);
+        if (trimmedEmail) target.searchParams.set('adminEmail', trimmedEmail);
+
+        const dealerRecord = (orgDetail?.dealers || []).find((item) => item.id === user.dealer_location_id);
+        const dealerMeta = (dealerRecord?.metadata || {}) as Record<string, any>;
+        const dealerLocation = dealerMeta?.location || {};
+        const contact = dealerMeta?.contact || {};
+
+        const contextPayload = {
+          id: user.dealer_location_id,
+          name: dealerRecord?.name || '',
+          location:
+            (dealerLocation?.city && dealerLocation?.state
+              ? `${dealerLocation.city}, ${dealerLocation.state}`
+              : dealerLocation?.normalized
+            )
+            || dealerRecord?.address
+            || '',
+          contactName: contact?.name || '',
+          contactPhone: contact?.phone || '',
+        };
+
+        const brandId = dealerRecord?.brand_id || user.brand_id || null;
+        const brandItem = brandId
+          ? (orgDetail?.brands || []).find((brand) => brand.id === brandId)
+          : null;
+        const brandName = brandItem?.name?.trim() || '';
+        if (dealerRecord?.name) target.searchParams.set('name', dealerRecord.name);
+        if (dealerRecord?.address) target.searchParams.set('address', dealerRecord.address);
+        if (dealerLocation?.city) target.searchParams.set('city', String(dealerLocation.city));
+        if (dealerLocation?.state) target.searchParams.set('state', String(dealerLocation.state));
+        if (dealerLocation?.normalized) target.searchParams.set('normalizedAddress', String(dealerLocation.normalized));
+
+        if (brandName) {
+          target.searchParams.set('brand', brandName);
+        }
+
+        try {
+          window.localStorage.setItem('CORTEX_DEALER_ID', user.dealer_location_id);
+          window.localStorage.setItem('CORTEX_DEALER_CONTEXT', JSON.stringify(contextPayload));
+          if (brandName) {
+            window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', brandName);
+            window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: brandName }));
+          } else {
+            window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+            window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
+          }
+        } catch {}
+
+        applyAllowedBrands(brandName ? [brandName] : []);
+
+        if (contextPayload.contactName) target.searchParams.set('contact', contextPayload.contactName);
+        if (contextPayload.contactPhone) target.searchParams.set('phone', contextPayload.contactPhone);
+        if (contextPayload.location) target.searchParams.set('location', contextPayload.location);
+      } else {
+        try {
+          window.localStorage.removeItem('CORTEX_DEALER_ADMIN_USER_ID');
+          window.localStorage.removeItem('CORTEX_DEALER_ADMIN_EMAIL');
+          window.localStorage.removeItem('CORTEX_DEALER_ID');
+          window.localStorage.removeItem('CORTEX_DEALER_CONTEXT');
+          window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
+        } catch {}
+
+        applyAllowedBrands([]);
+      }
+
+      if (!isDealerUser) {
+        const brandsForOrg = (orgDetail?.brands || [])
+          .map((item) => String(item?.name || '').trim())
+          .filter((value) => value.length > 0);
+        applyAllowedBrands(brandsForOrg);
+      }
+
+      window.open(target.toString(), '_blank', 'noopener');
+      openedPanel = true;
+
+      const message = openedPanel
+        ? `Identidad actualizada. Se abrió una pestaña como ${label}.`
+        : `Identidad actualizada. Ahora operas como ${label}.`;
+      setImpersonateInfo(message);
     } catch (err) {
       setImpersonateError('No se pudo actualizar la identidad en este navegador.');
     }
@@ -1844,15 +2471,253 @@ export default function AdminPage(): React.JSX.Element {
                   {impersonateInfo ? (
                     <p style={{ margin: 0, fontSize: 12, color: '#047857' }}>{impersonateInfo}</p>
                   ) : null}
-                  {impersonateError ? (
-                    <p style={{ margin: 0, fontSize: 12, color: '#dc2626' }}>{impersonateError}</p>
-                  ) : null}
-                </div>
-              </section>
+              {impersonateError ? (
+                <p style={{ margin: 0, fontSize: 12, color: '#dc2626' }}>{impersonateError}</p>
+              ) : null}
+            </div>
+          </section>
 
-              <section style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: 16 }}>
-                <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12 }}>
-                  <div style={{ display: 'grid', gap: 4 }}>
+          {!isOemView ? (
+          <section style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: 16, display: 'grid', gap: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <h3 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Información de la organización</h3>
+                  <span style={{ fontSize: 12, color: '#6b7280' }}>
+                    Edita datos comerciales, fiscales y de contacto. Los cambios aplican inmediatamente para todos los paneles.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleOrgEdit}
+                  disabled={orgEditLoading || !orgDetail}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    border: '1px solid #0f172a',
+                    background: orgEditMode ? '#f8fafc' : '#0f172a',
+                    color: orgEditMode ? '#0f172a' : '#fff',
+                    fontSize: 13,
+                    cursor: orgEditLoading ? 'default' : 'pointer',
+                    opacity: orgEditLoading ? 0.6 : 1,
+                  }}
+                >
+                  {orgEditMode ? 'Cancelar edición' : 'Editar datos'}
+                </button>
+              </div>
+              {orgEditError ? (
+                <div style={{ padding: '8px 10px', borderRadius: 6, background: '#fee2e2', border: '1px solid #f87171', color: '#b91c1c', fontSize: 12 }}>
+                  {orgEditError}
+                </div>
+              ) : null}
+              {orgEditSuccess ? (
+                <div style={{ padding: '8px 10px', borderRadius: 6, background: '#ecfdf5', border: '1px solid #22c55e', color: '#166534', fontSize: 12 }}>
+                  {orgEditSuccess}
+                </div>
+              ) : null}
+              {orgEditMode ? (
+                <form onSubmit={submitOrgEdit} style={{ display: 'grid', gap: 16 }}>
+                  <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Nombre interno *
+                      <input
+                        value={orgEditState.name}
+                        onChange={handleOrgEditField('name')}
+                        required
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Nombre comercial
+                      <input
+                        value={orgEditState.displayName}
+                        onChange={handleOrgEditField('displayName')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Razón social
+                      <input
+                        value={orgEditState.legalName}
+                        onChange={handleOrgEditField('legalName')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      RFC / Identificador fiscal
+                      <input
+                        value={orgEditState.taxId}
+                        onChange={handleOrgEditField('taxId')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Correo de facturación
+                      <input
+                        value={orgEditState.billingEmail}
+                        onChange={handleOrgEditField('billingEmail')}
+                        disabled={orgEditLoading}
+                        placeholder="facturacion@empresa.com"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Teléfono de facturación
+                      <input
+                        value={orgEditState.billingPhone}
+                        onChange={handleOrgEditField('billingPhone')}
+                        disabled={orgEditLoading}
+                        placeholder="+52 ..."
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Dirección · Calle
+                      <input
+                        value={orgEditState.billingLine1}
+                        onChange={handleOrgEditField('billingLine1')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Dirección · Complemento
+                      <input
+                        value={orgEditState.billingLine2}
+                        onChange={handleOrgEditField('billingLine2')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Ciudad
+                      <input
+                        value={orgEditState.billingCity}
+                        onChange={handleOrgEditField('billingCity')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Estado / Provincia
+                      <input
+                        value={orgEditState.billingState}
+                        onChange={handleOrgEditField('billingState')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Código postal
+                      <input
+                        value={orgEditState.billingZip}
+                        onChange={handleOrgEditField('billingZip')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      País
+                      <input
+                        value={orgEditState.billingCountry}
+                        onChange={handleOrgEditField('billingCountry')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Contacto principal
+                      <input
+                        value={orgEditState.contactName}
+                        onChange={handleOrgEditField('contactName')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Teléfono del contacto
+                      <input
+                        value={orgEditState.contactPhone}
+                        onChange={handleOrgEditField('contactPhone')}
+                        disabled={orgEditLoading}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600 }}>Notas internas</label>
+                    <textarea
+                      value={orgEditState.metadataNotes}
+                      onChange={handleOrgEditField('metadataNotes')}
+                      disabled={orgEditLoading}
+                      rows={3}
+                      style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5', resize: 'vertical' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <button
+                      type="submit"
+                      disabled={orgEditLoading}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: orgEditLoading ? '#cbd5f5' : '#0f172a',
+                        color: orgEditLoading ? '#1e293b' : '#fff',
+                        fontWeight: 600,
+                        cursor: orgEditLoading ? 'default' : 'pointer',
+                      }}
+                    >
+                      {orgEditLoading ? 'Guardando…' : 'Guardar cambios'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={toggleOrgEdit}
+                      disabled={orgEditLoading}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: 8,
+                        border: '1px solid #d1d5db',
+                        background: '#fff',
+                        color: '#0f172a',
+                        fontWeight: 500,
+                        cursor: orgEditLoading ? 'default' : 'pointer',
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div style={{ display: 'grid', gap: 8, fontSize: 13, color: '#1f2937' }}>
+                  <div><strong>Nombre interno:</strong> {orgDetail.organization.name || '—'}</div>
+                  <div><strong>Nombre comercial:</strong> {orgDetail.organization.display_name || '—'}</div>
+                  <div><strong>Razón social:</strong> {orgDetail.organization.legal_name || '—'}</div>
+                  <div><strong>RFC / ID fiscal:</strong> {orgDetail.organization.tax_id || '—'}</div>
+                  <div><strong>Correo de facturación:</strong> {orgDetail.organization.billing_email || '—'}</div>
+                  <div><strong>Teléfono de facturación:</strong> {orgDetail.organization.billing_phone || '—'}</div>
+                  <div><strong>Dirección de facturación:</strong> {billingAddressDisplay}</div>
+                  <div><strong>Contacto principal:</strong> {contactInfoDisplay}</div>
+                  <div><strong>Notas internas:</strong> {metadataNotesDisplay}</div>
+                </div>
+              )}
+          </section>
+          ) : null}
+
+          <section style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: 16 }}>
+            <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12 }}>
+              <div style={{ display: 'grid', gap: 4 }}>
                     <h3 style={{ fontSize: 18, fontWeight: 600 }}>Marcas</h3>
                     <span style={{ fontSize: 12, color: '#6b7280' }}>{displayBrands.length} registradas</span>
                   </div>
@@ -2451,52 +3316,67 @@ export default function AdminPage(): React.JSX.Element {
                                 {dealer.last_event_at ? (
                                   <div style={{ fontSize: 12, color: '#6b7280' }}>{formatDate(dealer.last_event_at)}</div>
                                 ) : null}
-                                {dealer.last_event_notes ? (
-                                  <div style={{ fontSize: 12, color: '#6b7280' }}>{dealer.last_event_notes}</div>
-                                ) : null}
-                              </td>
-                              <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
-                                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                  <button
-                                    onClick={() => updateDealerStatus(dealer, paused ? 'resume' : 'pause')}
-                                    disabled={dealerStatusLoading === dealer.id}
-                                    style={{
-                                      padding: '4px 10px',
-                                      borderRadius: 6,
-                                      border: '1px solid #2563eb',
-                                      background: dealerStatusLoading === dealer.id ? '#cbd5f5' : paused ? '#2563eb' : '#fff',
-                                      color: paused ? '#fff' : '#1e3a8a',
-                                      fontSize: 12,
-                                      cursor: dealerStatusLoading === dealer.id ? 'default' : 'pointer',
-                                    }}
-                                  >
-                                    {dealerStatusLoading === dealer.id
-                                      ? 'Actualizando…'
-                                      : paused
-                                        ? 'Reactivar'
-                                        : 'Pausar'}
-                                  </button>
-                                  {canManageBilling ? (
-                                    <button
-                                      onClick={() => openBillingHistory(dealer)}
-                                      style={{
-                                        padding: '4px 10px',
-                                        borderRadius: 6,
-                                        border: '1px solid #4f46e5',
-                                        background: isActiveBillingPanel ? '#eef2ff' : '#fff',
-                                        color: '#312e81',
-                                        fontSize: 12,
-                                        cursor: 'pointer',
-                                      }}
-                                    >
-                                      {isActiveBillingPanel ? 'Ocultar historial' : 'Ver historial'}
-                                    </button>
-                                  ) : (
-                                    <span style={{ fontSize: 11, color: '#9ca3af' }}>Pagos administrados por superadmin Cortex</span>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
+                            {dealer.last_event_notes ? (
+                              <div style={{ fontSize: 12, color: '#6b7280' }}>{dealer.last_event_notes}</div>
+                            ) : null}
+                          </td>
+                          <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              <button
+                                onClick={() => updateDealerStatus(dealer, paused ? 'resume' : 'pause')}
+                                disabled={dealerStatusLoading === dealer.id}
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: 6,
+                                  border: '1px solid #2563eb',
+                                  background: dealerStatusLoading === dealer.id ? '#cbd5f5' : paused ? '#2563eb' : '#fff',
+                                  color: paused ? '#fff' : '#1e3a8a',
+                                  fontSize: 12,
+                                  cursor: dealerStatusLoading === dealer.id ? 'default' : 'pointer',
+                                }}
+                              >
+                                {dealerStatusLoading === dealer.id
+                                  ? 'Actualizando…'
+                                  : paused
+                                    ? 'Reactivar'
+                                    : 'Pausar'}
+                              </button>
+                              {canManageBilling ? (
+                                <button
+                                  onClick={() => openBillingHistory(dealer)}
+                                  style={{
+                                    padding: '4px 10px',
+                                    borderRadius: 6,
+                                    border: '1px solid #4f46e5',
+                                    background: isActiveBillingPanel ? '#eef2ff' : '#fff',
+                                    color: '#312e81',
+                                    fontSize: 12,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  {isActiveBillingPanel ? 'Ocultar historial' : 'Ver historial'}
+                                </button>
+                              ) : (
+                                <span style={{ fontSize: 11, color: '#9ca3af' }}>Pagos administrados por superadmin Cortex</span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => openDealerPanel(dealer)}
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: 6,
+                                  border: '1px solid #047857',
+                                  background: '#d1fae5',
+                                  color: '#047857',
+                                  fontSize: 12,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Abrir panel dealer
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
                           );
                         })}
                       </tbody>
@@ -2681,6 +3561,105 @@ export default function AdminPage(): React.JSX.Element {
                   <h3 style={{ fontSize: 18, fontWeight: 600 }}>Usuarios</h3>
                   <span style={{ fontSize: 12, color: '#6b7280' }}>{orgDetail.users.length} registrados</span>
                 </header>
+                {canCreateOrgUsers ? (
+                  <div style={{ marginBottom: 12, display: 'grid', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      <button
+                        onClick={toggleOrgUserForm}
+                        disabled={orgUserLoading}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: '1px solid #0f172a',
+                          background: showOrgUserForm ? '#e2e8f0' : '#0f172a',
+                          color: showOrgUserForm ? '#0f172a' : '#fff',
+                          fontSize: 13,
+                          cursor: orgUserLoading ? 'default' : 'pointer',
+                        }}
+                      >
+                        {showOrgUserForm ? 'Cancelar alta' : 'Agregar usuario OEM'}
+                      </button>
+                      {orgUserSuccess ? (
+                        <span style={{ fontSize: 12, color: '#166534', background: '#dcfce7', padding: '4px 10px', borderRadius: 999 }}>{orgUserSuccess}</span>
+                      ) : null}
+                      {orgUserError ? (
+                        <span style={{ fontSize: 12, color: '#b91c1c', background: '#fee2e2', padding: '4px 10px', borderRadius: 999 }}>{orgUserError}</span>
+                      ) : null}
+                    </div>
+                    {showOrgUserForm ? (
+                      <form onSubmit={submitOrgUser} style={{ display: 'grid', gap: 12, border: '1px solid #e2e8f0', borderRadius: 8, padding: 16, background: '#f9fafb' }}>
+                        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                          <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                            Correo *
+                            <input
+                              value={orgUserForm.email}
+                              onChange={handleOrgUserField('email')}
+                              type="email"
+                              placeholder="admin@marca.com"
+                              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                              required
+                            />
+                          </label>
+                          <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                            Nombre (opcional)
+                            <input
+                              value={orgUserForm.name}
+                              onChange={handleOrgUserField('name')}
+                              placeholder="Nombre completo"
+                              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                            />
+                          </label>
+                          <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                            Teléfono (opcional)
+                            <input
+                              value={orgUserForm.phone}
+                              onChange={handleOrgUserField('phone')}
+                              placeholder="+52 ..."
+                              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                            />
+                          </label>
+                          <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                            Rol
+                            <select
+                              value={orgUserForm.role}
+                              onChange={handleOrgUserRoleChange}
+                              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                            >
+                              <option value="oem_user">Usuario OEM</option>
+                              <option value="superadmin_oem">Superadmin OEM</option>
+                            </select>
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#475569' }}>
+                            <input
+                              type="checkbox"
+                              checked={orgUserForm.dealerAdmin}
+                              onChange={handleOrgUserDealerAdmin}
+                              disabled={orgUserForm.role !== 'superadmin_oem'}
+                            />
+                            Permitir administrar dealers
+                          </label>
+                        </div>
+                        <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            onClick={toggleOrgUserForm}
+                            disabled={orgUserLoading}
+                            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#0f172a', cursor: orgUserLoading ? 'default' : 'pointer' }}
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={orgUserLoading}
+                            style={{ padding: '6px 16px', borderRadius: 6, border: 'none', background: orgUserLoading ? '#cbd5f5' : '#0f172a', color: '#fff', fontWeight: 600, cursor: orgUserLoading ? 'default' : 'pointer' }}
+                          >
+                            {orgUserLoading ? 'Creando…' : 'Crear usuario'}
+                          </button>
+                        </div>
+                      </form>
+                    ) : null}
+                  </div>
+                ) : null}
                 {userFeatureError ? (
                   <p style={{ marginBottom: 12, color: '#dc2626', fontSize: 12 }}>{userFeatureError}</p>
                 ) : null}
@@ -2692,8 +3671,9 @@ export default function AdminPage(): React.JSX.Element {
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Rol</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Marca</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Dealer</th>
+                        <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Contacto</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Templates</th>
-                        <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Gestión dealers</th>
+                        <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Superadmin dealer</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Permisos</th>
                         <th style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb' }}>Actualizado</th>
                       </tr>
@@ -2702,8 +3682,13 @@ export default function AdminPage(): React.JSX.Element {
                       {orgDetail.users.map((user) => {
                         const brand = user.brand_id ? orgDetail.brands.find((b) => b.id === user.brand_id) : undefined;
                         const dealer = user.dealer_location_id ? orgDetail.dealers.find((d) => d.id === user.dealer_location_id) : undefined;
+                        const metadata = (user.metadata || {}) as Record<string, any>;
+                        const contactName = typeof metadata.name === 'string' ? metadata.name : '';
+                        const contactPhone = typeof metadata.phone === 'string' ? metadata.phone : '';
                         const dealerAdmin = Boolean(user.feature_flags?.dealer_admin);
-                        const canManageDealers = user.role === 'superadmin_oem';
+                        const canManageDealers = user.role === 'dealer_user';
+                        const allowDealerAdminToggle = canManageUserPermissions && canManageDealers;
+                        const allowPermissionEdit = canManageUserPermissions;
                         const featureLevels = extractFeatureLevels(user.feature_flags || {});
                         const activeFeatureChips = FEATURE_KEY_DEFS.filter(({ key }) => featureLevels[key] !== 'none').map(({ key, label }) => ({
                           key,
@@ -2716,9 +3701,31 @@ export default function AdminPage(): React.JSX.Element {
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{roleLabels[user.role] || user.role}</td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{brand?.name || '—'}</td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{dealer?.name || '—'}</td>
+                            <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
+                              <div style={{ fontSize: 13, color: '#0f172a' }}>{contactName || '—'}</div>
+                              <div style={{ fontSize: 12, color: '#475569' }}>{contactPhone || '—'}</div>
+                              {user.role === 'dealer_user' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openContactModal(user)}
+                                  style={{
+                                    marginTop: 6,
+                                    padding: '4px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid #0f172a',
+                                    background: '#0f172a',
+                                    color: '#fff',
+                                    fontSize: 12,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  {contactName || contactPhone ? 'Editar contacto' : 'Agregar contacto'}
+                                </button>
+                              ) : null}
+                            </td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>{user.template_count}</td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
-                              {canManageDealers ? (
+                              {allowDealerAdminToggle ? (
                                 <button
                                   onClick={() => toggleDealerAdmin(user.id, dealerAdmin)}
                                   disabled={userFeatureLoading === user.id}
@@ -2735,11 +3742,15 @@ export default function AdminPage(): React.JSX.Element {
                                   {userFeatureLoading === user.id
                                     ? 'Actualizando…'
                                     : dealerAdmin
-                                      ? 'Revocar permiso'
-                                      : 'Permitir crear dealers'}
+                                      ? 'Revocar superadmin'
+                                      : 'Asignar superadmin dealer'}
                                 </button>
                               ) : (
-                                <span style={{ fontSize: 12, color: '#6b7280' }}>—</span>
+                                <span style={{ fontSize: 12, color: '#6b7280' }}>
+                                  {canManageDealers
+                                    ? 'Solo el superadmin Cortex u OEM puede modificar este permiso.'
+                                    : 'Disponible al crear usuarios dealer.'}
+                                </span>
                               )}
                             </td>
                             <td style={{ padding: '8px 12px', borderBottom: '1px solid #f3f4f6' }}>
@@ -2769,15 +3780,17 @@ export default function AdminPage(): React.JSX.Element {
                               </div>
                               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                                 <button
-                                  onClick={() => openPermissionModal(user)}
+                                  onClick={() => allowPermissionEdit && openPermissionModal(user)}
+                                  disabled={!allowPermissionEdit}
                                   style={{
                                     padding: '6px 10px',
                                     borderRadius: 6,
-                                    border: '1px solid #0f172a',
-                                    background: '#0f172a',
-                                    color: '#fff',
+                                    border: allowPermissionEdit ? '1px solid #0f172a' : '1px solid #d1d5db',
+                                    background: allowPermissionEdit ? '#0f172a' : '#e2e8f0',
+                                    color: allowPermissionEdit ? '#fff' : '#94a3b8',
                                     fontSize: 12,
-                                    cursor: 'pointer',
+                                    cursor: allowPermissionEdit ? 'pointer' : 'not-allowed',
+                                    opacity: allowPermissionEdit ? 1 : 0.8,
                                   }}
                                 >
                                   Ajustar permisos
@@ -2804,7 +3817,7 @@ export default function AdminPage(): React.JSX.Element {
                       })}
                       {orgDetail.users.length === 0 ? (
                         <tr>
-                          <td colSpan={8} style={{ padding: '12px 16px', textAlign: 'center', color: '#6b7280' }}>Sin usuarios dados de alta.</td>
+                          <td colSpan={9} style={{ padding: '12px 16px', textAlign: 'center', color: '#6b7280' }}>Sin usuarios dados de alta.</td>
                         </tr>
                       ) : null}
                     </tbody>
@@ -2882,6 +3895,98 @@ export default function AdminPage(): React.JSX.Element {
             </button>
           </div>
         </div>
+        </div>
+      ) : null}
+
+      {contactModal ? (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+            padding: 16,
+          }}
+        >
+          <form
+            onSubmit={submitContactModal}
+            style={{
+              background: '#fff',
+              borderRadius: 12,
+              maxWidth: 420,
+              width: '100%',
+              boxShadow: '0 20px 45px rgba(15,23,42,0.25)',
+              display: 'grid',
+              gap: 16,
+              padding: 20,
+            }}
+          >
+            <header style={{ display: 'grid', gap: 4 }}>
+              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Editar contacto · {contactModal.user.email || contactModal.user.id}</h3>
+              <p style={{ margin: 0, fontSize: 12, color: '#475569' }}>Actualiza el nombre y teléfono visibles para este usuario de agencia.</p>
+            </header>
+            {contactError ? (
+              <div style={{ fontSize: 12, color: '#b91c1c', background: '#fee2e2', border: '1px solid #fca5a5', padding: '6px 8px', borderRadius: 6 }}>
+                {contactError}
+              </div>
+            ) : null}
+            <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+              Nombre completo
+              <input
+                value={contactModal.name}
+                onChange={handleContactField('name')}
+                disabled={contactSaving}
+                placeholder="Ej. María González"
+                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+              Teléfono de contacto
+              <input
+                value={contactModal.phone}
+                onChange={handleContactField('phone')}
+                disabled={contactSaving}
+                placeholder="+52 ..."
+                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+              />
+            </label>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={closeContactModal}
+                disabled={contactSaving}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #d1d5db',
+                  background: '#fff',
+                  color: '#0f172a',
+                  fontWeight: 500,
+                  cursor: contactSaving ? 'default' : 'pointer',
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={contactSaving}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: contactSaving ? '#cbd5f5' : '#0f172a',
+                  color: contactSaving ? '#1e293b' : '#fff',
+                  fontWeight: 600,
+                  cursor: contactSaving ? 'default' : 'pointer',
+                }}
+              >
+                {contactSaving ? 'Guardando…' : 'Guardar'}
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
     </>

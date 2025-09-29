@@ -113,11 +113,28 @@ MANAGEABLE_FEATURE_KEYS: tuple[str, ...] = (
 )
 
 
-DEFAULT_FEATURE_FLAGS: Dict[str, Any] = {key: "edit" for key in MANAGEABLE_FEATURE_KEYS}
+DEFAULT_FEATURE_FLAGS: Dict[str, Any] = {key: "none" for key in MANAGEABLE_FEATURE_KEYS}
 DEFAULT_FEATURE_FLAGS.update({
     "black_ops": False,
     "dealer_admin": False,
 })
+
+
+def _apply_role_feature_defaults(
+    base_flags: Dict[str, Any], role: str
+) -> Dict[str, Any]:
+    """Return a copy of base_flags with defaults enabled for the given role."""
+
+    flags = dict(base_flags)
+    # Todos los usuarios inician con comparador e insights habilitados
+    flags["compare"] = "edit"
+    flags["insights"] = "edit"
+
+    # Los usuarios OEM (superadmin y usuarios) también ven el dashboard OEM
+    if role in {"superadmin_oem", "oem_user"}:
+        flags["dashboard"] = "edit"
+
+    return flags
 
 
 def _open_supabase_conn() -> psycopg.Connection:
@@ -199,6 +216,23 @@ def _update_supabase_user_features(user_id: str, features: Dict[str, Any]) -> No
         resp = requests.put(endpoint, headers=_supabase_admin_headers(), json=payload, timeout=20)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"No se pudo actualizar features en Auth: {exc}")
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json()
+        except Exception:  # noqa: BLE001
+            detail = resp.text or resp.reason
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+
+def _update_supabase_user_metadata(user_id: str, user_metadata: Dict[str, Any]) -> None:
+    if not SUPABASE_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_URL no configurado")
+    endpoint = SUPABASE_URL.rstrip("/") + f"/auth/v1/admin/users/{user_id}"
+    payload = {"user_metadata": user_metadata}
+    try:
+        resp = requests.put(endpoint, headers=_supabase_admin_headers(), json=payload, timeout=20)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"No se pudo actualizar metadatos en Auth: {exc}")
     if resp.status_code >= 400:
         try:
             detail = resp.json()
@@ -308,6 +342,128 @@ def _enforce_dealer_access(dealer_id: Optional[str]) -> None:
         raise HTTPException(status_code=403, detail="Acceso deshabilitado: organización en pausa")
 
 
+def _fetch_dealer_record(conn: psycopg.Connection, dealer_id: str) -> Dict[str, Any]:
+    row = conn.execute(
+        """
+        select
+            d.id,
+            d.name,
+            d.status,
+            d.paused_at,
+            d.service_started_at,
+            d.brand_id,
+            b.name as brand_name,
+            b.organization_id,
+            o.name as organization_name
+        from cortex.dealer_locations d
+        join cortex.brands b on b.id = d.brand_id
+        join cortex.organizations o on o.id = b.organization_id
+        where d.id = %s::uuid
+        """,
+        (dealer_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Dealer no encontrado")
+    data = dict(row)
+    data["id"] = str(data.get("id"))
+    data["brand_id"] = str(data.get("brand_id")) if data.get("brand_id") else None
+    data["organization_id"] = str(data.get("organization_id")) if data.get("organization_id") else None
+    return data
+
+
+def _ensure_dealer_admin(
+    conn: psycopg.Connection,
+    dealer_id: str,
+    user_id: Optional[str],
+) -> Dict[str, Any]:
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Captura tu UUID de Supabase para administrar usuarios del dealer")
+
+    row = conn.execute(
+        """
+        select
+            u.id,
+            u.organization_id,
+            u.brand_id,
+            u.dealer_location_id,
+            u.role,
+            u.feature_flags,
+            u.metadata,
+            au.email
+        from cortex.app_users u
+        left join auth.users au on au.id = u.id
+        where u.id = %s::uuid
+        """,
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=403, detail="Usuario administrador no reconocido")
+
+    info = dict(row)
+    flags = _normalize_feature_levels(info.get("feature_flags"))
+    if not bool(flags.get("dealer_admin")):
+        raise HTTPException(status_code=403, detail="Este usuario no tiene permisos de superadmin del dealer")
+
+    dealer_match = str(info.get("dealer_location_id") or "")
+    if dealer_match != dealer_id:
+        raise HTTPException(status_code=403, detail="Este usuario no administra el dealer indicado")
+
+    role = str(info.get("role") or "")
+    if role not in {"dealer_user"}:
+        raise HTTPException(status_code=403, detail="Solo un usuario del dealer puede administrar esta vista")
+
+    info["id"] = str(info.get("id")) if info.get("id") else None
+    info["organization_id"] = str(info.get("organization_id")) if info.get("organization_id") else None
+    info["brand_id"] = str(info.get("brand_id")) if info.get("brand_id") else None
+    info["dealer_location_id"] = dealer_match or None
+    info["feature_flags"] = flags
+    info["metadata"] = info.get("metadata") or {}
+    return info
+
+
+def _ensure_dealer_user(
+    conn: psycopg.Connection,
+    dealer_id: str,
+    user_id: Optional[str],
+) -> Dict[str, Any]:
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Captura tu UUID de Supabase para guardar plantillas")
+
+    row = conn.execute(
+        """
+        select
+            u.id,
+            u.organization_id,
+            u.brand_id,
+            u.dealer_location_id,
+            u.role,
+            u.feature_flags,
+            u.metadata,
+            au.email
+        from cortex.app_users u
+        left join auth.users au on au.id = u.id
+        where u.id = %s::uuid
+        """,
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=403, detail="Usuario no reconocido")
+
+    info = dict(row)
+    dealer_match = str(info.get("dealer_location_id") or "")
+    if dealer_match != dealer_id:
+        raise HTTPException(status_code=403, detail="Este usuario pertenece a otro dealer")
+
+    info["id"] = str(info.get("id")) if info.get("id") else None
+    info["organization_id"] = str(info.get("organization_id")) if info.get("organization_id") else None
+    info["brand_id"] = str(info.get("brand_id")) if info.get("brand_id") else None
+    info["dealer_location_id"] = dealer_match or None
+    info["feature_flags"] = _normalize_feature_levels(info.get("feature_flags"))
+    info["metadata"] = info.get("metadata") or {}
+    info["email"] = info.get("email") or None
+    return info
+
+
 def _normalize_feature_levels(flags: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     normalized: Dict[str, Any] = dict(flags or {})
 
@@ -333,11 +489,35 @@ def _normalize_feature_levels(flags: Optional[Mapping[str, Any]]) -> Dict[str, A
 
 
 class AdminOrganizationUpdate(BaseModel):
+    name: Optional[str] = Field(
+        default=None, description="Nombre interno de la organización"
+    )
+    display_name: Optional[str] = Field(
+        default=None, description="Nombre comercial"
+    )
+    legal_name: Optional[str] = Field(
+        default=None, description="Razón social"
+    )
+    tax_id: Optional[str] = Field(
+        default=None, description="Identificador fiscal (RFC u otro)"
+    )
+    billing_email: Optional[EmailStr] = Field(
+        default=None, description="Correo para facturación"
+    )
+    billing_phone: Optional[str] = Field(
+        default=None, description="Teléfono de facturación"
+    )
+    billing_address: Optional[Dict[str, Any]] = Field(
+        default=None, description="Dirección de facturación (JSON)"
+    )
+    contact_info: Optional[Dict[str, Any]] = Field(
+        default=None, description="Persona/contacto principal (JSON)"
+    )
     package: Optional[Literal["marca", "black_ops"]] = Field(
         default=None, description="Nuevo paquete asignado"
     )
     metadata: Optional[Dict[str, Any]] = Field(
-        None, description="Metadata JSON completa que reemplaza a la actual"
+        default=None, description="Metadata JSON completa que reemplaza a la actual"
     )
 
 
@@ -382,7 +562,22 @@ class AdminBrandUpdate(BaseModel):
 def _fetch_admin_org_detail(conn: psycopg.Connection, org_id: str) -> Dict[str, Any]:
     org_row = conn.execute(
         """
-        select id, name, package, status, paused_at, metadata, created_at, updated_at
+        select
+            id,
+            name,
+            display_name,
+            legal_name,
+            tax_id,
+            package,
+            status,
+            paused_at,
+            billing_email,
+            billing_phone,
+            billing_address,
+            contact_info,
+            metadata,
+            created_at,
+            updated_at
         from cortex.organizations
         where id = %s::uuid
         """,
@@ -617,6 +812,9 @@ AdminOrganizationCreate.model_rebuild()
 class AdminUserFeaturesUpdate(BaseModel):
     dealer_admin: Optional[bool] = None
     features: Optional[Dict[str, Literal["none", "view", "edit"]]] = None
+    name: Optional[str] = Field(default=None, description="Nombre visible del usuario")
+    phone: Optional[str] = Field(default=None, description="Teléfono de contacto del usuario")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Metadata adicional a fusionar")
 
 
 class AdminDealerStatusUpdate(BaseModel):
@@ -677,6 +875,35 @@ class AdminDealerCreate(BaseModel):
     )
 
 
+class AdminOrganizationUserCreate(BaseModel):
+    email: EmailStr
+    role: Literal["oem_user", "superadmin_oem"] = "oem_user"
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    features: Optional[Dict[str, Literal["none", "view", "edit"]]] = None
+    dealer_admin: Optional[bool] = None
+
+
+class DealerUserCreate(BaseModel):
+    email: EmailStr
+    name: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class DealerTemplateCreate(BaseModel):
+    template_name: str = Field(..., description="Nombre único de la plantilla")
+    own_vehicle: Dict[str, Any] = Field(..., description="Vehículo propio seleccionado")
+    competitors: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Lista de vehículos competidores guardados"
+    )
+    dealer_info: Optional[Dict[str, Any]] = Field(
+        default=None, description="Información contextual del dealer"
+    )
+    sales_rep_info: Optional[Dict[str, Any]] = Field(
+        default=None, description="Información del asesor que guarda la plantilla"
+    )
+
+
 def _create_org_superadmin(
     conn: psycopg.Connection,
     org_id: str,
@@ -684,8 +911,9 @@ def _create_org_superadmin(
     superadmin: AdminSuperadminCreate,
 ) -> Dict[str, Any]:
     password = superadmin.password or _generate_password()
-    feature_flags = dict(DEFAULT_FEATURE_FLAGS)
+    feature_flags = _apply_role_feature_defaults(DEFAULT_FEATURE_FLAGS, "superadmin_oem")
     feature_flags["black_ops"] = payload.package == "black_ops"
+    feature_flags["dealer_admin"] = True
     feature_flags = _normalize_feature_levels(feature_flags)
 
     app_metadata = {
@@ -1635,20 +1863,61 @@ def admin_organization_update(org_id: str, payload: AdminOrganizationUpdate, req
     _require_superadmin_token(request)
     if not SUPABASE_DB_URL:
         raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
-    if payload.package is None and payload.metadata is None:
-        raise HTTPException(status_code=400, detail="No fields to update")
-
     try:
         with _open_supabase_conn() as conn:
             with conn.cursor() as cur:
+                data = payload.model_dump(exclude_unset=True)
+                if not data:
+                    raise HTTPException(status_code=400, detail="No fields to update")
+
+                package_val = data.pop("package", None)
+                metadata_val = data.pop("metadata", None)
+                billing_address = data.pop("billing_address", None)
+                contact_info = data.pop("contact_info", None)
+
+                def _clean_str(val: Optional[str]) -> Optional[str]:
+                    if val is None:
+                        return None
+                    stripped = val.strip()
+                    return stripped or None
+
                 updates: List[str] = []
                 params: List[Any] = []
-                if payload.package is not None:
-                    updates.append("package = %s")
-                    params.append(payload.package)
-                if payload.metadata is not None:
+                simple_fields = (
+                    "name",
+                    "display_name",
+                    "legal_name",
+                    "tax_id",
+                    "billing_email",
+                    "billing_phone",
+                )
+                for field in simple_fields:
+                    if field in data:
+                        value = data[field]
+                        if isinstance(value, str):
+                            value = _clean_str(value)
+                        updates.append(f"{field} = %s")
+                        params.append(value)
+
+                if billing_address is not None:
+                    updates.append("billing_address = %s::jsonb")
+                    params.append(json.dumps(billing_address or {}))
+
+                if contact_info is not None:
+                    updates.append("contact_info = %s::jsonb")
+                    params.append(json.dumps(contact_info or {}))
+
+                if metadata_val is not None:
                     updates.append("metadata = %s::jsonb")
-                    params.append(json.dumps(payload.metadata))
+                    params.append(json.dumps(metadata_val or {}))
+
+                if package_val is not None:
+                    updates.append("package = %s")
+                    params.append(package_val)
+
+                if not updates:
+                    raise HTTPException(status_code=400, detail="No fields to update")
+
                 updates.append("updated_at = now()")
 
                 set_clause = ", ".join(updates)
@@ -1659,7 +1928,7 @@ def admin_organization_update(org_id: str, payload: AdminOrganizationUpdate, req
                 if cur.rowcount == 0:
                     raise HTTPException(status_code=404, detail="Organization not found")
 
-                if payload.package is not None:
+                if package_val is not None:
                     cur.execute(
                         """
                         update cortex.app_users
@@ -1667,7 +1936,7 @@ def admin_organization_update(org_id: str, payload: AdminOrganizationUpdate, req
                             || jsonb_build_object('black_ops', %s)
                         where organization_id = %s::uuid
                         """,
-                        (payload.package == "black_ops", org_id),
+                        (package_val == "black_ops", org_id),
                     )
 
             return _fetch_admin_org_detail(conn, org_id)
@@ -1925,6 +2194,108 @@ def admin_create_dealer(org_id: str, payload: AdminDealerCreate, request: Reques
         raise _supabase_http_exception(exc)
 
 
+@app.post("/admin/organizations/{org_id}/users", status_code=201)
+def admin_create_org_user(org_id: str, payload: AdminOrganizationUserCreate, request: Request) -> Dict[str, Any]:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    role = payload.role
+
+    try:
+        with _open_supabase_conn() as conn:
+            org_row = conn.execute(
+                "select package, metadata from cortex.organizations where id = %s::uuid",
+                (org_id,),
+            ).fetchone()
+            if org_row is None:
+                raise HTTPException(status_code=404, detail="Organización no encontrada")
+
+            if isinstance(org_row, Mapping):
+                org_package = org_row.get("package") or "marca"
+            else:
+                org_package = org_row[0] or "marca"
+
+            brand_rows = conn.execute(
+                "select id from cortex.brands where organization_id = %s::uuid",
+                (org_id,),
+            ).fetchall()
+            allowed_brands = [
+                str(row["id"] if isinstance(row, Mapping) else row[0])
+                for row in brand_rows
+            ]
+
+            feature_flags: Dict[str, Any] = _apply_role_feature_defaults(
+                DEFAULT_FEATURE_FLAGS, role
+            )
+            if payload.features:
+                for key, level in payload.features.items():
+                    if key not in MANAGEABLE_FEATURE_KEYS:
+                        raise HTTPException(status_code=400, detail=f"Feature no soportada: {key}")
+                    feature_flags[key] = level
+
+            if role == "superadmin_oem":
+                feature_flags["black_ops"] = (str(org_package or "").strip() == "black_ops")
+                feature_flags["dealer_admin"] = True if payload.dealer_admin is None else bool(payload.dealer_admin)
+            elif payload.dealer_admin is not None:
+                feature_flags["dealer_admin"] = bool(payload.dealer_admin)
+
+            feature_flags = _normalize_feature_levels(feature_flags)
+
+            app_metadata = {
+                "role": role,
+                "org_id": org_id,
+                "allowed_brands": allowed_brands,
+                "dealer_location_ids": [],
+                "features": feature_flags,
+            }
+            if role == "superadmin_oem":
+                app_metadata["package"] = org_package
+
+            user_metadata = {
+                key: value
+                for key, value in {"name": payload.name, "phone": payload.phone}.items()
+                if value
+            }
+
+            password = _generate_password()
+            created_user = _create_supabase_user(payload.email, password, app_metadata, user_metadata or None)
+            user_id = created_user.get("id")
+            if not user_id:
+                raise HTTPException(status_code=500, detail="Supabase no devolvió ID de usuario")
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into cortex.app_users (id, organization_id, role, feature_flags, metadata)
+                    values (%s::uuid, %s::uuid, %s, %s::jsonb, %s::jsonb)
+                    """,
+                    (
+                        user_id,
+                        org_id,
+                        role,
+                        json.dumps(feature_flags),
+                        json.dumps(user_metadata or {}),
+                    ),
+                )
+
+            conn.commit()
+            detail = _fetch_admin_org_detail(conn, org_id)
+            detail["created_user"] = {
+                "id": user_id,
+                "email": payload.email,
+                "role": role,
+                "feature_flags": feature_flags,
+                "metadata": user_metadata or {},
+                "temp_password": password,
+            }
+            return detail
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
 @app.get("/admin/brands")
 def admin_list_brands(request: Request) -> Dict[str, Any]:
     _require_superadmin_token(request)
@@ -1945,13 +2316,55 @@ def admin_list_brands(request: Request) -> Dict[str, Any]:
         from cortex.brands b
         join cortex.organizations o on o.id = b.organization_id
         left join cortex.dealer_locations d on d.brand_id = b.id
-        group by b.id, o.name
+        group by b.id, b.name, b.slug, b.logo_url, b.organization_id, o.name, b.metadata, b.created_at, b.updated_at
         order by b.name
     """
     try:
         with _open_supabase_conn() as conn:
             rows = conn.execute(sql).fetchall()
-            return {"brands": _rows_to_json(rows)}
+            brands = _rows_to_json(rows)
+        # Agregar marcas del catálogo base disponibles en /options
+        try:
+            df_catalog = _load_catalog()
+        except HTTPException:
+            df_catalog = None
+        except Exception:
+            df_catalog = None
+
+        if df_catalog is not None and len(df_catalog) and "make" in df_catalog.columns:
+            existing_keys = {
+                str((item.get("name") or "")).strip().upper(): True for item in brands if isinstance(item, dict)
+            }
+            try:
+                catalog_makes = {
+                    str(m).strip().upper()
+                    for m in df_catalog["make"].dropna().tolist()
+                    if str(m).strip()
+                }
+            except Exception:
+                catalog_makes = set()
+
+            for mk in sorted(catalog_makes):
+                if mk in existing_keys:
+                    continue
+                existing_keys[mk] = True
+                brands.append(
+                    {
+                        "id": None,
+                        "name": mk,
+                        "slug": _slugify(mk),
+                        "logo_url": None,
+                        "organization_id": None,
+                        "organization_name": None,
+                        "metadata": {"source": "catalog"},
+                        "created_at": None,
+                        "updated_at": None,
+                        "dealer_count": 0,
+                    }
+                )
+
+        brands.sort(key=lambda item: str(item.get("name", "")).lower())
+        return {"brands": brands}
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -2556,14 +2969,20 @@ def admin_update_user_features(user_id: str, payload: AdminUserFeaturesUpdate, r
     _require_superadmin_token(request)
     if not SUPABASE_DB_URL:
         raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
-    if payload.dealer_admin is None and not payload.features:
+    if (
+        payload.dealer_admin is None
+        and not payload.features
+        and payload.name is None
+        and payload.phone is None
+        and payload.metadata is None
+    ):
         raise HTTPException(status_code=400, detail="No hay cambios solicitados")
 
     try:
         with _open_supabase_conn() as conn:
             row = conn.execute(
                 """
-                select organization_id, feature_flags
+                select organization_id, feature_flags, metadata
                 from cortex.app_users
                 where id = %s::uuid
                 """,
@@ -2573,6 +2992,7 @@ def admin_update_user_features(user_id: str, payload: AdminUserFeaturesUpdate, r
                 raise HTTPException(status_code=404, detail="Usuario no encontrado")
             org_id = str(row["organization_id"] if isinstance(row, dict) else row[0])
             current_flags = row["feature_flags"] if isinstance(row, dict) else row[1]
+            current_metadata = row["metadata"] if isinstance(row, dict) else row[2]
             flags: Dict[str, Any] = dict(DEFAULT_FEATURE_FLAGS)
             if isinstance(current_flags, dict):
                 flags.update(current_flags)
@@ -2590,20 +3010,65 @@ def admin_update_user_features(user_id: str, payload: AdminUserFeaturesUpdate, r
                         raise HTTPException(status_code=400, detail=f"Nivel inválido para {key}: {level}")
                     flags[key] = lvl
 
+            metadata_obj: Dict[str, Any] = {}
+            if isinstance(current_metadata, dict):
+                metadata_obj.update(current_metadata)
+
+            metadata_changed = False
+
+            if payload.metadata is not None:
+                for key, value in payload.metadata.items():
+                    prev = metadata_obj.get(key)
+                    if value is None:
+                        if key in metadata_obj:
+                            metadata_changed = True
+                            metadata_obj.pop(key, None)
+                    else:
+                        if prev != value:
+                            metadata_changed = True
+                        metadata_obj[key] = value
+
+            def _assign_field(key: str, value: Optional[str]) -> None:
+                nonlocal metadata_changed
+                if value is None:
+                    return
+                trimmed = value.strip()
+                if trimmed:
+                    if metadata_obj.get(key) != trimmed:
+                        metadata_changed = True
+                    metadata_obj[key] = trimmed
+                else:
+                    if key in metadata_obj:
+                        metadata_changed = True
+                    metadata_obj.pop(key, None)
+
+            _assign_field("name", payload.name)
+            _assign_field("phone", payload.phone)
+
             with conn.cursor() as cur:
+                update_parts = ["feature_flags = %s::jsonb"]
+                params: List[Any] = [json.dumps(flags)]
+                if metadata_changed:
+                    update_parts.append("metadata = %s::jsonb")
+                    params.append(json.dumps(metadata_obj))
+                update_parts.append("updated_at = now()")
+                params.append(user_id)
                 cur.execute(
-                    """
-                    update cortex.app_users
-                    set feature_flags = %s::jsonb, updated_at = now()
-                    where id = %s::uuid
-                    """,
-                    (json.dumps(flags), user_id),
+                    f"update cortex.app_users set {', '.join(update_parts)} where id = %s::uuid",
+                    params,
                 )
+
+            if metadata_changed:
+                _update_supabase_user_metadata(user_id, metadata_obj)
             _update_supabase_user_features(user_id, flags)
             conn.commit()
 
             detail = _fetch_admin_org_detail(conn, org_id)
-            detail["updated_user"] = {"id": user_id, "feature_flags": flags}
+            detail["updated_user"] = {
+                "id": user_id,
+                "feature_flags": flags,
+                "metadata": metadata_obj,
+            }
             return detail
     except HTTPException:
         raise
@@ -10427,6 +10892,318 @@ def debug_coverage(years: str = "2024,2025,2026") -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+@app.get("/dealer/users")
+def dealer_list_users(request: Request) -> Dict[str, Any]:
+    dealer_id = _extract_dealer_id(request)
+    if not dealer_id:
+        raise HTTPException(status_code=400, detail="Falta dealer_id")
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    admin_user_id = _normalize_uuid(request.headers.get("x-admin-user-id"))
+
+    try:
+        with _open_supabase_conn() as conn:
+            admin_info = _ensure_dealer_admin(conn, dealer_id, admin_user_id)
+            dealer_info = _fetch_dealer_record(conn, dealer_id)
+
+            rows = conn.execute(
+                """
+                select
+                    u.id,
+                    au.email,
+                    u.role,
+                    u.brand_id,
+                    u.dealer_location_id,
+                    u.feature_flags,
+                    u.metadata,
+                    u.created_at,
+                    u.updated_at,
+                    au.last_sign_in_at
+                from cortex.app_users u
+                left join auth.users au on au.id = u.id
+                where u.dealer_location_id = %s::uuid
+                order by coalesce(au.email, u.id::text)
+                """,
+                (dealer_id,),
+            ).fetchall()
+
+            users: List[Dict[str, Any]] = []
+            for row in rows:
+                data = dict(row)
+                data["id"] = str(data.get("id")) if data.get("id") else None
+                data["brand_id"] = str(data.get("brand_id")) if data.get("brand_id") else None
+                data["dealer_location_id"] = (
+                    str(data.get("dealer_location_id")) if data.get("dealer_location_id") else None
+                )
+                data["feature_flags"] = _normalize_feature_levels(data.get("feature_flags"))
+                data["metadata"] = data.get("metadata") or {}
+                users.append(data)
+
+            return {
+                "dealer": {
+                    "id": dealer_info.get("id"),
+                    "name": dealer_info.get("name"),
+                    "brand_id": dealer_info.get("brand_id"),
+                    "brand_name": dealer_info.get("brand_name"),
+                },
+                "admin": {
+                    "id": admin_info.get("id"),
+                    "email": admin_info.get("email"),
+                },
+                "users": users,
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
+@app.post("/dealer/users")
+def dealer_create_user(payload: DealerUserCreate, request: Request) -> Dict[str, Any]:
+    dealer_id = _extract_dealer_id(request, payload.model_dump())
+    if not dealer_id:
+        raise HTTPException(status_code=400, detail="Falta dealer_id")
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    admin_user_id = _normalize_uuid(request.headers.get("x-admin-user-id"))
+    created_user: Optional[Dict[str, Any]] = None
+
+    try:
+        with _open_supabase_conn() as conn:
+            admin_info = _ensure_dealer_admin(conn, dealer_id, admin_user_id)
+            dealer_info = _fetch_dealer_record(conn, dealer_id)
+
+            org_id = dealer_info.get("organization_id")
+            brand_id = dealer_info.get("brand_id")
+            if not org_id or not brand_id:
+                raise HTTPException(status_code=400, detail="El dealer no está vinculado correctamente a una organización")
+
+            password = _generate_password()
+            feature_flags = _apply_role_feature_defaults(
+                DEFAULT_FEATURE_FLAGS, "dealer_user"
+            )
+            feature_flags["dealer_admin"] = False
+            feature_flags = _normalize_feature_levels(feature_flags)
+
+            app_metadata = {
+                "role": "dealer_user",
+                "org_id": org_id,
+                "brand_id": brand_id,
+                "dealer_location_ids": [dealer_id],
+                "allowed_brands": [brand_id],
+                "features": feature_flags,
+            }
+            user_metadata = {k: v for k, v in {"name": payload.name, "phone": payload.phone}.items() if v}
+
+            created_user = _create_supabase_user(payload.email, password, app_metadata, user_metadata or None)
+            user_id = created_user.get("id")
+            if not user_id:
+                raise HTTPException(status_code=500, detail="Supabase no devolvió ID de usuario")
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into cortex.app_users (id, organization_id, brand_id, dealer_location_id, role, feature_flags, metadata)
+                    values (%s::uuid, %s::uuid, %s::uuid, %s::uuid, 'dealer_user', %s::jsonb, %s::jsonb)
+                    """,
+                    (
+                        user_id,
+                        org_id,
+                        brand_id,
+                        dealer_id,
+                        json.dumps(feature_flags),
+                        json.dumps(user_metadata or {}),
+                    ),
+                )
+            conn.commit()
+
+        return {
+            "user": {
+                "id": user_id,
+                "email": payload.email,
+                "name": payload.name,
+                "phone": payload.phone,
+                "feature_flags": feature_flags,
+                "metadata": user_metadata or {},
+            },
+            "temp_password": password,
+            "recorded_by": admin_info.get("id"),
+        }
+    except HTTPException:
+        if created_user and created_user.get("id"):
+            try:
+                _delete_supabase_user(str(created_user.get("id")))
+            except Exception:
+                pass
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if created_user and created_user.get("id"):
+            try:
+                _delete_supabase_user(str(created_user.get("id")))
+            except Exception:
+                pass
+        raise _supabase_http_exception(exc)
+
+
+@app.delete("/dealer/users/{user_id}", status_code=204)
+def dealer_delete_user(user_id: str, request: Request) -> Response:
+    dealer_id = _extract_dealer_id(request)
+    if not dealer_id:
+        raise HTTPException(status_code=400, detail="Falta dealer_id")
+    target_id = _normalize_uuid(user_id)
+    if not target_id:
+        raise HTTPException(status_code=400, detail="user_id inválido")
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    admin_user_id = _normalize_uuid(request.headers.get("x-admin-user-id"))
+
+    try:
+        with _open_supabase_conn() as conn:
+            admin_info = _ensure_dealer_admin(conn, dealer_id, admin_user_id)
+
+            row = conn.execute(
+                """
+                select id, dealer_location_id, role
+                from cortex.app_users
+                where id = %s::uuid
+                """,
+                (target_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+            data = dict(row)
+            if str(data.get("dealer_location_id") or "") != dealer_id:
+                raise HTTPException(status_code=403, detail="No puedes modificar usuarios de otro dealer")
+            if str(data.get("role") or "") != "dealer_user":
+                raise HTTPException(status_code=400, detail="Solo se pueden eliminar usuarios dealer")
+            if str(target_id) == str(admin_info.get("id")):
+                raise HTTPException(status_code=400, detail="No puedes eliminar tu propio usuario mientras eres superadmin")
+
+            with conn.cursor() as cur:
+                cur.execute("delete from cortex.app_users where id = %s::uuid", (target_id,))
+            conn.commit()
+
+        try:
+            _delete_supabase_user(target_id)
+        except Exception:
+            pass
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
+@app.get("/dealer/templates")
+def dealer_list_templates(request: Request) -> Dict[str, Any]:
+    dealer_id = _extract_dealer_id(request)
+    if not dealer_id:
+        raise HTTPException(status_code=400, detail="Falta dealer_id")
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    user_id = _normalize_uuid(request.headers.get("x-admin-user-id"))
+
+    try:
+        with _open_supabase_conn() as conn:
+            user_info = _ensure_dealer_user(conn, dealer_id, user_id)
+            rows = conn.execute(
+                """
+                select id, template_name, own_vehicle, competitors, dealer_info, sales_rep_info, created_at, updated_at
+                from cortex.user_compare_templates
+                where user_id = %s::uuid
+                order by updated_at desc
+                """,
+                (user_info.get("id"),),
+            ).fetchall()
+            templates = _rows_to_json(rows)
+            return {"templates": templates}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
+@app.post("/dealer/templates")
+def dealer_create_template(payload: DealerTemplateCreate, request: Request) -> Dict[str, Any]:
+    dealer_id = _extract_dealer_id(request, payload.model_dump())
+    if not dealer_id:
+        raise HTTPException(status_code=400, detail="Falta dealer_id")
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    user_id = _normalize_uuid(request.headers.get("x-admin-user-id"))
+
+    try:
+        with _open_supabase_conn() as conn:
+            user_info = _ensure_dealer_user(conn, dealer_id, user_id)
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        """
+                        insert into cortex.user_compare_templates (
+                            user_id, template_name, own_vehicle, competitors, dealer_info, sales_rep_info
+                        ) values (%s::uuid, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb)
+                        returning id, template_name, own_vehicle, competitors, dealer_info, sales_rep_info, created_at, updated_at
+                        """,
+                        (
+                            user_info.get("id"),
+                            payload.template_name.strip(),
+                            json.dumps(payload.own_vehicle or {}),
+                            json.dumps(payload.competitors or []),
+                            json.dumps(payload.dealer_info or {}),
+                            json.dumps(payload.sales_rep_info or {}),
+                        ),
+                    )
+                except UniqueViolation:
+                    raise HTTPException(status_code=409, detail="Ya existe una plantilla con ese nombre")
+                row = cur.fetchone()
+            conn.commit()
+            return {"template": _rows_to_json([row])[0] if row else None}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
+@app.delete("/dealer/templates/{template_id}", status_code=204)
+def dealer_delete_template(template_id: str, request: Request) -> Response:
+    dealer_id = _extract_dealer_id(request)
+    if not dealer_id:
+        raise HTTPException(status_code=400, detail="Falta dealer_id")
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    user_id = _normalize_uuid(request.headers.get("x-admin-user-id"))
+    template_uuid = _normalize_uuid(template_id)
+    if not template_uuid:
+        raise HTTPException(status_code=400, detail="template_id inválido")
+
+    try:
+        with _open_supabase_conn() as conn:
+            user_info = _ensure_dealer_user(conn, dealer_id, user_id)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    delete from cortex.user_compare_templates
+                    where id = %s::uuid and user_id = %s::uuid
+                    """,
+                    (template_uuid, user_info.get("id")),
+                )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+            conn.commit()
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+
 @app.get("/dealers/{dealer_id}/status")
 def public_dealer_status(dealer_id: str, request: Request) -> Dict[str, Any]:
     dealer_uuid = _normalize_uuid(dealer_id)
@@ -10436,6 +11213,8 @@ def public_dealer_status(dealer_id: str, request: Request) -> Dict[str, Any]:
     header_uuid = _normalize_uuid(request.headers.get("x-dealer-id"))
     if header_uuid and header_uuid != dealer_uuid:
         raise HTTPException(status_code=403, detail="No autorizado para consultar este dealer")
+
+    admin_user_id = _normalize_uuid(request.headers.get("x-admin-user-id"))
 
     if not SUPABASE_DB_URL:
         raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
@@ -10464,7 +11243,7 @@ def public_dealer_status(dealer_id: str, request: Request) -> Dict[str, Any]:
             if row is None:
                 raise HTTPException(status_code=404, detail="Dealer no encontrado")
             data = dict(row)
-            return {
+            response = {
                 "dealer_id": str(data.get("id")),
                 "dealer_name": data.get("name"),
                 "status": data.get("status"),
@@ -10475,6 +11254,27 @@ def public_dealer_status(dealer_id: str, request: Request) -> Dict[str, Any]:
                 "organization_status": data.get("organization_status"),
                 "organization_paused_at": data.get("organization_paused_at"),
             }
+
+            if admin_user_id:
+                admin_row = conn.execute(
+                    """
+                    select u.dealer_location_id, u.feature_flags, au.email
+                    from cortex.app_users u
+                    left join auth.users au on au.id = u.id
+                    where u.id = %s::uuid
+                    """,
+                    (admin_user_id,),
+                ).fetchone()
+                if admin_row:
+                    admin_data = dict(admin_row)
+                    flags = _normalize_feature_levels(admin_data.get("feature_flags"))
+                    dealer_match = str(admin_data.get("dealer_location_id") or "")
+                    if bool(flags.get("dealer_admin")) and dealer_match == str(dealer_uuid):
+                        response["is_dealer_admin"] = True
+                        if admin_data.get("email"):
+                            response["admin_email"] = admin_data.get("email")
+
+            return response
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
