@@ -220,6 +220,7 @@ def load_strapi_catalog() -> pd.DataFrame:
         elif any(tok in composite for tok in ("gasolina", "petrol", "nafta")):
             inferred_from_name = "gasolina"
 
+        composite = " ".join(search_tokens).lower()
         if not categoria or str(categoria).strip().lower() in invalid_tokens:
             categoria = inferred_from_name or categoria
         elif inferred_from_name:
@@ -253,6 +254,15 @@ def load_strapi_catalog() -> pd.DataFrame:
             if isinstance(candidate, int) and candidate in FUEL_OVERRIDES:
                 categoria = FUEL_OVERRIDES[candidate]
                 break
+
+        # Normalizar gasolina para distinguir Magna vs Premium
+        categoria_norm = str(categoria or "").strip().lower()
+        if "gasolina premium" in composite or categoria_norm in {"premium", "gasolina premium"}:
+            categoria = "gasolina premium"
+        elif "gasolina magna" in composite or categoria_norm in {"magna", "gasolina magna"}:
+            categoria = "gasolina magna"
+        elif categoria_norm in {"gasoline", "gasolina", "", "no disponible", "no_disponible", "na", "n/a", "serie"}:
+            categoria = "gasolina magna"
 
         row["tipo_de_combustible_original"] = fuel_type or fuel_detail or induction or categoria
         row["categoria_combustible_final"] = categoria
