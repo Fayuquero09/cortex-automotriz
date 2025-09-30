@@ -2058,6 +2058,13 @@ def admin_create_dealer(org_id: str, payload: AdminDealerCreate, request: Reques
     if not normalized_address:
         raise HTTPException(status_code=400, detail="La dirección proporcionada no es válida")
 
+    if not (payload.contact_name and payload.contact_name.strip()):
+        raise HTTPException(status_code=400, detail="El nombre del asesor responsable es obligatorio")
+    if not (payload.contact_phone and payload.contact_phone.strip()):
+        raise HTTPException(status_code=400, detail="El teléfono del asesor responsable es obligatorio")
+    if payload.service_started_at is None:
+        raise HTTPException(status_code=400, detail="La fecha de inicio del servicio es obligatoria")
+
     try:
         with _open_supabase_conn() as conn:
             brand_row = conn.execute(
@@ -2098,6 +2105,16 @@ def admin_create_dealer(org_id: str, payload: AdminDealerCreate, request: Reques
 
             org_metadata = dict(org_row["metadata"] or {})
             org_kind = str(org_metadata.get("org_type") or "dealer_group").strip().lower()
+
+            allow_org_dealer_creation = bool(org_metadata.get("allow_dealer_creation"))
+            if not allow_org_dealer_creation:
+                raise HTTPException(status_code=403, detail="La organización no tiene habilitada la creación de dealers")
+
+            org_dealer_limit_raw = org_metadata.get("dealer_creation_limit")
+            try:
+                org_dealer_limit = int(org_dealer_limit_raw) if org_dealer_limit_raw is not None else None
+            except Exception:
+                org_dealer_limit = None
 
             existing_rows = conn.execute(
                 """
@@ -2174,6 +2191,29 @@ def admin_create_dealer(org_id: str, payload: AdminDealerCreate, request: Reques
             metadata["normalized_address"] = normalized_address
 
             recorded_by = _normalize_uuid(request.headers.get("x-admin-user-id"))
+
+            if org_dealer_limit is not None:
+                org_dealer_count_row = conn.execute(
+                    """
+                    select count(*)
+                    from cortex.dealer_locations d
+                    join cortex.brands b on b.id = d.brand_id
+                    where b.organization_id = %s::uuid
+                    """,
+                    (org_id,),
+                ).fetchone()
+                if isinstance(org_dealer_count_row, Mapping):
+                    try:
+                        org_dealer_count = int(next(iter(org_dealer_count_row.values())))
+                    except StopIteration:
+                        org_dealer_count = 0
+                else:
+                    org_dealer_count = int(org_dealer_count_row[0])
+                if org_dealer_count >= org_dealer_limit:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Se alcanzó el límite de dealers permitido para la organización",
+                    )
 
             with conn.cursor() as cur:
                 cur.execute(
