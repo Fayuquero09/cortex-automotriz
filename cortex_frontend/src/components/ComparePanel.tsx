@@ -2145,22 +2145,7 @@ export default function ComparePanel() {
               <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
               <div style={{ fontWeight:500, fontSize:15 }}>{String(baseRow.model||'')}</div>
               <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(baseRow.version||''))}</div>
-              {(() => {
-                const segLabelText = segLabel(baseRow);
-                const share = (() => {
-                  const v = Number((baseRow as any)?.ventas_model_seg_share_pct ?? (baseRow as any)?.ventas_share_seg_pct ?? NaN);
-                  return Number.isFinite(v) ? v : null;
-                })();
-                if (!segLabelText && share == null) return null;
-                return (
-                  <div style={{ marginTop:6, padding:'4px 0', borderTop:'1px solid #e2e8f0' }}>
-                    {segLabelText ? <div style={{ fontSize:12, color:'#334155' }}>{segLabelText}</div> : null}
-                    {share != null ? (
-                      <div style={{ fontSize:11, color:'#475569' }}>{share.toFixed(1)}% cuota segmento</div>
-                    ) : null}
-                  </div>
-                );
-              })()}
+            {/* Segmento/cuota removidos a petición */}
             </td>
             {/* Fila base: sin deltas (es la referencia) */}
             <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
@@ -2224,30 +2209,7 @@ export default function ComparePanel() {
                       ×
                     </button>
                   </div>
-                  {(() => {
-                    const y = Number(own.year || 2025);
-                    const seg = segLabel(r);
-                    const rowsAll = [ ...(ownRow ? [ownRow] : []), ...comps ];
-                    const mon = (() => {
-                      const lm = Number((r as any)?.ventas_model_ytd_month ?? NaN);
-                      if (Number.isFinite(lm)) return monthNameEs(lm);
-                      const m = lastYtdMonth(rowsAll, y);
-                      return m ? monthNameEs(m) : '';
-                    })();
-                    const share = (() => {
-                      const v = Number((r as any)?.ventas_model_seg_share_pct ?? (r as any)?.ventas_share_seg_pct ?? NaN);
-                      return Number.isFinite(v) ? v : null;
-                    })();
-                    if (!seg && share == null) return null;
-                    return (
-                      <div style={{ marginTop:6, padding:'4px 0', borderTop:'1px solid #e2e8f0' }}>
-                        {seg ? <div style={{ fontSize:12, color:'#334155' }}>{seg}</div> : null}
-                        {share != null ? (
-                          <div style={{ fontSize:11, color:'#475569' }}>{share.toFixed(1)}% cuota segmento</div>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
+                  {/* Segmento/cuota removidos a petición */}
                 </td>
 
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
