@@ -73,3 +73,90 @@ export const vehicleLabel = (
   const yearPart = year ? ` (${year})` : '';
   return `${base}${versionPart}${yearPart}`.trim();
 };
+
+const stripDiacritics = (value: string): string => {
+  try {
+    return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  } catch {
+    return value;
+  }
+};
+
+export type FuelCategoryKey =
+  | 'bev'
+  | 'phev'
+  | 'hev'
+  | 'mhev'
+  | 'diesel'
+  | 'gasolina_premium'
+  | 'gasolina_magna'
+  | 'gasolina'
+  | 'unknown';
+
+export type FuelCategoryMeta = {
+  key: FuelCategoryKey;
+  label: string;
+  raw: string;
+};
+
+const FUEL_LABELS: Record<FuelCategoryKey, string> = {
+  bev: 'Eléctrico',
+  phev: 'PHEV',
+  hev: 'HEV',
+  mhev: 'MHEV',
+  diesel: 'Diésel',
+  gasolina_premium: 'Gasolina Premium',
+  gasolina_magna: 'Gasolina Magna',
+  gasolina: 'Gasolina',
+  unknown: 'Combustible N/D',
+};
+
+const INVALID_FUEL_TOKENS = ['no disponible', 'no_disponible', 'none', 'null', 'na', 'n/a', 'otro', 'other', 'serie', 'sin dato', 'nd'];
+
+const rawFuelValue = (row: RowLike | null | undefined): string => {
+  if (!row || typeof row !== 'object') return '';
+  const candidates = [
+    row?.categoria_combustible_final,
+    row?.tipo_de_combustible_original,
+    row?.tipo_combustible,
+    row?.combustible,
+  ];
+  for (const candidate of candidates) {
+    const value = asString(candidate);
+    if (value) return value;
+  }
+  return '';
+};
+
+export const fuelCategory = (row: RowLike | null | undefined): FuelCategoryMeta => {
+  const raw = rawFuelValue(row);
+  const normalized = stripDiacritics(raw).toLowerCase();
+  const contains = (needle: string) => normalized.includes(needle);
+  const isInvalid = !normalized || INVALID_FUEL_TOKENS.some((token) => token && normalized.includes(token));
+
+  let key: FuelCategoryKey;
+  if (contains('bev') || contains('electric')) {
+    key = 'bev';
+  } else if (contains('phev') || contains('enchuf')) {
+    key = 'phev';
+  } else if (contains('mhev') || contains('mild')) {
+    key = 'mhev';
+  } else if (contains('hev') || contains('hibrid') || contains('hybrid')) {
+    key = 'hev';
+  } else if (contains('diesel') || contains('dsl')) {
+    key = 'diesel';
+  } else if (contains('premium')) {
+    key = 'gasolina_premium';
+  } else if (contains('magna')) {
+    key = 'gasolina_magna';
+  } else if (contains('gasoline') || contains('gasolina') || contains('petrol') || contains('nafta')) {
+    key = 'gasolina_magna';
+  } else if (isInvalid) {
+    key = 'gasolina_magna';
+  } else {
+    key = 'unknown';
+  }
+
+  const label = FUEL_LABELS[key] ?? (raw ? raw : FUEL_LABELS.unknown);
+  return { key, label, raw };
+};

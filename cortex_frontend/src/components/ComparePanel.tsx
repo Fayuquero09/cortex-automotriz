@@ -8,7 +8,7 @@ import useSWR from 'swr';
 import { useAppState } from '@/lib/state';
 import { useI18n } from '@/lib/i18n';
 import { endpoints } from '@/lib/api';
-import { brandLabel, vehicleLabel } from '@/lib/vehicleLabels';
+import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
 import { renderStruct } from '@/lib/insightsTemplates';
 
 type Row = Record<string, any>;
@@ -798,7 +798,10 @@ export default function ComparePanel() {
     return Number.isFinite(numVal) ? numVal : null;
   }
   function isElectric(row: any): boolean {
-    const raw = _fuelRaw(row);
+    const info = fuelCategory(row);
+    if (info.key === 'phev') return false;
+    if (info.key === 'bev') return true;
+    const raw = info.raw.toLowerCase();
     if (!raw) return false;
     if (/phev|enchuf/.test(raw)) return false;
     return /bev|eléctr|electr/.test(raw);
@@ -1087,85 +1090,62 @@ export default function ComparePanel() {
   function fmtDeltaPct(v: any) { const n = num(v); if (n==null) return '-'; const s = n>0?'+':''; return `${s}${Number(n).toFixed(0)}%`; }
   const tri = (n: number) => (n >= 0 ? '▲' : '▼');
 
-  function _fuelRaw(row: any): string {
-    return String(
-      row?.categoria_combustible_final ||
-      row?.tipo_de_combustible_original ||
-      row?.tipo_combustible ||
-      row?.combustible ||
-      ''
-    ).toLowerCase();
-  }
-  function propulsionLabel(row: any): string {
-    const raw = _fuelRaw(row);
-    if (!raw) return '';
-    if (raw.includes('elé') || raw.includes('elect')) return 'Eléctrico';
-    if (raw.includes('phev') || raw.includes('enchuf')) return 'PHEV';
-    if (raw.includes('hev') || raw.includes('híbrido') || raw.includes('hibrido')) return 'HEV';
-    if (raw.includes('diesel')) return 'Diésel';
-    if (raw.includes('gasolina') || raw.includes('nafta') || raw.includes('petrol')) {
-      // precisión Magna/Premium; por defecto Magna
-      if (raw.includes('premium')) return 'Gasolina Premium';
-      if (raw.includes('magna')) return 'Gasolina Magna';
-      return 'Gasolina Magna';
-    }
-    if (!raw) {
-      if (kwhPer100FromRow(row) != null) return 'Eléctrico';
-      if (kmlFromRow(row) != null) return 'Gasolina Magna';
-    }
-    return raw ? raw.toUpperCase() : '';
+  function fuelLabel(row: any): string {
+    const label = fuelCategory(row).label;
+    if (label) return label;
+    if (kwhPer100FromRow(row) != null) return 'Eléctrico';
+    if (kmlFromRow(row) != null) return 'Gasolina Magna';
+    return '';
   }
   function fuelPriceLabel(row: any): string {
-    const raw = _fuelRaw(row);
-    let p = propulsionLabel(row).toLowerCase();
-    if (!p) {
-      if (raw.includes('gas')) p = 'gasolina magna';
-      else if (raw.includes('diesel')) p = 'diésel';
-      else if (raw.includes('elé')) p = 'eléctrico';
+    let key = fuelCategory(row).key;
+    if (key === 'unknown') {
+      if (kwhPer100FromRow(row) != null) key = 'bev';
+      else if (kmlFromRow(row) != null) key = 'gasolina_magna';
     }
+    if (!key || key === 'unknown') return '';
     const asOf = cfg?.fuel_prices_meta?.as_of ? ` • ${cfg.fuel_prices_meta.as_of}` : '';
     const src = cfg?.fuel_prices_meta?.source ? ' • CRE' : '';
-    if (p === 'diésel' || p === 'diesel') {
-      const v = fuelPrices?.diesel_litro; return v?`• $${Number(v).toFixed(2)}/L${asOf}${src}`:'';
-    }
-    if (p === 'eléctrico') {
-      const v = fuelPrices?.electricidad_kwh; return v?`• $${Number(v).toFixed(2)}/kWh${asOf}${src}`:'';
-    }
-    if (p.startsWith('gasolina')) {
-      const isPrem = raw.includes('premium');
-      const v = isPrem ? (fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro) : (fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro);
+    if (key === 'diesel') {
+      const v = fuelPrices?.diesel_litro;
       return v ? `• $${Number(v).toFixed(2)}/L${asOf}${src}` : '';
     }
+    if (key === 'gasolina_premium') {
+      const v = fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro;
+      return v ? `• $${Number(v).toFixed(2)}/L${asOf}${src}` : '';
+    }
+    if (['gasolina_magna', 'gasolina', 'hev', 'mhev', 'phev'].includes(key as any)) {
+      const v = fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro;
+      return v ? `• $${Number(v).toFixed(2)}/L${asOf}${src}` : '';
+    }
+    if (key === 'bev') {
+      const v = fuelPrices?.electricidad_kwh;
+      return v ? `• $${Number(v).toFixed(2)}/kWh${asOf}${src}` : '';
+    }
     const fallback = fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? fuelPrices?.diesel_litro;
-    return fallback ? `• $${Number(fallback).toFixed(2)}${raw.includes('elé')?'/kWh':'/L'}${asOf}${src}` : '';
+    return fallback ? `• $${Number(fallback).toFixed(2)}/L${asOf}${src}` : '';
   }
   function fuelPriceFor(row: any): number | null {
-    const raw = _fuelRaw(row);
-    const lc = raw.toLowerCase();
-    if (lc) {
-      if (/bev|eléctr|elect/.test(lc) && !/phev|hibrid/.test(lc)) {
-        const v = Number(fuelPrices?.electricidad_kwh ?? NaN);
-        if (Number.isFinite(v)) return v;
-      }
-      if (/phev|enchuf/.test(lc)) {
-        const v = Number(fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro ?? NaN);
-        if (Number.isFinite(v)) return v;
-      }
-      if (lc.includes('diesel')) {
-        const v = Number(fuelPrices?.diesel_litro ?? NaN);
-        if (Number.isFinite(v)) return v;
-      }
-      if (lc.includes('premium')) {
-        const v = Number(fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro ?? NaN);
-        if (Number.isFinite(v)) return v;
-      }
-      if (lc.includes('gas') || lc.includes('nafta') || lc.includes('petrol')) {
-        const v = Number(fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? NaN);
-        if (Number.isFinite(v)) return v;
-      }
+    const info = fuelCategory(row);
+    const raw = info.raw.toLowerCase();
+    let key = info.key;
+    if (key === 'unknown') {
+      if (/bev|eléctr|elect/.test(raw) && !/phev|hibrid/.test(raw)) key = 'bev';
+      else if (/phev|enchuf/.test(raw)) key = 'gasolina_premium';
+      else if (/diesel|dsl/.test(raw)) key = 'diesel';
+      else if (/gasolina|petrol|nafta|magna|gasolin/.test(raw)) key = 'gasolina_magna';
     }
-    const fallback = Number(fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? fuelPrices?.diesel_litro ?? fuelPrices?.electricidad_kwh ?? NaN);
-    return Number.isFinite(fallback) ? fallback : null;
+    const pick = (value: any) => {
+      const numVal = Number(value ?? NaN);
+      return Number.isFinite(numVal) ? numVal : null;
+    };
+    if (key === 'bev') return pick(fuelPrices?.electricidad_kwh);
+    if (key === 'diesel') return pick(fuelPrices?.diesel_litro);
+    if (key === 'gasolina_premium') return pick(fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro);
+    if (['gasolina_magna', 'gasolina', 'hev', 'mhev', 'phev'].includes(key as any)) {
+      return pick(fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro);
+    }
+    return pick(fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro ?? fuelPrices?.diesel_litro ?? fuelPrices?.electricidad_kwh);
   }
   function energyConsumptionKwh100(row: any): number | null {
     if (!row) return null;
@@ -2198,7 +2178,7 @@ export default function ComparePanel() {
                 const label = energyConsumptionLabel(baseRow);
                 return label ? <div style={{ fontSize:12, color:'#475569' }}>{label}</div> : null;
               })()}
-              <div style={{ fontSize:12, opacity:0.75 }}>{propulsionLabel(baseRow)} {fuelPriceLabel(baseRow)}</div>
+              <div style={{ fontSize:12, opacity:0.75 }}>{fuelLabel(baseRow) || 'Combustible N/D'} {fuelPriceLabel(baseRow)}</div>
             </td>
             <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
               <div>{fmtMoney(baseRow.service_cost_60k_mxn)}</div>
@@ -2288,7 +2268,7 @@ export default function ComparePanel() {
                     const label = energyConsumptionLabel(r);
                     return label ? <div style={{ fontSize:12, color:'#475569' }}>{label}</div> : null;
                   })()}
-                  <div style={{ fontSize:12, opacity:0.75 }}>{propulsionLabel(r)} {fuelPriceLabel(r)}</div>
+                  <div style={{ fontSize:12, opacity:0.75 }}>{fuelLabel(r) || 'Combustible N/D'} {fuelPriceLabel(r)}</div>
                   <div style={{ fontSize:12, opacity:0.9, color: d_fuel!=null ? (d_fuel<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_fuel==null?'-':`${tri(d_fuel)} ${fmtMoney(Math.abs(d_fuel))}`}</div>
                 </td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>

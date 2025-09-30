@@ -7,7 +7,7 @@ import useSWR from 'swr';
 import { useAppState } from '@/lib/state';
 import { endpoints } from '@/lib/api';
 import { renderStruct } from '@/lib/insightsTemplates';
-import { brandLabel, vehicleLabel } from '@/lib/vehicleLabels';
+import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
 
 type Row = Record<string, any>;
 
@@ -28,11 +28,42 @@ type DealerStatusInfo = {
   brand_name?: string | null;
 };
 
+type DealerTemplate = {
+  id: string;
+  template_name: string;
+  own_vehicle: Record<string, any>;
+  competitors: Record<string, any>[];
+  dealer_info?: Record<string, any> | null;
+  sales_rep_info?: Record<string, any> | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type DealerPanelProps = {
+  dealerContext?: DealerContextInfo;
+  dealerStatus?: DealerStatusInfo;
+  dealerUserId?: string;
+  dealerUserEmail?: string;
+};
+
 function num(x: any): number | null {
   if (x === null || x === undefined || (typeof x === 'string' && x.trim() === '')) return null;
   const v = Number(x);
   return Number.isFinite(v) ? v : null;
 }
+
+const currencyFormatter = new Intl.NumberFormat('es-MX', {
+  style: 'currency',
+  currency: 'MXN',
+  maximumFractionDigits: 0,
+});
+
+const formatCurrency = (value: any, options?: { fallback?: string }): string => {
+  const fallback = options?.fallback ?? 'N/D';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return currencyFormatter.format(numeric);
+};
 
 const PILLAR_LABELS: Record<string, string> = {
   audio_y_entretenimiento: 'Audio & entretenimiento',
@@ -96,23 +127,49 @@ function DealerManualBlock({ onAdd, year, allowDifferentYears }: { onAdd: (r: Ro
       <input placeholder="Marca o modelo" value={q} onChange={e=>setQ(e.target.value)} style={{ minWidth:260, padding:'6px 8px', borderRadius:6, border:'1px solid #cbd5f5' }} />
       {list.length>0 ? (
         <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-          {list.map((r:Row, i:number)=> (
-            <button
-              key={i}
-              onClick={()=> onAdd(r)}
-              style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'4px 8px', borderRadius:6, cursor:'pointer', fontSize:12 }}
-            >
-              {vehicleLabel(r)}
-            </button>
-          ))}
+          {list.map((r:Row, i:number)=> {
+            const price = formatCurrency(r?.precio_transaccion ?? r?.msrp, { fallback: 'N/D' });
+            const fuelLabel = fuelCategory(r).label;
+            return (
+              <button
+                key={i}
+                onClick={()=> onAdd(r)}
+                style={{ border:'1px solid #e5e7eb', background:'#fff', padding:'4px 8px', borderRadius:6, cursor:'pointer', fontSize:12, textAlign:'left' }}
+              >
+                <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', lineHeight:1.35 }}>
+                  <span>{vehicleLabel(r)}</span>
+                  <span style={{ fontSize:11, color:'#475569' }}>
+                    {price}{fuelLabel ? ` · ${fuelLabel}` : ''}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       ): null}
     </div>
   );
 }
 
-export default function DealerPanel({ dealerContext, dealerStatus }: { dealerContext?: DealerContextInfo; dealerStatus?: DealerStatusInfo } = {}){
-  const { own } = useAppState();
+const cleanVehicleRow = (row: Row | null | undefined): Row => {
+  if (!row || typeof row !== 'object') return {};
+  const cleaned: Row = { ...row };
+  delete cleaned.__deltas;
+  delete cleaned.__diffs;
+  return cleaned;
+};
+
+const formatTemplateDate = (value?: string | null): string => {
+  if (!value) return '';
+  try {
+    return new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+  } catch {
+    return String(value);
+  }
+};
+
+export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId, dealerUserEmail }: DealerPanelProps = {}) {
+  const { own, setOwn } = useAppState();
   const { data: cfg } = useSWR<any>('cfg', () => endpoints.config());
   const fuelPrices = cfg?.fuel_prices || {};
   const blocked = Boolean(dealerStatus?.blocked);
@@ -122,6 +179,9 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
   const dealerLocationLabel = dealerContext?.location?.trim() || '';
   const dealerContactLabel = dealerContext?.contactName?.trim();
   const dealerContactPhone = dealerContext?.contactPhone?.trim();
+  const allowedBrand = (dealerStatus?.brand_name && typeof dealerStatus.brand_name === 'string')
+    ? dealerStatus.brand_name.trim()
+    : '';
   const { data: ownRows } = useSWR<Row[]>(ready ? ['dealer_own', own.make, own.model, own.year, own.version] : null, async () => {
     const params: Record<string, any> = { make: own.make, model: own.model, year: own.year, limit: 50 };
     const list = await endpoints.catalog(params);
@@ -138,6 +198,22 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
   const [manualNotice, setManualNotice] = React.useState<string>('');
   const [allowDifferentYears, setAllowDifferentYears] = React.useState<boolean>(false);
   const [allowDifferentSegments, setAllowDifferentSegments] = React.useState<boolean>(false);
+  const [templateName, setTemplateName] = React.useState('');
+  const [templateError, setTemplateError] = React.useState('');
+  const [templateSuccess, setTemplateSuccess] = React.useState('');
+  const [templateSaving, setTemplateSaving] = React.useState(false);
+  const [templateDeleting, setTemplateDeleting] = React.useState<string | null>(null);
+  const canUseTemplates = Boolean(dealerUserId && dealerUserId.trim());
+  const {
+    data: templateData,
+    error: templateFetchError,
+    isLoading: templateLoading,
+    mutate: mutateTemplates,
+  } = useSWR<{ templates: DealerTemplate[] }>(
+    canUseTemplates ? ['dealer_templates', dealerUserId] : null,
+    endpoints.dealerTemplates,
+  );
+  const templates = templateData?.templates ?? [];
   const addComp = async (r: Row) => {
     if (blocked) {
       setManualNotice('El acceso del dealer está pausado. Solicita reactivación al superadmin para agregar comparativos.');
@@ -165,6 +241,113 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
   };
   const removeComp = (idx:number) => setManual(prev => prev.filter((_,i)=>i!==idx));
 
+  const saveTemplate = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canUseTemplates) {
+      setTemplateError('Captura tu UUID de Supabase para guardar plantillas.');
+      return;
+    }
+    if (!templateName.trim()) {
+      setTemplateError('El nombre de la plantilla es obligatorio.');
+      return;
+    }
+    if (!ownRow) {
+      setTemplateError('Selecciona un vehículo propio antes de guardar la plantilla.');
+      return;
+    }
+    setTemplateSaving(true);
+    setTemplateError('');
+    setTemplateSuccess('');
+    try {
+      const payload: Record<string, any> = {
+        template_name: templateName.trim(),
+        own_vehicle: cleanVehicleRow(ownRow),
+        competitors: manual.map((item) => cleanVehicleRow(item)),
+        dealer_info: {
+          id: dealerContext?.id,
+          name: dealerContext?.name,
+          location: dealerContext?.location,
+          brand_name: dealerStatus?.brand_name,
+        },
+        sales_rep_info: {
+          user_id: dealerUserId,
+          email: dealerUserEmail,
+        },
+      };
+      await endpoints.dealerSaveTemplate(payload);
+      await mutateTemplates();
+      setTemplateSuccess('Plantilla guardada correctamente.');
+      setTemplateName('');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo guardar la plantilla';
+      setTemplateError(message);
+    } finally {
+      setTemplateSaving(false);
+    }
+  };
+
+  const applyTemplate = (template: DealerTemplate) => {
+    if (!template?.own_vehicle) {
+      setTemplateError('La plantilla no tiene vehículo propio guardado.');
+      return;
+    }
+    if (blocked) {
+      setTemplateError('El dealer está pausado; solicita reactivación para aplicar plantillas.');
+      return;
+    }
+    const templateBrand = String(template.own_vehicle?.make || template.own_vehicle?.brand || '').trim();
+    if (allowedBrand && templateBrand && templateBrand.toLowerCase() !== allowedBrand.toLowerCase()) {
+      setTemplateError('La plantilla pertenece a otra marca.');
+      return;
+    }
+    const nextOwn = {
+      make: templateBrand || own.make,
+      model: String(template.own_vehicle?.model || '').trim(),
+      year: template.own_vehicle?.ano ?? template.own_vehicle?.year ?? '',
+      version: String(template.own_vehicle?.version || '').trim(),
+    };
+    const parsedYear = Number(nextOwn.year);
+    setOwn({
+      make: nextOwn.make,
+      model: nextOwn.model,
+      year: Number.isFinite(parsedYear) ? parsedYear : '',
+      version: nextOwn.version,
+    });
+    const competitors = Array.isArray(template.competitors)
+      ? template.competitors.map((item) => cleanVehicleRow(item))
+      : [];
+    setManual(competitors);
+    setManualNotice('');
+    setTemplateError('');
+    setTemplateSuccess(`Plantilla "${template.template_name}" aplicada.`);
+  };
+
+  const handleDeleteTemplate = async (template: DealerTemplate) => {
+    if (!template?.id) return;
+    if (typeof window !== 'undefined') {
+      const ok = window.confirm(`¿Eliminar la plantilla "${template.template_name}"? Esta acción no se puede deshacer.`);
+      if (!ok) return;
+    }
+    setTemplateError('');
+    setTemplateSuccess('');
+    setTemplateDeleting(template.id);
+    try {
+      await endpoints.dealerDeleteTemplate(template.id);
+      await mutateTemplates();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo eliminar la plantilla';
+      setTemplateError(message);
+    } finally {
+      setTemplateDeleting(null);
+    }
+  };
+
+  React.useEffect(() => {
+    if (!templateSuccess) return;
+    const timer = window.setTimeout(() => setTemplateSuccess(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [templateSuccess]);
+
   const sig = (rows: Row[]) => rows.map(r => `${r.make}|${r.model}|${r.version||''}|${r.ano||''}`).join(',');
   const { data: compared } = useSWR(ownRow ? ['dealer_compare', ownRow?.id || ownRow?.model, ownRow?.ano, sig(manual)] : null, async () => {
     return endpoints.compare({ own: ownRow, competitors: manual });
@@ -172,45 +355,32 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
   const baseRow = (compared?.own || ownRow) as Row | null;
   const comps = ((compared?.competitors || []) as any[]).map(c => ({ ...c.item, __deltas: c.deltas || {}, __diffs: c.diffs || {} }));
 
-  function _fuelRaw(row: any): string {
-    return String(
-      row?.categoria_combustible_final ||
-      row?.tipo_de_combustible_original ||
-      row?.tipo_combustible ||
-      row?.combustible ||
-      ''
-    ).toLowerCase();
+  function fuelLabel(row: any): string {
+    const label = fuelCategory(row).label;
+    return label || '';
   }
-  function propulsionLabel(row: any): string {
-    const raw = _fuelRaw(row);
-    if (!raw) return '';
-    if (raw.includes('elé') || raw.includes('elect')) return 'Eléctrico';
-    if (raw.includes('phev') || raw.includes('enchuf')) return 'PHEV';
-    if (raw.includes('hev') || raw.includes('híbrido') || raw.includes('hibrido')) return 'HEV';
-    if (raw.includes('diesel')) return 'Diésel';
-    if (raw.includes('gasolina') || raw.includes('nafta') || raw.includes('petrol')) {
-      if (raw.includes('premium')) return 'PREMIUM';
-      if (raw.includes('magna')) return 'MAGNA';
-      return 'GASOLINA';
-    }
-    return raw.toUpperCase();
-  }
+
   function fuelPriceLabel(row: any): string {
-    const raw = _fuelRaw(row);
-    const p = propulsionLabel(row).toLowerCase();
-    if (!p) return '';
+    const info = fuelCategory(row);
+    const key = info.key;
+    if (!key || key === 'unknown') return '';
     const asOf = cfg?.fuel_prices_meta?.as_of ? ` • ${cfg.fuel_prices_meta.as_of}` : '';
     const src = cfg?.fuel_prices_meta?.source ? ' • CRE' : '';
-    if (p === 'diésel' || p === 'diesel') {
-      const v = fuelPrices?.diesel_litro; return v?`• $${Number(v).toFixed(2)}/L${asOf}${src}`:'';
-    }
-    if (p.includes('gasolina') || p.includes('premium') || p.includes('magna')) {
-      const isPrem = raw.includes('premium');
-      const v = isPrem ? (fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro) : (fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro);
+    if (key === 'diesel') {
+      const v = fuelPrices?.diesel_litro;
       return v ? `• $${Number(v).toFixed(2)}/L${asOf}${src}` : '';
     }
-    if (p === 'eléctrico') {
-      const v = fuelPrices?.electricidad_kwh; return v?`• $${Number(v).toFixed(2)}/kWh${asOf}${src}`:'';
+    if (key === 'gasolina_premium') {
+      const v = fuelPrices?.gasolina_premium_litro ?? fuelPrices?.gasolina_magna_litro;
+      return v ? `• $${Number(v).toFixed(2)}/L${asOf}${src}` : '';
+    }
+    if (['gasolina_magna', 'gasolina', 'hev', 'mhev', 'phev'].includes(key)) {
+      const v = fuelPrices?.gasolina_magna_litro ?? fuelPrices?.gasolina_premium_litro;
+      return v ? `• $${Number(v).toFixed(2)}/L${asOf}${src}` : '';
+    }
+    if (key === 'bev') {
+      const v = fuelPrices?.electricidad_kwh;
+      return v ? `• $${Number(v).toFixed(2)}/kWh${asOf}${src}` : '';
     }
     return '';
   }
@@ -272,8 +442,7 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
   }, []);
 
   const formatMoney = React.useCallback((val: number | null | undefined) => {
-    if (val == null || !Number.isFinite(val)) return 'N/D';
-    return Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(val);
+    return formatCurrency(val);
   }, []);
 
   const formatDeltaMoney = React.useCallback((val: number | null | undefined) => {
@@ -294,9 +463,10 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
     const basePrice = num(baseRow?.precio_transaccion) ?? num(baseRow?.msrp);
     const baseEquip = equipScoreFor(baseRow);
     const baseFuel = num(baseRow?.fuel_cost_60k_mxn);
+    const baseFuelLabel = fuelCategory(baseRow).label || 'combustible tradicional';
 
     const saludo = `Saluda al cliente, presenta ${baseName} y pregunta para qué lo necesita (familia, viajes, carga).`;
-    const valor = `Menciona que ofrece ${baseRow.caballos_fuerza ? `${fmtNum(baseRow.caballos_fuerza)} hp` : 'potencia destacada'}, tracción ${propulsionLabel(baseRow)} y precio ${basePrice != null ? formatMoney(basePrice) : 'competitivo'}.`;
+    const valor = `Menciona que ofrece ${baseRow.caballos_fuerza ? `${fmtNum(baseRow.caballos_fuerza)} hp` : 'potencia destacada'}, combustible ${baseFuelLabel} y precio ${basePrice != null ? formatMoney(basePrice) : 'competitivo'}.`;
 
     const compareItems = comps.length ? comps.map((comp: any) => {
       const compName = `${brandLabel(comp)} ${comp.model || ''}${comp.version ? ` – ${comp.version}` : ''}`.trim();
@@ -513,7 +683,7 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
   }, [chartsRows, baseRow]);
 
   // Tabla principal (deltas)
-  function fmtMoney(v:any){ const n=Number(v); return Number.isFinite(n)? Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',maximumFractionDigits:0}).format(n):'-'; }
+  function fmtMoney(v:any){ return formatCurrency(v, { fallback: '-' }); }
   function fmtNum(v:any){ const n=Number(v); return Number.isFinite(n)? Intl.NumberFormat('es-MX').format(n):'-'; }
   function tri(n:number){ return n>0?'↑':(n<0?'↓':'='); }
 
@@ -556,7 +726,7 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
                   <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:12, color:'#475569' }}>
                     <span>{baseRow.version || 'Versión N/D'}</span>
                     <span>{baseRow.ano ? `MY ${baseRow.ano}` : 'Año N/D'}</span>
-                    <span>{propulsionLabel(baseRow)}</span>
+                    <span>{fuelLabel(baseRow) || 'Combustible N/D'}</span>
                   </div>
                   <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:13 }}>
                     <span>Precio tx: {fmtMoney(baseRow.precio_transaccion ?? baseRow.msrp)}</span>
@@ -600,6 +770,108 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
                 <div style={{ marginTop:6, fontSize:11, color:'#b91c1c' }}>{manualNotice}</div>
               ) : null}
             </div>
+            <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#ffffff' }}>
+              <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>Plantillas de comparativos</div>
+              {!canUseTemplates ? (
+                <div style={{ fontSize:12, color:'#475569', lineHeight:1.4 }}>
+                  Captura el UUID del superusuario del dealer para habilitar el guardado automático de plantillas.
+                </div>
+              ) : (
+                <>
+                  {templateError ? (
+                    <div style={{ marginBottom:8, fontSize:12, color:'#b91c1c', background:'#fee2e2', padding:'6px 8px', borderRadius:8 }}>
+                      {templateError}
+                    </div>
+                  ) : null}
+                  {templateSuccess ? (
+                    <div style={{ marginBottom:8, fontSize:12, color:'#166534', background:'#dcfce7', padding:'6px 8px', borderRadius:8 }}>
+                      {templateSuccess}
+                    </div>
+                  ) : null}
+                  {templateFetchError ? (
+                    <div style={{ marginBottom:8, fontSize:12, color:'#9a3412', background:'#ffedd5', padding:'6px 8px', borderRadius:8 }}>
+                      Ocurrió un error al cargar tus plantillas. Intenta refrescar la página.
+                    </div>
+                  ) : null}
+                  <form onSubmit={saveTemplate} style={{ display:'grid', gap:8, marginBottom:12 }}>
+                    <input
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                      placeholder="Nombre de la plantilla (ej. Demo SUV Norte)"
+                      style={{ padding:'8px 10px', borderRadius:8, border:'1px solid #cbd5f5', fontSize:13 }}
+                      maxLength={120}
+                    />
+                    <button
+                      type="submit"
+                      disabled={templateSaving}
+                      style={{
+                        padding:'8px 10px',
+                        background: templateSaving ? '#475569' : '#111827',
+                        color:'#fff',
+                        border:'none',
+                        borderRadius:8,
+                        cursor: templateSaving ? 'not-allowed' : 'pointer',
+                        opacity: templateSaving ? 0.7 : 1,
+                      }}
+                    >
+                      {templateSaving ? 'Guardando…' : 'Guardar plantilla'}
+                    </button>
+                    <div style={{ fontSize:11, color:'#64748b' }}>
+                      Se guardará el vehículo propio seleccionado y los competidores actuales ({manual.length}).
+                    </div>
+                  </form>
+                  {templateLoading && templates.length === 0 ? (
+                    <div style={{ fontSize:12, color:'#64748b' }}>Cargando plantillas guardadas…</div>
+                  ) : null}
+                  {templates.length > 0 ? (
+                    <div style={{ display:'grid', gap:10 }}>
+                      {templates.map((template) => (
+                        <div key={template.id} style={{ border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 10px', display:'grid', gap:6 }}>
+                          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                            <strong style={{ fontSize:13 }}>{template.template_name}</strong>
+                            <span style={{ fontSize:11, color:'#64748b' }}>
+                              Actualizado {formatTemplateDate(template.updated_at || template.created_at)}
+                            </span>
+                          </div>
+                          <div style={{ fontSize:12, color:'#475569', display:'flex', gap:12, flexWrap:'wrap' }}>
+                            <span>{brandLabel(template.own_vehicle)} {String(template.own_vehicle?.model || '')}</span>
+                            <span>{template.competitors?.length || 0} competidores guardados</span>
+                          </div>
+                          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                            <button
+                              type="button"
+                              onClick={() => applyTemplate(template)}
+                              style={{ padding:'6px 10px', borderRadius:8, border:'1px solid #0f172a', background:'#0f172a', color:'#fff', cursor:'pointer', fontSize:12 }}
+                            >
+                              Aplicar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteTemplate(template)}
+                              disabled={templateDeleting === template.id}
+                              style={{
+                                padding:'6px 10px',
+                                borderRadius:8,
+                                border:'1px solid #dc2626',
+                                background: templateDeleting === template.id ? '#fee2e2' : '#ffffff',
+                                color:'#b91c1c',
+                                cursor: templateDeleting === template.id ? 'not-allowed' : 'pointer',
+                                fontSize:12,
+                                opacity: templateDeleting === template.id ? 0.7 : 1,
+                              }}
+                            >
+                              {templateDeleting === template.id ? 'Eliminando…' : 'Eliminar'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize:12, color:'#64748b' }}>Todavía no guardas plantillas.</div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
 
       {/* Tabla de deltas */}
@@ -630,7 +902,7 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.precio_transaccion)}</td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                   {fmtMoney(baseRow.fuel_cost_60k_mxn)}
-                  <div style={{ fontSize:12, opacity:0.75 }}>{propulsionLabel(baseRow)} {fuelPriceLabel(baseRow)} • Rendimiento Combinado</div>
+              <div style={{ fontSize:12, opacity:0.75 }}>{fuelLabel(baseRow) || 'Combustible N/D'} {fuelPriceLabel(baseRow)} • Rendimiento Combinado</div>
                 </td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.service_cost_60k_mxn)}</td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.tco_60k_mxn)}</td>
@@ -656,7 +928,7 @@ export default function DealerPanel({ dealerContext, dealerStatus }: { dealerCon
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.precio_transaccion)}<div style={{ fontSize:12, opacity:0.9, color: d_tx!=null ? (d_tx<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_tx==null?'-':`${tri(d_tx)} ${fmtMoney(Math.abs(d_tx))}`}</div></td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                       {fmtMoney(r.fuel_cost_60k_mxn)}
-                      <div style={{ fontSize:12, opacity:0.75 }}>{propulsionLabel(r)} {fuelPriceLabel(r)} • Rendimiento Combinado</div>
+                      <div style={{ fontSize:12, opacity:0.75 }}>{fuelLabel(r) || 'Combustible N/D'} {fuelPriceLabel(r)} • Rendimiento Combinado</div>
                       <div style={{ fontSize:12, opacity:0.9, color: d_f!=null ? (d_f<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_f==null?'-':`${tri(d_f)} ${fmtMoney(Math.abs(d_f))}`}</div>
                     </td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.service_cost_60k_mxn)}<div style={{ fontSize:12, opacity:0.9, color: d_s!=null ? (d_s<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_s==null?'-':`${tri(d_s)} ${fmtMoney(Math.abs(d_s))}`}</div></td>
