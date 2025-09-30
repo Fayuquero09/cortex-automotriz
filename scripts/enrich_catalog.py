@@ -20,6 +20,7 @@ OVERRIDES_DIR = DATA / "overrides"
 ALIASES_DIR = DATA / "aliases"
 ALIASES_FILE = ALIASES_DIR / "alias_names.csv"
 STRAPI_NORMALIZED_PATH = ROOT.parent / "Strapi" / "data" / "autoradar" / "normalized.json"
+OVERLAY_JSON_PATH = DATA / "vehiculos-todos-augmented.normalized.enriched.scored.json"
 
 
 ACRONYMS = {"BMW","VW","GMC","RAM","BYD","GWM","MG","JAC","BAIC","MINI","DS"}
@@ -89,6 +90,42 @@ def to_int(val) -> Optional[int]:
         return None
 
 
+def parse_number_like(value: Any) -> Optional[float]:
+    """Convert strings such as '5,280 mm' or '5 280' to floats."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            if pd.isna(value):
+                return None
+        except Exception:
+            pass
+        return float(value)
+    try:
+        s = str(value).strip()
+    except Exception:
+        return None
+    if not s:
+        return None
+    import re as _re
+    s = _re.sub(r"[^0-9,\.-]", "", s)
+    if not s:
+        return None
+    if s.count(",") > 1 and s.count(".") == 0:
+        s = s.replace(",", "")
+    elif s.count(",") == 1 and s.count(".") == 0:
+        s = s.replace(",", ".")
+    elif s.count(",") >= 1 and s.count(".") >= 1:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
 def load_strapi_catalog() -> pd.DataFrame:
     path_env = os.getenv("STRAPI_NORMALIZED_PATH")
     path = Path(path_env) if path_env else STRAPI_NORMALIZED_PATH
@@ -105,19 +142,95 @@ def load_strapi_catalog() -> pd.DataFrame:
         os.environ.setdefault("PRECIO_DIESEL_LITRO", str(fuel_prices.get("diesel", "25.33")))
 
     rows: list[dict[str, Any]] = []
+    def _string_from(obj: Any, *keys: str) -> str:
+        """Return first truthy key from dict (case-insensitive) or str(obj)."""
+        if isinstance(obj, dict):
+            for key in keys:
+                if key in obj and obj[key]:
+                    return str(obj[key])
+        if obj is None:
+            return ""
+        return str(obj)
+
+    def _json_or_none(obj: Any) -> str | None:
+        try:
+            return json.dumps(obj, ensure_ascii=False) if obj is not None else None
+        except Exception:
+            return None
+
     for veh in vehicles:
+        vid = veh.get("vehicle_id") or veh.get("vehicleId") or veh.get("uid")
+        if not vid:
+            # skip entries without an identifier; keep pipeline tidy
+            continue
+        # Mantener IDs como string para evitar pérdidas por cast a float en pandas
+        vid_str = str(vid).strip()
+        if not vid_str:
+            continue
+
         row: Dict[str, Any] = {}
-        row["vehicle_id"] = veh.get("vehicle_id") or veh.get("uid")
-        row["uid_strapi"] = veh.get("uid")
-        row["make"] = veh.get("make")
-        row["model"] = veh.get("model")
-        row["version"] = veh.get("version") or veh.get("trim")
-        row["trim"] = veh.get("trim")
+        row["vehicle_id"] = vid_str
+        row["uid_strapi"] = str(veh.get("uid") or vid_str)
+        make_obj = veh.get("make")
+        model_obj = veh.get("model")
+        version_obj = veh.get("version")
+
+        row["make"] = _string_from(make_obj, "name", "label")
+        row["make_json"] = _json_or_none(make_obj)
+
+        row["model"] = _string_from(model_obj, "name", "label")
+        row["model_json"] = _json_or_none(model_obj)
+
+        row["version"] = _string_from(version_obj, "name", "label") or _string_from(veh.get("trim"),)
+        row["version_json"] = _json_or_none(version_obj)
+
+        row["trim"] = _string_from(veh.get("trim"), "name")
         year_val = veh.get("year")
+        if not year_val and isinstance(version_obj, dict):
+            year_val = version_obj.get("year") or version_obj.get("modelYear")
         row["ano"] = year_val
         row["year"] = year_val
         row["region"] = veh.get("region")
-        row["body_style"] = veh.get("body_style")
+        body_obj = veh.get("body_style")
+        if not body_obj and isinstance(version_obj, dict):
+            body_obj = version_obj.get("bodyStyle") or version_obj.get("bodyStyleName")
+        row["body_style"] = _string_from(body_obj, "name", "label")
+        seg_obj = veh.get("segmento_ventas") or veh.get("segment")
+        if not seg_obj and isinstance(version_obj, dict):
+            seg_obj = version_obj.get("bodyStyle") or version_obj.get("bodyStyleName")
+        row["segmento_ventas"] = _string_from(seg_obj, "name", "label")
+
+        # Extract dimensional metrics from features -> Dimensiones
+        feat_obj = veh.get("features") if isinstance(veh.get("features"), dict) else {}
+        dimensiones = None
+        for key in ("Dimensiones", "Dimensiones y pesos", "Dimensiones/Pesos"):
+            if isinstance(feat_obj.get(key), list) and feat_obj.get(key):
+                dimensiones = feat_obj.get(key)
+                break
+        if isinstance(dimensiones, list):
+            DIM_KEYS = {
+                "longitud": "longitud_mm",
+                "altura": "altura_mm",
+                "anchura": "anchura_mm",
+                "ancho": "anchura_mm",
+                "distancia entre ejes": "wheelbase_mm",
+                "peso en vacío": "peso_kg",
+                "peso en orden de marcha": "peso_kg",
+                "peso bruto": "peso_bruto_kg",
+                "capacidad de carga (l)": "capacidad_carga_l",
+                "capacidad de carga": "capacidad_de_carga",
+                "capacidad carga": "capacidad_de_carga",
+            }
+            for item in dimensiones:
+                label = str(item.get("feature") or item.get("name") or '').strip().lower()
+                content = item.get("content") or item.get("value")
+                if not label or content in (None, ''):
+                    continue
+                for key, target in DIM_KEYS.items():
+                    if key in label and not row.get(target):
+                        num = parse_number_like(content)
+                        if num is not None:
+                            row[target] = num
         row["make_slug"] = veh.get("make_slug")
         row["model_slug"] = veh.get("model_slug")
         row["version_slug"] = veh.get("version_slug") if "version_slug" in veh else None
@@ -130,15 +243,62 @@ def load_strapi_catalog() -> pd.DataFrame:
         if transmission:
             row["transmision"] = transmission
 
-        row["msrp"] = to_float(veh.get("price_msrp"))
-        row["precio_transaccion"] = to_float(veh.get("price_transaction"))
+        pricing = veh.get("pricing") if isinstance(veh.get("pricing"), dict) else {}
+        row["msrp"] = (
+            to_float(veh.get("price_msrp"))
+            or to_float(veh.get("msrp"))
+            or to_float((pricing or {}).get("msrp"))
+        )
+        row["precio_transaccion"] = (
+            to_float(veh.get("price_transaction"))
+            or to_float(veh.get("precio_transaccion"))
+            or to_float((pricing or {}).get("precio_transaccion"))
+        )
+        row["bono"] = (
+            to_float(veh.get("bono"))
+            or to_float((pricing or {}).get("bono"))
+        )
         row["precio_factura"] = to_float(veh.get("price_invoice"))
         row["precio_delivery"] = to_float(veh.get("price_delivery"))
         row["price_currency"] = veh.get("price_currency")
+        if row.get("bono") is None:
+            try:
+                tx_val = float(row.get("precio_transaccion") or 0)
+                msrp_val = float(row.get("msrp") or 0)
+                if tx_val > 0 and msrp_val > 0 and tx_val < msrp_val:
+                    row["bono"] = round(msrp_val - tx_val, 2)
+            except Exception:
+                pass
 
-        row["combinado_kml"] = to_float(veh.get("fuel_combined_kml"))
-        row["ciudad_kml"] = to_float(veh.get("fuel_city_kml"))
-        row["fuel_combined_l_100km"] = to_float(veh.get("fuel_combined_l_100km"))
+        fuel_obj = veh.get("fuelEconomy") if isinstance(veh.get("fuelEconomy"), dict) else {}
+        row["combinado_kml"] = (
+            to_float(veh.get("fuel_combined_kml"))
+            or to_float(veh.get("combinado_kml"))
+            or to_float(fuel_obj.get("combined"))
+        )
+        row["ciudad_kml"] = (
+            to_float(veh.get("fuel_city_kml"))
+            or to_float(fuel_obj.get("city"))
+        )
+        row["fuel_combined_l_100km"] = (
+            to_float(veh.get("fuel_combined_l_100km"))
+            or to_float(veh.get("combinado_l_100km"))
+            or to_float(fuel_obj.get("combinedLitresPer100Km"))
+        )
+        if row["combinado_kml"] is None and row["fuel_combined_l_100km"]:
+            try:
+                val = float(row["fuel_combined_l_100km"])
+                if val > 0:
+                    row["combinado_kml"] = round(100.0 / val, 2)
+            except Exception:
+                pass
+        if row["fuel_combined_l_100km"] is None and row["combinado_kml"]:
+            try:
+                val = float(row["combinado_kml"])
+                if val > 0:
+                    row["fuel_combined_l_100km"] = round(100.0 / val, 2)
+            except Exception:
+                pass
         row["fuel_tank_l"] = to_float(veh.get("fuel_tank_l"))
         row["fuel_cost_60k_mxn"] = to_float(veh.get("fuel_cost_60k_mxn"))
         row["service_cost_60k_mxn"] = to_float(veh.get("service_cost_60k_mxn"))
@@ -423,6 +583,8 @@ def load_strapi_catalog() -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df.columns = [str(c).lower() for c in df.columns]
+    if "vehicle_id" in df.columns:
+        df = df.drop_duplicates(subset=["vehicle_id"], keep="last")
     return df
 
 
@@ -933,6 +1095,52 @@ def load_oem_frames() -> List[pd.DataFrame]:
     return frames
 
 
+def load_overlay_extras() -> Optional[pd.DataFrame]:
+    if not OVERLAY_JSON_PATH.exists():
+        return None
+    try:
+        payload = json.loads(OVERLAY_JSON_PATH.read_text())
+    except Exception as exc:
+        print(f"[catalog][WARN] No se pudo leer overlay JSON ({exc})")
+        return None
+    vehicles = payload.get("vehicles") if isinstance(payload, dict) else payload
+    if not isinstance(vehicles, list):
+        return None
+    rows: list[dict[str, Any]] = []
+    for veh in vehicles:
+        if not isinstance(veh, dict):
+            continue
+        vid = veh.get("vehicleId") or veh.get("vehicle_id") or veh.get("uid")
+        if not vid:
+            continue
+        vid_str = str(vid).strip()
+        if not vid_str:
+            continue
+        pricing = veh.get("pricing") if isinstance(veh.get("pricing"), dict) else {}
+        row = {
+            "vehicle_id": vid_str,
+            "precio_transaccion_overlay": to_float(veh.get("precio_transaccion") or pricing.get("precio_transaccion")),
+            "msrp_overlay": to_float(veh.get("msrp") or pricing.get("msrp")),
+            "bono_overlay": to_float(veh.get("bono")),
+            "longitud_mm_overlay": to_float(veh.get("length_mm")),
+            "anchura_mm_overlay": to_float(veh.get("width_mm")),
+            "altura_mm_overlay": to_float(veh.get("height_mm")),
+            "wheelbase_mm_overlay": to_float(veh.get("wheelbase_mm")),
+            "peso_kg_overlay": to_float(veh.get("curb_weight_kg")),
+            "body_style_overlay": (veh.get("version") or {}).get("bodyStyle") or veh.get("body_style"),
+            "segmento_ventas_overlay": veh.get("segmento_ventas"),
+            "categoria_combustible_overlay": veh.get("categoria_combustible_final"),
+            "equip_score_overlay": to_float(veh.get("equip_score")),
+            "equip_p_safety_overlay": to_float(veh.get("equip_p_safety")),
+            "equip_p_adas_overlay": to_float(veh.get("equip_p_adas")),
+            "equip_p_comfort_overlay": to_float(veh.get("equip_p_comfort")),
+        }
+        rows.append(row)
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
+
+
 def build_key_cols(df: pd.DataFrame) -> pd.DataFrame:
     for c in ("make","model","version"):
         if c in df.columns:
@@ -1001,9 +1209,14 @@ def main():
     OVERRIDES_DIR.mkdir(parents=True, exist_ok=True)
     output_csv = DATA / "equipo_veh_limpio_procesado.csv"
     use_strapi = os.getenv("USE_STRAPI_CATALOG", "1").lower() not in {"0","false"}
+    strapi_ids: set[str] = set()
     if use_strapi:
         print(f"[catalog] Loading Strapi normalized catalog: {os.getenv('STRAPI_NORMALIZED_PATH', STRAPI_NORMALIZED_PATH)}")
         base = load_strapi_catalog()
+        try:
+            strapi_ids = {str(x) for x in base.get("vehicle_id", []) if str(x).strip()}
+        except Exception:
+            strapi_ids = set()
     else:
         if not output_csv.exists():
             raise SystemExit(f"Base catalog not found: {output_csv}")
@@ -1030,7 +1243,7 @@ def main():
             oem = oem.drop_duplicates(subset=dedup_cols, keep="last")
             # merge non-price fields from OEM into base
             merged = base.merge(oem, on=key, how="left", suffixes=("", "_oem"))
-            num_protect = {"msrp","precio_transaccion","caballos_fuerza","longitud_mm"}
+            num_protect = {"msrp","precio_transaccion","caballos_fuerza","longitud_mm","bono"}
             for c in merged.columns:
                 if c.endswith("_oem"):
                     src = c
@@ -1045,6 +1258,56 @@ def main():
             base = merged.drop(columns=drop_cols)
 
     # Derivados
+    if strapi_ids:
+        base = base[base["vehicle_id"].astype(str).isin(strapi_ids)].copy()
+
+    overlay_df = load_overlay_extras()
+    if overlay_df is not None and not overlay_df.empty:
+        overlay_df["vehicle_id"] = overlay_df["vehicle_id"].astype(str)
+        if strapi_ids:
+            overlay_df = overlay_df[overlay_df["vehicle_id"].isin(strapi_ids)]
+        if not overlay_df.empty:
+            base = base.merge(overlay_df, on="vehicle_id", how="left")
+            for field in ("precio_transaccion", "msrp", "bono", "longitud_mm", "anchura_mm", "altura_mm", "wheelbase_mm", "peso_kg"):
+                col_overlay = f"{field}_overlay"
+                if col_overlay in base.columns:
+                    base[col_overlay] = pd.to_numeric(base[col_overlay], errors="coerce")
+                    if field in base.columns:
+                        base[field] = pd.to_numeric(base[field], errors="coerce")
+                        mask = base[field].isna()
+                        if field in {"precio_transaccion", "bono"}:
+                            mask = mask | base[field].eq(0)
+                        if field == "precio_transaccion" and "msrp" in base.columns:
+                            msrp_series = pd.to_numeric(base["msrp"], errors="coerce")
+                            mask = mask | ((base[col_overlay].notna()) & (msrp_series.notna()) & (base[col_overlay] < msrp_series))
+                        if mask.any():
+                            base.loc[mask, field] = base.loc[mask, col_overlay]
+                    else:
+                        base[field] = base[col_overlay]
+                    base.drop(columns=[col_overlay], inplace=True, errors=True)
+            for field in ("body_style", "segmento_ventas", "categoria_combustible_final"):
+                col_overlay = f"{field}_overlay"
+                if col_overlay in base.columns:
+                    if field in base.columns:
+                        mask = base[field].isna() | (base[field].astype(str).str.strip()=="")
+                        if mask.any():
+                            base.loc[mask, field] = base.loc[mask, col_overlay]
+                    else:
+                        base[field] = base[col_overlay]
+                    base.drop(columns=[col_overlay], inplace=True, errors=True)
+            for field in ("equip_score", "equip_p_safety", "equip_p_adas", "equip_p_comfort"):
+                col_overlay = f"{field}_overlay"
+                if col_overlay in base.columns:
+                    val_overlay = pd.to_numeric(base[col_overlay], errors="coerce")
+                    if field in base.columns:
+                        existing = pd.to_numeric(base[field], errors="coerce")
+                        mask = existing.isna()
+                        if mask.any():
+                            base.loc[mask, field] = val_overlay[mask]
+                    else:
+                        base[field] = val_overlay
+                    base.drop(columns=[col_overlay], inplace=True, errors=True)
+
     base = compute_scores(base)
     base = fuel_costs(base)
 

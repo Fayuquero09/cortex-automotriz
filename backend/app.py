@@ -1347,7 +1347,9 @@ def _load_vehicle_json_entries() -> list[dict[str, Any]]:
     def _up(s: Any) -> str:
         return str(s or "").strip().upper()
 
+    autoradar_repo = ROOT.parent / "Strapi" / "data" / "autoradar" / "normalized.json"
     candidates = [
+        autoradar_repo,
         ROOT / "data" / "vehiculos-todos-augmented.normalized.json",
         ROOT / "data" / "vehiculos-todos-augmented.json",
         ROOT / "data" / "vehiculos-todos.json",
@@ -1371,22 +1373,57 @@ def _load_vehicle_json_entries() -> list[dict[str, Any]]:
                 if not isinstance(raw, dict):
                     continue
                 try:
-                    vid_raw = raw.get("vehicleId") or raw.get("vehicleid")
+                    vid_raw = raw.get("vehicleId") or raw.get("vehicleid") or raw.get("vehicle_id") or raw.get("uid")
                     vid = str(vid_raw).strip() if vid_raw is not None else ""
                     if vid and vid in seen_ids:
                         continue
-                    mk_raw = ((raw.get("make") or {}).get("name") if isinstance(raw.get("make"), dict) else None) or ((raw.get("manufacturer") or {}).get("name") if isinstance(raw.get("manufacturer"), dict) else "")
+                    make_obj = raw.get("make")
+                    mk_raw = None
+                    if isinstance(make_obj, dict):
+                        mk_raw = make_obj.get("name")
+                    elif isinstance(make_obj, str):
+                        mk_raw = make_obj
+                    if not mk_raw:
+                        manuf = raw.get("manufacturer")
+                        if isinstance(manuf, dict):
+                            mk_raw = manuf.get("name")
+                        elif isinstance(manuf, str):
+                            mk_raw = manuf
                     mk_up = _canon_make(mk_raw) or _up(mk_raw)
-                    md_raw = (raw.get("model") or {}).get("name") if isinstance(raw.get("model"), dict) else ""
+                    md_raw = ""
+                    model_obj = raw.get("model")
+                    if isinstance(model_obj, dict):
+                        md_raw = model_obj.get("name") or ""
+                    elif isinstance(model_obj, str):
+                        md_raw = model_obj
                     md_up = _canon_model(mk_up, md_raw) or _up(md_raw)
-                    ver_obj = raw.get("version") if isinstance(raw.get("version"), dict) else {}
-                    ver_raw = ver_obj.get("name") if isinstance(ver_obj, dict) else ""
+                    ver_obj = raw.get("version")
+                    ver_raw = ""
+                    yr_up = ""
+                    if isinstance(ver_obj, dict):
+                        ver_raw = ver_obj.get("name") or ""
+                        try:
+                            yr_val = ver_obj.get("year")
+                            if yr_val is not None:
+                                yr_up = str(int(yr_val))
+                        except Exception:
+                            yr_up = str(ver_obj.get("year") or "")
+                    elif isinstance(ver_obj, str):
+                        ver_raw = ver_obj
+                        yr_candidate = raw.get("year")
+                        if yr_candidate is not None:
+                            try:
+                                yr_up = str(int(yr_candidate))
+                            except Exception:
+                                yr_up = str(yr_candidate)
+                    if not yr_up:
+                        yr_candidate = raw.get("year")
+                        if yr_candidate is not None:
+                            try:
+                                yr_up = str(int(yr_candidate))
+                            except Exception:
+                                yr_up = str(yr_candidate)
                     vr_up = _up(ver_raw)
-                    try:
-                        yr_val = ver_obj.get("year")
-                        yr_up = str(int(yr_val)) if yr_val is not None else ""
-                    except Exception:
-                        yr_up = str(ver_obj.get("year") or "")
                     entries.append({
                         "mk": mk_up,
                         "md": md_up,
@@ -3428,6 +3465,18 @@ def _load_catalog():
             df.rename(columns={"año": "ano"}, inplace=True)
         if "caballos_de_fuerza" in df.columns and "caballos_fuerza" not in df.columns:
             df.rename(columns={"caballos_de_fuerza": "caballos_fuerza"}, inplace=True)
+        # align consumo de combustible columnas nuevas vs legadas
+        try:
+            if "fuel_combined_kml" in df.columns:
+                df["combinado_kml"] = df["fuel_combined_kml"].combine_first(df.get("combinado_kml"))
+            if "fuel_combined_l_100km" in df.columns:
+                df["combinado_l_100km"] = df["fuel_combined_l_100km"].combine_first(df.get("combinado_l_100km"))
+            if "fuel_city_kml" in df.columns:
+                df["ciudad_kml"] = df["fuel_city_kml"].combine_first(df.get("ciudad_kml"))
+            if "fuel_highway_kml" in df.columns:
+                df["carretera_kml"] = df["fuel_highway_kml"].combine_first(df.get("carretera_kml"))
+        except Exception:
+            pass
         # Merge enriched feature pillars if available
         try:
             feat_path = ROOT / "data" / "enriched" / "features_matrix.csv"
@@ -4265,9 +4314,15 @@ def _load_catalog():
                 # JSON manda 100%: si existe columna _from_json, sobrescribe siempre
                 def prefer_json(col: str):
                     j = f"{col}_from_json"
-                    if j in left.columns:
-                        left[col] = left[j].combine_first(left.get(col)) if col in left.columns else left[j]
-                        left.drop(columns=[j], inplace=True, errors="ignore")
+                    if j not in left.columns:
+                        return
+                    if col not in left.columns:
+                        left[col] = left[j]
+                    else:
+                        mask = left[col].isna()
+                        if mask.any():
+                            left.loc[mask, col] = left.loc[mask, j]
+                    left.drop(columns=[j], inplace=True, errors="ignore")
 
                 prefer_json("equip_score")
                 prefer_json("combinado_kml")
@@ -4554,16 +4609,28 @@ def _load_catalog():
                         # merge by (make, model, year)
                         svc2 = mdf.groupby(["__mk","__md","__yr"], dropna=False)[["service_cost_60k_mxn","service_included_60k"]].first().reset_index()
                         left = left.merge(svc2, on=["__mk","__md","__yr"], how="left", suffixes=("", "_by_model"))
-                        left["service_cost_60k_mxn"] = left["service_cost_60k_mxn"].combine_first(left.get("service_cost_60k_mxn_by_model"))
-                        left["service_included_60k"] = left["service_included_60k"].combine_first(left.get("service_included_60k_by_model"))
+                        for suffix in ("service_cost_60k_mxn_by_model", "service_included_60k_by_model"):
+                            if suffix in left.columns:
+                                base = suffix.replace("_by_model", "")
+                                if base not in left.columns:
+                                    left[base] = pd.NA
+                                mask_assign = left[base].isna()
+                                if mask_assign.any():
+                                    left.loc[mask_assign, base] = left.loc[mask_assign, suffix]
                         left.drop(columns=[c for c in left.columns if c.endswith("_by_model")], inplace=True, errors="ignore")
                         # if still missing, try compact model join (make, modelC, year)
                         missing_mask = left["service_cost_60k_mxn"].isna()
                         if missing_mask.any():
                             svc3 = mdf.groupby(["__mk","__mdc","__yr"], dropna=False)[["service_cost_60k_mxn","service_included_60k"]].first().reset_index()
                             left = left.merge(svc3, left_on=["__mk","__mdc","__yr"], right_on=["__mk","__mdc","__yr"], how="left", suffixes=("", "_by_model_c"))
-                            left["service_cost_60k_mxn"] = left["service_cost_60k_mxn"].combine_first(left.get("service_cost_60k_mxn_by_model_c"))
-                            left["service_included_60k"] = left["service_included_60k"].combine_first(left.get("service_included_60k_by_model_c"))
+                            for suffix in ("service_cost_60k_mxn_by_model_c", "service_included_60k_by_model_c"):
+                                if suffix in left.columns:
+                                    base = suffix.replace("_by_model_c", "")
+                                    if base not in left.columns:
+                                        left[base] = pd.NA
+                                    mask_assign = left[base].isna()
+                                    if mask_assign.any():
+                                        left.loc[mask_assign, base] = left.loc[mask_assign, suffix]
                             left.drop(columns=[c for c in left.columns if c.endswith("_by_model_c")], inplace=True, errors="ignore")
                         # if still missing, ignore year and match by version when present
                         missing_mask = left["service_cost_60k_mxn"].isna()
@@ -4571,8 +4638,11 @@ def _load_catalog():
                             # exact version (make, model, version) ignoring year
                             svc4 = mdf.groupby(["__mk","__md","__vr"], dropna=False)[["service_cost_60k_mxn","service_included_60k"]].first().reset_index()
                             left = left.merge(svc4, on=["__mk","__md","__vr"], how="left", suffixes=("", "_by_ver"))
-                            left.loc[missing_mask, "service_cost_60k_mxn"] = left.loc[missing_mask, "service_cost_60k_mxn"].combine_first(left.loc[missing_mask, "service_cost_60k_mxn_by_ver"])
-                            left.loc[missing_mask, "service_included_60k"] = left.loc[missing_mask, "service_included_60k"].combine_first(left.loc[missing_mask, "service_included_60k_by_ver"])
+                            mask_idx = missing_mask & left["service_cost_60k_mxn"].isna()
+                            if mask_idx.any() and "service_cost_60k_mxn_by_ver" in left.columns:
+                                left.loc[mask_idx, "service_cost_60k_mxn"] = left.loc[mask_idx, "service_cost_60k_mxn_by_ver"]
+                            if mask_idx.any() and "service_included_60k_by_ver" in left.columns:
+                                left.loc[mask_idx, "service_included_60k"] = left.loc[mask_idx, "service_included_60k_by_ver"]
                             left.drop(columns=[c for c in left.columns if c.endswith("_by_ver")], inplace=True, errors="ignore")
                         # final fallback: compact model + version, ignoring year
                         missing_mask = left["service_cost_60k_mxn"].isna()
@@ -4582,8 +4652,11 @@ def _load_catalog():
                             left["__vrc"] = left.get("__vr").map(lambda s: _re.sub(r"[^A-Z0-9]", "", str(s)))
                             svc5 = mdf.groupby(["__mk","__mdc","__vrc"], dropna=False)[["service_cost_60k_mxn","service_included_60k"]].first().reset_index()
                             left = left.merge(svc5, left_on=["__mk","__mdc","__vrc"], right_on=["__mk","__mdc","__vrc"], how="left", suffixes=("", "_by_ver_c"))
-                            left.loc[missing_mask, "service_cost_60k_mxn"] = left.loc[missing_mask, "service_cost_60k_mxn"].combine_first(left.loc[missing_mask, "service_cost_60k_mxn_by_ver_c"])
-                            left.loc[missing_mask, "service_included_60k"] = left.loc[missing_mask, "service_included_60k"].combine_first(left.loc[missing_mask, "service_included_60k_by_ver_c"])
+                            mask_idx = missing_mask & left["service_cost_60k_mxn"].isna()
+                            if mask_idx.any() and "service_cost_60k_mxn_by_ver_c" in left.columns:
+                                left.loc[mask_idx, "service_cost_60k_mxn"] = left.loc[mask_idx, "service_cost_60k_mxn_by_ver_c"]
+                            if mask_idx.any() and "service_included_60k_by_ver_c" in left.columns:
+                                left.loc[mask_idx, "service_included_60k"] = left.loc[mask_idx, "service_included_60k_by_ver_c"]
                             left.drop(columns=[c for c in left.columns if c.endswith("_by_ver_c")], inplace=True, errors="ignore")
                         # ultimate fallback: match by (make, model) across any year and any version
                         missing_mask = left["service_cost_60k_mxn"].isna()
@@ -4591,8 +4664,14 @@ def _load_catalog():
                             try:
                                 svc6 = mdf.groupby(["__mk","__md"], dropna=False)[["service_cost_60k_mxn","service_included_60k"]].first().reset_index()
                                 left = left.merge(svc6, on=["__mk","__md"], how="left", suffixes=("", "_by_model_any"))
-                                left["service_cost_60k_mxn"] = left["service_cost_60k_mxn"].combine_first(left.get("service_cost_60k_mxn_by_model_any"))
-                                left["service_included_60k"] = left["service_included_60k"].combine_first(left.get("service_included_60k_by_model_any"))
+                                for suffix in ("service_cost_60k_mxn_by_model_any", "service_included_60k_by_model_any"):
+                                    if suffix in left.columns:
+                                        base = suffix.replace("_by_model_any", "")
+                                        if base not in left.columns:
+                                            left[base] = pd.NA
+                                        mask_assign = left[base].isna()
+                                        if mask_assign.any():
+                                            left.loc[mask_assign, base] = left.loc[mask_assign, suffix]
                                 left.drop(columns=[c for c in left.columns if c.endswith("_by_model_any")], inplace=True, errors="ignore")
                             except Exception:
                                 pass
@@ -4613,8 +4692,8 @@ def _load_catalog():
                             val = pd.to_numeric(left["service_cost_60k_mxn"], errors="coerce")
                             zero_mask = val.fillna(pd.NA).eq(0)
                             if "service_included_60k" in left.columns:
-                                inc_series = left["service_included_60k"].fillna(False).astype(bool) | zero_mask.fillna(False)
-                                left["service_included_60k"] = inc_series
+                                inc_series = pd.Series(left["service_included_60k"], index=left.index).astype("boolean").fillna(False) | zero_mask.fillna(False)
+                                left["service_included_60k"] = inc_series.astype(bool)
                             else:
                                 inc_series = zero_mask.fillna(False)
                             mask = val.fillna(0).le(0)
@@ -5295,6 +5374,22 @@ def get_catalog(limit: int = Query(1000, ge=1, le=20000), make: Optional[str] = 
             pass
 
     rows = sub.head(limit).where(sub.notna(), None).to_dict(orient="records")
+    for row in rows:
+        try:
+            fc = row.get("fuel_combined_kml")
+            if fc not in (None, ""):
+                row["combinado_kml"] = fc
+            fl = row.get("fuel_combined_l_100km")
+            if fl not in (None, ""):
+                row["combinado_l_100km"] = fl
+            city = row.get("fuel_city_kml")
+            if city not in (None, ""):
+                row["ciudad_kml"] = city
+            hw = row.get("fuel_highway_kml")
+            if hw not in (None, ""):
+                row["carretera_kml"] = hw
+        except Exception:
+            continue
     if (format or "").lower() in {"obj", "object", "json"}:
         return {"count": len(rows), "items": rows, "total": len(rows)}
     return rows
@@ -6303,7 +6398,7 @@ def _compare_core(payload: Dict[str, Any], request: Optional[Request]) -> Dict[s
                     s = str(v or "").strip().lower()
                     if not s or s in {"nan","none","null","-"}: return None
                     m = _re.search(r"(\d+[\.,]?\d*)\s*mpg", s)
-                    if m: return float(m.group(1).replace(',', '.'))  # tratar mpg como km/l (bug JSON)
+                    if m: return float(m.group(1).replace(',', '.'))  # algunos feeds etiquetan "mpg" pero ya vienen en km/l
                     m = _re.search(r"(\d+[\.,]?\d*)\s*l\s*/\s*100\s*km", s)
                     if m:
                         l100 = float(m.group(1).replace(',', '.'))
@@ -6428,6 +6523,167 @@ def _compare_core(payload: Dict[str, Any], request: Optional[Request]) -> Dict[s
                     if word in s:
                         return num
                 return None
+
+            def _coerce_bool(val: Any) -> Optional[bool]:
+                if val is None:
+                    return None
+                if isinstance(val, bool):
+                    return val
+                try:
+                    s = str(val).strip().lower()
+                except Exception:
+                    return None
+                if not s:
+                    return None
+                if s in {"1","true","yes","si","sí","serie","standard","incluido","present","available"}:
+                    return True
+                if s in {"0","false","no","n/a","na","none","null","sin","-"}:
+                    return False
+                return None
+
+            if "vehicle_id" in hit or "fuel_combined_kml" in hit or "infotainment_touchscreen" in hit:
+                fc = hit.get("fuel_combined_kml")
+                if fc is None and hit.get("fuel_combined_l_100km") not in (None, ""):
+                    try:
+                        l100 = float(hit.get("fuel_combined_l_100km"))
+                        if l100 > 0:
+                            fc = 100.0 / l100
+                    except Exception:
+                        fc = None
+                _maybe_set_numeric("combinado_kml", fc)
+                _maybe_set_numeric("ciudad_kml", hit.get("fuel_city_kml"))
+                if hit.get("fuel_cost_60k_mxn") is not None:
+                    _maybe_set_numeric("fuel_cost_60k_mxn", hit.get("fuel_cost_60k_mxn"))
+                if hit.get("service_cost_60k_mxn") is not None:
+                    _maybe_set_numeric("service_cost_60k_mxn", hit.get("service_cost_60k_mxn"))
+                if hit.get("tco_60k_mxn") is not None:
+                    _maybe_set_numeric("tco_60k_mxn", hit.get("tco_60k_mxn"))
+
+                if hit.get("transmission"):
+                    row["transmision"] = hit.get("transmission")
+                if hit.get("drivetrain"):
+                    row["traccion"] = hit.get("drivetrain")
+                    row["driven_wheels"] = str(hit.get("drivetrain")).strip().lower()
+                if hit.get("body_style"):
+                    row["body_style"] = hit.get("body_style")
+                if hit.get("price_transaction") not in (None, ""):
+                    try:
+                        val = float(hit.get("price_transaction"))
+                        if val > 0 and not row.get("precio_transaccion"):
+                            row["precio_transaccion"] = val
+                    except Exception:
+                        if not row.get("precio_transaccion"):
+                            row["precio_transaccion"] = hit.get("price_transaction")
+                if hit.get("price_msrp") not in (None, "") and not row.get("msrp"):
+                    row["msrp"] = hit.get("price_msrp")
+
+                for col, key in (
+                    ("tiene_pantalla_tactil", "infotainment_touchscreen"),
+                    ("android_auto", "infotainment_android_auto"),
+                    ("android_auto_wireless", "infotainment_android_auto_wireless"),
+                    ("apple_carplay", "infotainment_carplay"),
+                    ("carplay_wireless", "infotainment_carplay_wireless"),
+                    ("wireless_charging", "comfort_wireless_charging"),
+                    ("hud", "infotainment_hud"),
+                    ("ambient_lighting", "comfort_ambient_lighting"),
+                    ("asistente_estac_frontal", "adas_parking_sensors_front"),
+                    ("asistente_estac_trasero", "adas_parking_sensors_rear"),
+                    ("sensor_punto_ciego", "adas_blind_spot_warning"),
+                    ("camara_360", "adas_surround_view"),
+                    ("control_crucero", "adas_cruise_control"),
+                    ("adas_acc", "adas_adaptive_cruise"),
+                    ("rear_cross_traffic", "adas_rear_cross_traffic_alert"),
+                    ("auto_high_beam", "lighting_high_beam_assist"),
+                    ("abs", "safety_abs"),
+                    ("control_estabilidad", "safety_esc"),
+                    ("control_traccion", "safety_traction_control"),
+                    ("limpiaparabrisas_lluvia", "comfort_rain_sensor"),
+                    ("sensor_lluvia", "comfort_rain_sensor"),
+                    ("apertura_remota_maletero", "comfort_power_tailgate"),
+                    ("cierre_automatico_maletero", "comfort_auto_door_close"),
+                    ("memoria_asientos", "comfort_memory_settings"),
+                ):
+                    val = hit.get(key)
+                    b = _coerce_bool(val)
+                    if b is not None:
+                        _set_bool(col, b)
+
+                hvac_type = hit.get("hvac_type")
+                if isinstance(hvac_type, str) and hvac_type.strip():
+                    _set_bool("aire_acondicionado", True)
+                zones = hit.get("hvac_zones")
+                if zones not in (None, ""):
+                    _maybe_set_numeric("zonas_clima", zones)
+                if _coerce_bool(hit.get("hvac_rear_controls")):
+                    _set_bool("clima_controles_traseros", True)
+                if _coerce_bool(hit.get("hvac_touch_controls")):
+                    _set_bool("clima_controles_touch", True)
+                if _coerce_bool(hit.get("hvac_ionizer")):
+                    _set_bool("clima_ionizador", True)
+                if _coerce_bool(hit.get("hvac_filter_active_carbon")) or _coerce_bool(hit.get("hvac_filter_pollen")):
+                    _set_bool("clima_filtro", True)
+
+                for key in ("adas_forward_collision_warning", "adas_emergency_braking"):
+                    b = _coerce_bool(hit.get(key))
+                    if b:
+                        _set_bool("alerta_colision", True)
+
+                if _coerce_bool(hit.get("adas_lane_keep_assist")):
+                    _set_bool("adas_lane_keep", True)
+                if _coerce_bool(hit.get("adas_lane_centering")):
+                    _set_bool("adas_lane_center", True)
+
+                if _coerce_bool(hit.get("airbags_front_driver")):
+                    _set_bool("bolsas_aire_delanteras_conductor", True)
+                if _coerce_bool(hit.get("airbags_front_passenger")):
+                    _set_bool("bolsas_aire_delanteras_pasajero", True)
+                if _coerce_bool(hit.get("airbags_knee_driver")):
+                    _set_bool("bolsas_rodillas_conductor", True)
+                if _coerce_bool(hit.get("airbags_knee_passenger")):
+                    _set_bool("bolsas_rodillas_pasajero", True)
+                curtain = any(_coerce_bool(hit.get(k)) for k in ("airbags_curtain_row1","airbags_curtain_row2","airbags_curtain_row3"))
+                if curtain:
+                    _set_bool("bolsas_cortina_todas_filas", True)
+                if _coerce_bool(hit.get("airbags_side_front")):
+                    _set_bool("bolsas_aire_laterales_adelante", True)
+                if _coerce_bool(hit.get("airbags_side_rear")):
+                    _set_bool("bolsas_aire_laterales_atras", True)
+                if _coerce_bool(hit.get("comfort_front_seat_heating")):
+                    _set_bool("asientos_calefaccion_conductor", True)
+                    _set_bool("asientos_calefaccion_pasajero", True)
+                if _coerce_bool(hit.get("comfort_front_seat_ventilation")):
+                    _set_bool("asientos_ventilacion_conductor", True)
+                    _set_bool("asientos_ventilacion_pasajero", True)
+                if _coerce_bool(hit.get("comfort_rear_seat_heating")):
+                    _set_bool("asientos_calefaccion_fila2", True)
+                if _coerce_bool(hit.get("comfort_rear_seat_ventilation")):
+                    _set_bool("asientos_ventilacion_fila2", True)
+                if _coerce_bool(hit.get("comfort_power_tailgate")):
+                    _set_bool("cierre_automatico_maletero", True)
+                    _set_bool("apertura_remota_maletero", True)
+
+                _maybe_set_numeric("longitud_mm", hit.get("length_mm"))
+                _maybe_set_numeric("ancho_mm", hit.get("width_mm"))
+                _maybe_set_numeric("alto_mm", hit.get("height_mm"))
+                _maybe_set_numeric("batalla_mm", hit.get("wheelbase_mm"))
+                _maybe_set_numeric("peso_kg", hit.get("curb_weight_kg"))
+                _maybe_set_numeric("peso_bruto_kg", hit.get("gross_weight_kg"))
+
+                _maybe_set_int("bocinas", hit.get("infotainment_audio_speakers"))
+                _maybe_set_numeric("screen_main_in", hit.get("infotainment_screen_main_in"))
+                _maybe_set_numeric("screen_cluster_in", hit.get("infotainment_screen_cluster_in"))
+                usb_count = 0
+                if _coerce_bool(hit.get("infotainment_usb_front")):
+                    usb_count += 1
+                if _coerce_bool(hit.get("infotainment_usb_rear")):
+                    usb_count += 1
+                if usb_count > 0 and not row.get("usb_a_count"):
+                    row["usb_a_count"] = usb_count
+                if hit.get("warranty_basic_months"):
+                    _maybe_set_int("garantia_basica_meses", hit.get("warranty_basic_months"))
+                if hit.get("warranty_basic_km"):
+                    _maybe_set_int("garantia_basica_km", hit.get("warranty_basic_km"))
+
             # FE
             fe = (hit.get("fuelEconomy") or {}) if isinstance(hit.get("fuelEconomy"), dict) else {}
             ck = _to_kml_text(fe.get("combined"))
@@ -10038,14 +10294,22 @@ def auto_competitors(payload: Dict[str, Any], request: Request) -> Dict[str, Any
     propulsion_bucket: Optional[str] = None
     def _prop_bucket(s: str) -> str:
         s = str(s or "").lower()
-        if any(k in s for k in ("bev", "eléctrico", "electrico")):
+        if not s or s in {"nan","none","null","-",""}:
+            return "unknown"
+        if any(k in s for k in ("bev", "eléctrico", "electrico", "battery electric")):
             return "bev"
         if any(k in s for k in ("phev", "enchuf")):
             return "phev"
+        if any(k in s for k in ("mhev", "mild hybrid")):
+            return "mhev"
         if any(k in s for k in ("hev", "híbrido", "hibrido")):
             return "hev"
-        if any(k in s for k in ("diesel", "gasolina", "nafta", "petrol", "magna", "premium", "regular", "gas lp", "gas glp", "gas natural")):
-            return "ice"
+        if "diesel" in s or "dsl" in s:
+            return "diesel"
+        if any(k in s for k in ("gasolina", "petrol", "nafta", "magna", "premium", "regular")):
+            return "gasolina"
+        if any(k in s for k in ("gas lp", "gas glp", "glp", "gnc", "gas natural")):
+            return "gas_lp"
         return "other"
 
     # Save a copy before propulsion filter for fallback
