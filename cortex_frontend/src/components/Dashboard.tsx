@@ -102,7 +102,9 @@ export default function MarketPulse() {
           </div>
           <InfoIcon title={'Eje X: meses (ene–dic). Eje Y: unidades. Se grafica el segmento del vehículo seleccionado.'} />
         </div>
-        {hasSelection && EChart ? <EChart echarts={echarts} option={seasonOption} opts={{ renderer: 'svg' }} style={{ height: 220 }} /> : null}
+        <div style={{ border:'1px dashed #e2e8f0', borderRadius:10, padding:'10px 12px', fontSize:12, color:'#64748b' }}>
+          Las gráficas del panel OEM se deshabilitaron temporalmente mientras estabilizamos los datos de ventas (series disponibles: {Array.isArray(seasonOption?.series) ? seasonOption.series.length : 0}).
+        </div>
       </div>
       {hasSelection ? (
         <div style={{ marginTop:12 }}>

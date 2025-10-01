@@ -1099,6 +1099,37 @@ def ensure_equip_score(row: Dict[str, _Any]) -> Dict[str, _Any]:
             return round(sum(vals) / float(len(vals)), 1)
         return None
 
+    missing_tokens = {
+        "na","n/a","n.a.","nd","n.d.","s/d","sin dato","sin datos",
+        "no disponible","ninguno","ninguna","null","-","--","tbd",
+        "por definir","por confirmar","por anunciar",
+    }
+
+    def _is_missing_feature(val: _Any) -> bool:
+        if val is None:
+            return True
+        if isinstance(val, bool):
+            return False
+        if isinstance(val, (int, float)):
+            try:
+                if float(val) != float(val):  # NaN guard
+                    return True
+            except Exception:
+                return True
+            return False
+        try:
+            s = str(val).strip()
+        except Exception:
+            return False
+        if not s:
+            return True
+        sl = s.lower()
+        if sl in missing_tokens:
+            return True
+        if sl.startswith("sin dato") or sl.startswith("no disponible"):
+            return True
+        return False
+
     avg = _avg_pillars()
     val = _to_num_shared(out.get("equip_score"))
     if avg is not None:
@@ -1123,7 +1154,7 @@ def ensure_equip_score(row: Dict[str, _Any]) -> Dict[str, _Any]:
     have = 0; present = 0
     for k in keys:
         valk = out.get(k)
-        if valk is None or str(valk).strip() == "":
+        if _is_missing_feature(valk):
             continue
         present += 1
         if _to01_shared(valk):
@@ -5893,6 +5924,37 @@ def _compare_core(payload: Dict[str, Any], request: Optional[Request]) -> Dict[s
                 return round(sum(vals) / float(len(vals)), 1)
             return None
 
+        missing_tokens = {
+            "na","n/a","n.a.","nd","n.d.","s/d","sin dato","sin datos",
+            "no disponible","ninguno","ninguna","null","-","--","tbd",
+            "por definir","por confirmar","por anunciar",
+        }
+
+        def _is_missing_feature(val: Any) -> bool:
+            if val is None:
+                return True
+            if isinstance(val, bool):
+                return False
+            if isinstance(val, (int, float)):
+                try:
+                    if float(val) != float(val):  # NaN
+                        return True
+                except Exception:
+                    return True
+                return False
+            try:
+                s = str(val).strip()
+            except Exception:
+                return False
+            if not s:
+                return True
+            sl = s.lower()
+            if sl in missing_tokens:
+                return True
+            if sl.startswith("sin dato") or sl.startswith("no disponible"):
+                return True
+            return False
+
         avg = _avg_pillars()
         val = to_num(out.get("equip_score"))
         if avg is not None:
@@ -5917,7 +5979,7 @@ def _compare_core(payload: Dict[str, Any], request: Optional[Request]) -> Dict[s
         present = 0
         for k in keys:
             valk = out.get(k)
-            if valk is None or str(valk).strip() == "":
+            if _is_missing_feature(valk):
                 continue
             present += 1
             if _to01(valk):

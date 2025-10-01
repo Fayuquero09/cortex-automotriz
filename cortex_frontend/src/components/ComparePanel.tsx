@@ -1985,6 +1985,21 @@ export default function ComparePanel() {
     } as any;
   }, [chartRows, versionColorMap]);
 
+  const preparedChartsCount = React.useMemo(() => {
+    const sources = [
+      scoreVsPriceOption,
+      msrpVsHpWithLinesOption,
+      hpVsPriceOption,
+      adasAdoptionOption,
+      deltaHpOption,
+      deltaLenOption,
+      deltaAccelOption,
+      footprintOption,
+      salesLineOption,
+    ];
+    return legendItems.length + sources.filter(Boolean).length;
+  }, [legendItems, scoreVsPriceOption, msrpVsHpWithLinesOption, hpVsPriceOption, adasAdoptionOption, deltaHpOption, deltaLenOption, deltaAccelOption, footprintOption, salesLineOption]);
+
   return (
     <>
     <section suppressHydrationWarning style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff', overflowX:'auto' }}>
@@ -2301,142 +2316,18 @@ export default function ComparePanel() {
           );
         })()}
 
-        {legendItems.length ? (
-          <div
-            style={{
-              ...noBreakStyle,
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 12,
-              margin: '8px 0 14px',
-              padding: '8px 12px',
-              border: '1px solid #e2e8f0',
-              borderRadius: 10,
-              background: '#f8fafc',
-              fontSize: 12,
-              color: '#0f172a',
-            }}
-          >
-            {legendItems.map(({ label, isBase, color }) => (
-              <div
-                key={label}
-                style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-              >
-                <span
-                  style={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: 12,
-                    background: color,
-                    border: isBase ? '2px solid #0f172a' : '1px solid rgba(15,23,42,0.35)',
-                    boxShadow: isBase ? '0 0 0 1px rgba(15,23,42,0.08)' : 'none',
-                  }}
-                />
-                <span style={{ fontWeight: isBase ? 600 : 500 }}>
-                  {isBase ? `Nosotros — ${label}` : label}
-                </span>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        {/* Fila 1: Score vs Precio (con tendencia) y MSRP vs HP (con líneas $/HP) */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
-          {(() => {
-            const hasScore = chartRows.some(r => Number((r as any)?.equip_score) > 0);
-            if (!hasScore) {
-              return (
-                <div style={{ ...noBreakStyle, padding:'12px 10px', border:'1px dashed #e5e7eb', borderRadius:8, color:'#64748b' }}>
-                  No hay datos de &quot;score de equipo&quot; para graficar. (campo equip_score)
-                </div>
-              );
-            }
-            return (
-              <div>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
-                  <div style={{ fontSize:12, color:'#64748b' }}>Score de equipo vs precio</div>
-                  <InfoIcon title={'Eje X: precio (TX si hay, si no MSRP). Eje Y: equip_score (0-100) basado en pilares de equipo. Sirve para ver “qué tanto equipo por peso” respecto a competidores.'} />
-                </div>
-                {renderChart(scoreVsPriceOption, 380, 'Sin datos suficientes de score de equipo o precio.')}
-              </div>
-            );
-          })()}
-          <div>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
-              <div style={{ fontSize:12, color:'#64748b' }}>MSRP vs HP (líneas de $/HP)</div>
-              <InfoIcon title={'Eje X: caballos de fuerza. Eje Y: precio (MSRP y TX). Las líneas punteadas muestran isocostos $/HP para comparar eficiencia de precio por potencia.'} />
-            </div>
-            {renderChart(msrpVsHpWithLinesOption, 380, 'Sin datos suficientes de MSRP/HP para graficar.')}
-          </div>
-        </div>
-
-        {/* Fila 2: HP vs Precio y $/HP (detalle) y Waterfall ΔTX */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
-          <div>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
-              <div style={{ fontSize:12, color:'#64748b' }}>HP vs Precio</div>
-              <InfoIcon title={'Relación potencia-precio para comparar tren motriz a mismo rango de precio. Círculo lleno = MSRP; contorno = Precio TX.'} />
-            </div>
-            {renderChart(hpVsPriceOption, 380, 'Sin datos suficientes de potencia o precio.')}
-          </div>
-          <div>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
-              <div style={{ fontSize:12, color:'#64748b' }}>Adopción de ADAS</div>
-              <InfoIcon title={'Conteo de features ADAS activas por vehículo. Rellena la base; competidores muestran cuántas asistencias tienen activas.'} />
-            </div>
-            {renderChart(adasAdoptionOption, 380, 'Sin datos suficientes de features ADAS para graficar.')}
-          </div>
-        </div>
-
-
-        {/* Δ vs base: HP y Longitud (y aceleración si existe) */}
-        <div style={{ display:'grid', gridTemplateColumns: hasDeltaAccel ? '1fr 1fr 1fr' : '1fr 1fr', gap:16 }}>
-          <div>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
-              <div style={{ fontSize:12, color:'#64748b' }}>Δ HP vs base</div>
-              <InfoIcon title={'Diferencia de potencia respecto a la versión base (en caballos). Positivo = más potencia que la base.'} />
-            </div>
-            {renderChart(deltaHpOption, 300, 'Sin datos suficientes de potencia para comparar.')}
-          </div>
-          <div>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
-              <div style={{ fontSize:12, color:'#64748b' }}>Δ Longitud vs base</div>
-              <InfoIcon title={'Diferencia de largo (mm) respecto a la base. Útil para medir huella dimensional.'} />
-            </div>
-            {renderChart(deltaLenOption, 300, 'Sin datos suficientes de longitud para comparar.')}
-          </div>
-          {hasDeltaAccel ? (
-            <div>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
-                <div style={{ fontSize:12, color:'#64748b' }}>Δ 0–100 km/h (s)</div>
-                <InfoIcon title={'Diferencia en aceleración 0–100 km/h (segundos). Negativo = más rápido que la base.'} />
-              </div>
-              {renderChart(deltaAccelOption, 300, 'Sin datos suficientes de aceleración 0–100 km/h.')}
-            </div>
-          ) : null}
-        </div>
-
-
-        {(() => {
-          // Huella superpuesta: ocultar si falta ancho en base o en todos los competidores
-          const baseHas = Number.isFinite(Number((baseRow as any)?.ancho_mm));
-          const anyCompHas = comps.some((r:any)=> Number.isFinite(Number((r as any)?.ancho_mm)));
-          if (!baseHas || !anyCompHas) return null;
-          return (
-            <>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:12, marginBottom:6 }}>
-                <div style={{ fontSize:12, color:'#64748b' }}>Huella (ancho × largo)</div>
-                <InfoIcon title={'Rectángulos representan ancho y largo de cada versión. La base aparece rellena; competidores en contorno.'} />
-              </div>
-              <div>{EChart ? <EChart echarts={echarts} option={footprintOption} opts={{ renderer: 'svg' }} style={{ height: 320 }} /> : null}</div>
-
-            </>
-          );
-        })()}
-
-        {/* Línea: ventas mensuales 2025 (si hay datos) */}
-        <div>
-          {renderChart(salesLineOption, 340, 'Sin datos de ventas mensuales.')}
+        <div
+          style={{
+            border: '1px dashed #e2e8f0',
+            borderRadius: 10,
+            padding: '12px 14px',
+            marginTop: 12,
+            color: '#64748b',
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          Las gráficas del panel OEM se deshabilitaron temporalmente mientras afinamos la cobertura de datos ({preparedChartsCount} preparadas en backend).
         </div>
 
         <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, marginTop:16 }}>
