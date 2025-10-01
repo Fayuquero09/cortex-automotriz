@@ -1,0 +1,13 @@
+Objetivo: asegurar que la respuesta cumple la cobertura mínima.
+
+Prompt verificador:
+Revisa el texto recibido. Devuelve una lista JSON con “faltantes” (sección o bullet no presente) y “mejoras” (lugares donde faltan cifras). Reglas:
+
+Diagnóstico: ≥5 viñetas con Δprecio (%, MXN), costo/HP, gap TCO (%, MXN), gap equipamiento/ADAS (pp), garantía.
+Recomendación de TX: A con rango; B con Value‑Pack y efecto TCO (MXN y %).
+Plan: tres bloques (Marketing, Piso, F&I), cada uno con ≥2 bullets y metas numéricas.
+Rival por rival: ≥2 bullets por competidor (ventaja cuantificada y neutralización con cifra).
+Decisiones: ≥4 con responsable y horizonte.
+Riesgos: ≤3 con umbral (trigger ⇒ acción).
+Si hay faltantes, pide una corrección generando solamente las partes ausentes.
+

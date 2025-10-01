@@ -1194,6 +1194,21 @@ def _read_text_cached(path: Path) -> _Optional[str]:
     except Exception:
         return None
 
+def _load_verifier_prompt(lang: str) -> _Optional[str]:
+    """Load only the verifier system prompt text for given lang (e.g., 'es').
+
+    Expected filename: prompt_verificador_<lang>_v1.txt inside any public/data dir.
+    """
+    lang = (lang or "").strip().lower() or "es"
+    name = f"prompt_verificador_{lang}_v1.txt"
+    for base in _prompt_search_dirs():
+        p = base / name
+        if p.exists():
+            txt = _read_text_cached(p)
+            if txt:
+                return txt
+    return None
+
 def _load_prompts_for_lang(lang: str, scope: str | None = None) -> tuple[_Optional[str], _Optional[str]]:
     """Return (system_prompt, user_template) from public/data for a given lang.
 
@@ -3965,7 +3980,7 @@ def _load_catalog():
                                         from_ver = jdf["version"].map(_from_ev).apply(pd.Series)
                                         ev_df = ev_df.combine_first(from_ver)
                                 except Exception:
-                                    pass
+                                	pass
                                 for col in ["battery_kwh","charge_ac_kw","charge_dc_kw","ev_range_km","charge_time_10_80_min"]:
                                     try:
                                         if col not in jdf.columns:
@@ -8060,11 +8075,12 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         system = system_prompt_override
     else:
         system = (
-            "Actúa como un especialista senior en producto, marketing y pricing dentro de una OEM automotriz. "
-            "Evalúa si el precio de nuestro vehículo está justificado al compararlo con las versiones de la competencia, considerando equipamiento, desempeño, costo total de propiedad, percepción de valor y el volumen de ventas del modelo (YTD y participación de segmento). "
-            "Explica qué respalda el precio actual, qué brechas existen frente a los rivales y qué ajustes estratégicos (bonos, equipamiento adicional o mensajes de marketing) reforzarían el posicionamiento. "
-            "Trabaja SIEMPRE desde la perspectiva de nuestro vehículo ('nosotros') y evita describir gráficas o repetir números textuales del UI; usa los datos para generar implicaciones nuevas (cruza métricas como $/HP, TCO, ventas modelo vs. equipamiento, etc.). "
-            "Devuelve JSON UTF-8 (sin Markdown) con dos bloques: (a) 'insights' con las claves {hallazgos_clave[5..7], oportunidades[3..5], riesgos_y_contramedidas[3..5], acciones_priorizadas[4..6], preguntas_para_el_equipo[3..4], supuestos_y_datos_faltantes[2..5]} donde cada elemento sea una oración clara; (b) 'struct' siguiendo el esquema canónico de secciones e ítems para que el front pueda renderizarlo."
+            "Actúa como estratega comercial senior de una OEM. Tu objetivo es entregar un diagnóstico de precio y un plan accionable que pueda ejecutar Marketing, F&I y la red sin cambios de producto ni de planta. "
+            "1) Emite un juicio claro sobre si el MSRP/TX actual se sostiene frente a los rivales, usando relaciones como costo/HP, gap de TCO y brecha de equipamiento/ADAS. "
+            "2) Recomienda un TX objetivo en dos variantes: (A) ajuste táctico en un rango estrecho o (B) mantener precio con un Value‑Pack (servicio 60k, seguro 1er año y, si aplica, tasa preferente). No propongas descuentos triviales. "
+            "3) Propón palancas inmediatas para Marketing y piso de ventas (guion, demos de 4WD/360°, accesorios y ofertas F&I) y define por qué cierran objeciones del cliente. "
+            "4) Trabaja siempre desde la voz de 'nosotros'; no describas gráficas ni el origen de datos; convierte cifras en implicaciones. "
+            "Devuelve JSON UTF‑8 con dos claves: 'insights' (texto ejecutivo) y 'struct' (secciones con items) para render en front."
         )
 
     make_name = str(own.get("make") or own.get("marca") or own.get("brand") or "").strip().lower()
@@ -8955,7 +8971,7 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
     # 3) Caché por hash del payload (para ahorrar tokens)
     import os, json as _json
     api_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model = os.getenv("OPENAI_MODEL", "gpt-4o")
     # Construir clave estable del análisis
     try:
         import hashlib as _hash
@@ -9295,9 +9311,9 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         data = {
             "model": model,
             "messages": messages,
-            "temperature": float(os.getenv("OPENAI_TEMPERATURE", "0.3")),
-            "max_tokens": int(os.getenv("OPENAI_MAX_TOKENS", "1200")),
-            "frequency_penalty": float(os.getenv("OPENAI_FREQUENCY_PENALTY", "0.2")),
+            "temperature": float(os.getenv("OPENAI_TEMPERATURE", "0.35")),
+            "max_tokens": int(os.getenv("OPENAI_MAX_TOKENS", "2600")),
+            "frequency_penalty": float(os.getenv("OPENAI_FREQUENCY_PENALTY", "0.15")),
             "presence_penalty": float(os.getenv("OPENAI_PRESENCE_PENALTY", "0.0")),
             "top_p": float(os.getenv("OPENAI_TOP_P", "1.0")),
         }
@@ -9396,6 +9412,125 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
             narrative_text = text if isinstance(text, str) else None
 
         if narrative_text:
+            # Optional autoverify + regenerative second pass
+            def _truthy_env(name: str, default: str = "0") -> bool:
+                try:
+                    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "y"}
+                except Exception:
+                    return False
+            autoverify_enabled = bool(payload.get("autoverify")) or _truthy_env("INSIGHTS_AUTOVERIFY", "0")
+            verification_result = None
+            used_regen = False
+            if autoverify_enabled:
+                ver_sys = _load_verifier_prompt(lang_req or 'es')
+                if ver_sys:
+                    try:
+                        import requests as _rq  # type: ignore
+                        ver_model = os.getenv("OPENAI_MODEL", model)
+                        ver_headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                        ver_messages = [
+                            {"role": "system", "content": ver_sys},
+                            {"role": "user", "content": narrative_text},
+                        ]
+                        ver_data = {
+                            "model": ver_model,
+                            "messages": ver_messages,
+                            "temperature": float(os.getenv("OPENAI_TEMPERATURE", "0.2")),
+                            "max_tokens": int(os.getenv("OPENAI_VERIFIER_MAX_TOKENS", "800")),
+                            "top_p": float(os.getenv("OPENAI_TOP_P", "1.0")),
+                        }
+                        try:
+                            timeout_read = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
+                        except Exception:
+                            timeout_read = 60.0
+                        ver_resp = _rq.post("https://api.openai.com/v1/chat/completions", headers=ver_headers, json=ver_data, timeout=(10.0, timeout_read))
+                        ver_text = ""
+                        if ver_resp.status_code == 200:
+                            vout = ver_resp.json()
+                            ver_text = vout.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        # Parse verifier JSON
+                        ver_obj = None
+                        if isinstance(ver_text, str) and ver_text.strip():
+                            try:
+                                ver_obj = _parse_any(ver_text)
+                            except Exception:
+                                ver_obj = None
+                        verification_result = ver_obj if isinstance(ver_obj, (dict, list)) else None
+                        # Detect missing content
+                        missing_count = 0
+                        if isinstance(verification_result, dict):
+                            fl = verification_result.get("faltantes")
+                            if isinstance(fl, list):
+                                missing_count = len(fl)
+                        # If any missing, attempt a single corrective regeneration
+                        try:
+                            max_passes = int(payload.get("autoverify_max_passes") or os.getenv("INSIGHTS_AUTOVERIFY_MAX_PASSES", "1"))
+                        except Exception:
+                            max_passes = 1
+                        if missing_count > 0 and max_passes >= 1:
+                            try:
+                                import json as _json2
+                                data_blob = {"base": own, "competidores": comps_short, "signals": signals, "price_explain": explainers}
+                                payload_json = _json2.dumps(data_blob, ensure_ascii=False)
+                            except Exception:
+                                payload_json = "{}"
+                            try:
+                                ver_info = _json.dumps(verification_result, ensure_ascii=False)
+                            except Exception:
+                                ver_info = str(verification_result)
+                            corrective_user = (
+                                "Instrucciones internas: Reescribe la respuesta completa para cumplir la cobertura mínima. "
+                                "No menciones que es una corrección ni el proceso de verificación. Respeta el FORMATO OBLIGATORIO, títulos exactos y voz de 'nosotros'. "
+                                "Usa el siguiente feedback del verificador para cubrir faltantes y añade las cifras requeridas.\n\n"
+                                f"Feedback del verificador (JSON):\n{ver_info}\n\n"
+                                f"Respuesta previa (texto a corregir):\n---\n{narrative_text}\n---\n\n"
+                                f"Contexto (interno):\n{payload_json}\n"
+                            )
+                            # Second pass with same system prompt
+                            regen_headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                            regen_messages = [
+                                {"role": "system", "content": system},
+                                {"role": "user", "content": corrective_user},
+                            ]
+                            regen_data = {
+                                "model": model,
+                                "messages": regen_messages,
+                                "temperature": float(os.getenv("OPENAI_TEMPERATURE", "0.35")),
+                                "max_tokens": int(os.getenv("OPENAI_MAX_TOKENS", "2600")),
+                                "top_p": float(os.getenv("OPENAI_TOP_P", "1.0")),
+                            }
+                            try:
+                                regen_resp = _rq.post("https://api.openai.com/v1/chat/completions", headers=regen_headers, json=regen_data, timeout=(10.0, timeout_read))
+                                if regen_resp.status_code == 200:
+                                    rout = regen_resp.json()
+                                    new_text = rout.get("choices", [{}])[0].get("message", {}).get("content", "")
+                                    if isinstance(new_text, str) and new_text.strip():
+                                        narrative_text = new_text
+                                        used_regen = True
+                            except Exception:
+                                pass
+                            # Optional: second verification pass (light)
+                            if used_regen and ver_sys:
+                                try:
+                                    ver_messages2 = [
+                                        {"role": "system", "content": ver_sys},
+                                        {"role": "user", "content": narrative_text},
+                                    ]
+                                    ver_data2 = {**ver_data, "messages": ver_messages2}
+                                    ver_resp2 = _rq.post("https://api.openai.com/v1/chat/completions", headers=ver_headers, json=ver_data2, timeout=(10.0, timeout_read))
+                                    if ver_resp2.status_code == 200:
+                                        v2 = ver_resp2.json()
+                                        ver_text2 = v2.get("choices", [{}])[0].get("message", {}).get("content", "")
+                                        try:
+                                            verification_result = _parse_any(ver_text2)
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+            # Try to coerce regen output back to JSON if it is structured
             try:
                 coerced = _parse_any(narrative_text)
             except Exception:
@@ -9404,30 +9539,121 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
                 parsed = coerced
                 narrative_text = None
 
-        if narrative_text:
-            ins_struct = {
-                "sections": [
-                    {
-                        "id": "narrativa",
-                        "title": "Narrativa comparativa",
-                        "items": [
-                            {"key": "narrativa", "args": {"text": narrative_text}}
-                        ],
+            if narrative_text:
+                # Try to convert executive Markdown headings/bullets into structured sections
+                def _struct_from_markdown(md: str) -> Dict[str, Any]:
+                    try:
+                        lines = [str(x).rstrip() for x in (md or '').splitlines()]
+                        # Map canonical section titles we expect from the executive prompt
+                        sec_order = [
+                            ('diagnóstico ejecutivo', 'diagnostico_ejecutivo'),
+                            ('recomendación de tx', 'recomendacion_tx'),
+                            ('plan comercial inmediato', 'plan_comercial_inmediato'),
+                            ('rival por rival', 'rival_por_rival'),
+                            ('decisiones a aprobar', 'decisiones_a_aprobar'),
+                            ('riesgos y mitigación', 'riesgos_y_mitigacion'),
+                        ]
+                        # Helpers
+                        def _norm(s: str) -> str:
+                            return str(s or '').strip().lower().replace('–','-').replace('\u2013','-')
+                        # Parse top-level (## ) sections; collect sub (### ) and bullets (- ... or numbered)
+                        sections: list[dict] = []
+                        cur = None
+                        cur_sub = None
+                        cur_bullets: list[str] = []
+                        def _flush_block():
+                            nonlocal cur_bullets, cur_sub
+                            if cur_sub is not None and cur_bullets:
+                                # As a block item with nested bullet list
+                                sections[-1].setdefault('items', []).append({
+                                    'key': 'bloque',
+                                    'items': [cur_sub] + cur_bullets,
+                                })
+                                cur_bullets = []
+                                cur_sub = None
+                        def _ensure_section(title_line: str):
+                            nonlocal cur
+                            # Identify canonical id and preserve human title
+                            tnorm = _norm(title_line)
+                            sid = None
+                            for label, canon in sec_order:
+                                if label in tnorm:
+                                    sid = canon; break
+                            cur = { 'id': sid or 'sec', 'title': title_line.strip(), 'items': [] }
+                            sections.append(cur)
+                        for raw in lines:
+                            if raw.startswith('## '):
+                                _flush_block()
+                                _ensure_section(raw[3:])
+                                continue
+                            if raw.startswith('### '):
+                                # Sub-heading (e.g., Opción A/B; Marketing/Piso/F&I; competidor)
+                                _flush_block()
+                                cur_sub = raw[4:].strip()
+                                continue
+                            lr = raw.lstrip()
+                            # Bullets: - ... or * ... or numbered "1." "1)"
+                            if lr.startswith('- ') or lr.startswith('* ') or lr[:2].isdigit() and (lr[2:3] in {'.',')'}):
+                                txt = raw[raw.find(lr):]
+                                # Clean bullet marker
+                                if txt.startswith('- ') or txt.startswith('* '):
+                                    txt = txt[2:]
+                                elif len(txt) >= 3 and txt[:2].isdigit() and (txt[2] in {'.',')'}):
+                                    txt = txt[3:].lstrip()
+                                cur_bullets.append(txt)
+                                continue
+                            # Paragraph lines: treat as continuation of previous bullet
+                            if cur_bullets and raw.strip():
+                                cur_bullets[-1] = f"{cur_bullets[-1]} {raw.strip()}"
+                        _flush_block()
+                        # As fallback, if we never saw sub-headings but there are bullets collected without section, dump in a single section
+                        if not sections:
+                            return {
+                                'sections': [
+                                    {'id': 'narrativa', 'title': 'Narrativa comparativa', 'items': [
+                                        {'key': 'narrativa', 'args': {'text': md}}
+                                    ]}
+                                ]
+                            }
+                        return { 'sections': sections }
+                    except Exception:
+                        return {
+                            'sections': [
+                                {'id': 'narrativa', 'title': 'Narrativa comparativa', 'items': [
+                                    {'key': 'narrativa', 'args': {'text': md}}
+                                ]}
+                            ]
+                        }
+
+                try:
+                    ins_struct = _struct_from_markdown(narrative_text)
+                except Exception:
+                    ins_struct = {
+                        "sections": [
+                            {
+                                "id": "narrativa",
+                                "title": "Narrativa comparativa",
+                                "items": [
+                                    {"key": "narrativa", "args": {"text": narrative_text}}
+                                ],
+                            }
+                        ]
                     }
-                ]
-            }
-            res = {
-                "ok": True,
-                "model": model,
-                "insights": narrative_text,
-                "insights_json": None,
-                "insights_struct": ins_struct,
-                "compare": comp_json,
-                "used_fallback_struct": False,
-            }
-            if cache_key:
-                cache[cache_key] = {k: v for k, v in res.items() if k != "compare"}
-            return res
+                res = {
+                    "ok": True,
+                    "model": model,
+                    "insights": narrative_text,
+                    "insights_json": None,
+                    "insights_struct": ins_struct,
+                    "compare": comp_json,
+                    "used_fallback_struct": False,
+                    "autoverify": bool(autoverify_enabled),
+                    "autoverify_regenerated": bool(used_regen),
+                    "verification": verification_result if isinstance(verification_result, (dict, list)) else None,
+                }
+                if cache_key:
+                    cache[cache_key] = {k: v for k, v in res.items() if k != "compare"}
+                return res
 
         def _struct_has_content(st: Dict[str, Any] | None) -> bool:
             try:

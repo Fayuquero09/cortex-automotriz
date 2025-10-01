@@ -1,17 +1,10 @@
-Contexto de análisis (JSON):
-<DATA_JSON>
+Instrucciones internas:
 
-Instrucciones al modelo:
-- Sigue al pie de la letra la estructura descrita en el prompt del sistema; no añadas saludos ni secciones extra.
-- Usa el JSON provisto (base, competidores, signals, price_explain) para calcular comparativas en MXN, %, HP, km/l y cobertura de equipamiento.
-- Traduce los campos técnicos (ADAS, tracción, infotenimiento, garantías, consumo) en lenguaje comercial y contextualiza si la comparación no es apples-to-apples.
-- Alimenta cada sección con frases completas, formales y accionables; integra tablas, viñetas y listas numeradas exactamente donde se indican.
-- En el veredicto en una línea aplica la fórmula: “Sí/No, {vehículo propio} … vs {Competidor 1}: precio ~X%, equipo ~±Y pp, Δ{costo/consumo} …; vs {Competidor 2}: …; Riesgo: …”. Calcula Δprecio = (precio_propio − precio_rival)/precio_rival, Δequipo = equip_propio − equip_rival (reporta “+Y pp más cobertura” si es positivo, “−Y pp menos cobertura” si es negativo) y Δ{costo/consumo} = métrica propia − rival con signos coherentes; toma como riesgo el mayor delta negativo (consumo, TCO, etc.) citando cifra y rival.
-- Para la tabla de comparativo, respeta la estructura `Métrica | Nosotros | {Competidor}…`, usa separador de cabecera (`| --- |`) y en cada celda rival coloca el valor seguido por la variación vs nosotros entre paréntesis (ej.: `$1,141,100 (Δ −$8,900)`).
-- En “¿Qué equipo “extra” aporta…?” menciona solo atributos que nosotros tenemos y los rivales no (apóyate en `features_plus`).
-- En “¿Qué te falta versus ellos?” detalla por rival únicamente los atributos que ellos poseen y nosotros no (apóyate en `features_minus`) e indica la implicación comercial.
-- Mantén la perspectiva del vehículo propio: describe a los rivales siempre en contraste contra "nosotros" y evita narrativas invertidas.
-- Cuando falte un dato o aparezca como 0, trátalo como `N/D` y justifica brevemente si afecta la conclusión.
-- Termina la lista de viñetas en “Recomendación comercial rápida” con la frase literal solicitada en el prompt del sistema.
-- Para “Sugerencias de “pequeñas mejoras”” basa cada recomendación en un gap real (features_minus, brechas cuantificadas) y, si no hay gap, orienta la sugerencia a reforzar mensajes o garantías; nunca propongas añadir un feature que ya está presente en el vehículo propio.
-- Responde exclusivamente en Markdown; está prohibido devolver JSON u otros formatos.
+Sigue exactamente las secciones del prompt del sistema; no agregues ni cambies títulos.
+Cobertura mínima: Diagnóstico (≥5 viñetas), Plan comercial (3 bloques × ≥2 viñetas), Rival por rival (≥2 viñetas/competidor), Decisiones (≥4), Riesgos (≤3).
+Toda afirmación debe anclar una cifra del contexto (MXN, %, HP, km/l, pp). Si falta algún dato crítico, menciónalo y razona la implicación (p. ej. TCO superior por consumo).
+Recomienda TX en dos variantes (A/B) con rangos y efectos cuantificados. No sugieras “bonos” genéricos.
+Escribe en español, en voz de “nosotros”, sin mencionar fuentes, archivos ni “gráficas”.
+Responde en Markdown claro; sin saludos.
+Contexto (interno):
+<DATA_JSON>
