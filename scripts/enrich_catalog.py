@@ -126,6 +126,33 @@ def parse_number_like(value: Any) -> Optional[float]:
         return None
 
 
+HP_REGEX = re.compile(r"(\d{2,4})(?:\s*|\s*[-–]\s*)(hp|cv|bhp)", re.IGNORECASE)
+
+
+def extract_hp_from_text(*values: Any) -> Optional[float]:
+    """Parse horse power figures from free-text fields (e.g., '130hp')."""
+    for value in values:
+        if value is None:
+            continue
+        try:
+            text = str(value)
+        except Exception:
+            continue
+        if not text:
+            continue
+        match = HP_REGEX.search(text)
+        if not match:
+            continue
+        try:
+            num = match.group(1).replace(',', '.').strip()
+            hp = float(num)
+            if hp > 0:
+                return hp
+        except Exception:
+            continue
+    return None
+
+
 def load_strapi_catalog() -> pd.DataFrame:
     path_env = os.getenv("STRAPI_NORMALIZED_PATH")
     path = Path(path_env) if path_env else STRAPI_NORMALIZED_PATH
@@ -304,6 +331,14 @@ def load_strapi_catalog() -> pd.DataFrame:
         row["service_cost_60k_mxn"] = to_float(veh.get("service_cost_60k_mxn"))
         row["tco_60k_mxn"] = to_float(veh.get("tco_60k_mxn"))
 
+        hp_direct = to_float(veh.get("caballos_fuerza") or veh.get("engine_power_hp"))
+        if hp_direct is not None:
+            row["caballos_fuerza"] = hp_direct
+
+        accel_direct = to_float(veh.get("accel_0_100_s") or veh.get("performance_accel_0_100_s"))
+        if accel_direct is not None:
+            row["accel_0_100_s"] = accel_direct
+
         fuel_type = str(veh.get("fuel_type") or "").strip()
         fuel_detail = str(veh.get("fuel_type_detail") or "").strip()
         induction = str(veh.get("engine_induction") or "").strip()
@@ -429,7 +464,9 @@ def load_strapi_catalog() -> pd.DataFrame:
 
         # Basic dimensions
         row["longitud_mm"] = to_float(veh.get("length_mm"))
-        row["anchura_mm"] = to_float(veh.get("width_mm"))
+        width_val = to_float(veh.get("width_mm"))
+        row["anchura_mm"] = width_val
+        row["ancho_mm"] = width_val
         row["altura_mm"] = to_float(veh.get("height_mm"))
         row["wheelbase_mm"] = to_float(veh.get("wheelbase_mm"))
         row["peso_kg"] = to_float(veh.get("curb_weight_kg"))
@@ -1048,27 +1085,125 @@ def fuel_costs(df: pd.DataFrame) -> pd.DataFrame:
     precio_magna = float(os.getenv("PRECIO_GASOLINA_MAGNA_LITRO", "23.57"))
     precio_premium = float(os.getenv("PRECIO_GASOLINA_PREMIUM_LITRO", "25.00"))
     precio_diesel = float(os.getenv("PRECIO_DIESEL_LITRO", "25.33"))
+    precio_electricidad = float(os.getenv("PRECIO_ELEC_KWH", "2.9"))
+    phev_share = float(os.getenv("PHEV_ELEC_SHARE", "0.6"))
 
     kml_col = os.getenv("NOMBRE_COLUMNA_KML", "combinado_kml").lower()
     fuel_col = os.getenv("NOMBRE_COLUMNA_TIPO_COMBUSTIBLE", "tipo_de_combustible_original").lower()
     if kml_col not in df.columns:
         return df
-    def cost(row):
+
+    energy_cols_kwh100 = [
+        'energy_consumption_kwh_100km',
+        'consumo_kwh_100km',
+        'consumo_electrico_kwh_100km',
+        'kwh_100km'
+    ]
+    energy_cols_whkm = ['energy_consumption_wh_km', 'consumo_wh_km', 'wh_km']
+    energy_cols_km_per_kwh = ['energy_consumption_km_per_kwh', 'km_kwh', 'km_per_kwh']
+
+    def energy_kwh_100(row: pd.Series) -> Optional[float]:
+        for col in energy_cols_kwh100:
+            val = row.get(col)
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                continue
+            if val and val > 0:
+                return val
+        for col in energy_cols_whkm:
+            val = row.get(col)
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                continue
+            if val and val > 0:
+                return (val / 1000.0) * 100.0
+        for col in energy_cols_km_per_kwh:
+            val = row.get(col)
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                continue
+            if val and val > 0:
+                return 100.0 / val
+        return None
+
+    energy_cache = df.apply(energy_kwh_100, axis=1)
+
+    def existing_or_nan(col_name: str) -> pd.Series:
+        if col_name in df.columns:
+            return pd.to_numeric(df[col_name], errors='coerce')
+        return pd.Series([float('nan')] * len(df), index=df.index)
+
+    energy_existing = existing_or_nan('energy_consumption_kwh_100km')
+    combined_energy = energy_existing.combine_first(energy_cache)
+    df['energy_consumption_kwh_100km'] = combined_energy.round(2)
+
+    def compute_wh(row_index: int) -> float:
+        val = energy_cache.iloc[row_index]
+        return (val / 100.0) * 1000.0 if val and val > 0 else float('nan')
+
+    wh_series = pd.Series([compute_wh(i) for i in range(len(df))], index=df.index)
+    existing_wh = existing_or_nan('energy_consumption_wh_km')
+    df['energy_consumption_wh_km'] = existing_wh.combine_first(wh_series).round(2)
+
+    def compute_km_per_kwh(row_index: int) -> float:
+        val = energy_cache.iloc[row_index]
+        return 100.0 / val if val and val > 0 else float('nan')
+
+    km_per_kwh_series = pd.Series([compute_km_per_kwh(i) for i in range(len(df))], index=df.index)
+    existing_km = existing_or_nan('energy_consumption_km_per_kwh')
+    df['energy_consumption_km_per_kwh'] = existing_km.combine_first(km_per_kwh_series).round(2)
+
+    energy_cache_final = pd.to_numeric(df['energy_consumption_kwh_100km'], errors='coerce')
+
+    def cost(row: pd.Series):
         try:
             kml = float(row.get(kml_col, 0) or 0)
         except Exception:
             kml = 0.0
+        fuel_value = row.get('categoria_combustible_final')
+        if fuel_value is None or str(fuel_value).strip() == '':
+            fuel_value = row.get(fuel_col, "")
+        fuel = str(fuel_value).lower()
+        fuel_norm = fuel.replace('é', 'e')
+        price = precio_magna
+        if "premium" in fuel_norm:
+            price = precio_premium
+        if "diesel" in fuel_norm:
+            price = precio_diesel
+
+        if any(k in fuel_norm for k in ("electrico", "bev")):
+            kwh_100 = energy_cache_final.iloc[row.name]
+            if kwh_100 is None or kwh_100 <= 0 or pd.isna(kwh_100):
+                return None
+            kwh_total = (kwh_100 / 100.0) * 60000.0
+            return round(kwh_total * precio_electricidad, 2)
+
+        if "phev" in fuel_norm:
+            kwh_100 = energy_cache_final.iloc[row.name]
+            cost_elec = None
+            if kwh_100 and not pd.isna(kwh_100) and kwh_100 > 0:
+                cost_elec = (kwh_100 / 100.0) * 60000.0 * precio_electricidad
+            cost_gas = None
+            if kml and kml > 0:
+                cost_gas = (60000.0 / kml) * price
+            if cost_elec is None and cost_gas is None:
+                return None
+            if cost_elec is None:
+                return round(cost_gas, 2)
+            if cost_gas is None:
+                return round(cost_elec, 2)
+            return round(phev_share * cost_elec + (1.0 - phev_share) * cost_gas, 2)
+
         if kml <= 0:
             return None
-        fuel = str(row.get(fuel_col, "")).lower()
-        price = precio_magna
-        if "premium" in fuel: price = precio_premium
-        if "diesel" in fuel: price = precio_diesel
-        if any(k in fuel for k in ("electrico","eléctrico")):
-            return 0.0
         litros = (60000.0 / kml)
         return round(litros * price, 2)
+
     df["fuel_cost_60k_mxn"] = df.apply(cost, axis=1)
+
     return df
 
 
@@ -1134,6 +1269,7 @@ def load_overlay_extras() -> Optional[pd.DataFrame]:
             "equip_p_safety_overlay": to_float(veh.get("equip_p_safety")),
             "equip_p_adas_overlay": to_float(veh.get("equip_p_adas")),
             "equip_p_comfort_overlay": to_float(veh.get("equip_p_comfort")),
+            "caballos_fuerza_overlay": to_float(veh.get("caballos_fuerza")),
         }
         rows.append(row)
     if not rows:
@@ -1268,7 +1404,7 @@ def main():
             overlay_df = overlay_df[overlay_df["vehicle_id"].isin(strapi_ids)]
         if not overlay_df.empty:
             base = base.merge(overlay_df, on="vehicle_id", how="left")
-            for field in ("precio_transaccion", "msrp", "bono", "longitud_mm", "anchura_mm", "altura_mm", "wheelbase_mm", "peso_kg"):
+            for field in ("precio_transaccion", "msrp", "bono", "longitud_mm", "anchura_mm", "altura_mm", "wheelbase_mm", "peso_kg", "caballos_fuerza"):
                 col_overlay = f"{field}_overlay"
                 if col_overlay in base.columns:
                     base[col_overlay] = pd.to_numeric(base[col_overlay], errors="coerce")
@@ -1307,6 +1443,44 @@ def main():
                     else:
                         base[field] = val_overlay
                     base.drop(columns=[col_overlay], inplace=True, errors=True)
+
+    # Ensure canonical dimensional aliases exist (ancho_mm expected downstream)
+    if "ancho_mm" in base.columns:
+        base["ancho_mm"] = pd.to_numeric(base["ancho_mm"], errors="coerce")
+    else:
+        base["ancho_mm"] = pd.NA
+    if "anchura_mm" in base.columns:
+        ancho_from_anchura = pd.to_numeric(base["anchura_mm"], errors="coerce")
+        mask = pd.to_numeric(base["ancho_mm"], errors="coerce").isna()
+        if mask.any():
+            base.loc[mask, "ancho_mm"] = ancho_from_anchura[mask]
+    if "width_mm" in base.columns:
+        ancho_from_width = pd.to_numeric(base["width_mm"], errors="coerce")
+        mask = pd.to_numeric(base["ancho_mm"], errors="coerce").isna()
+        if mask.any():
+            base.loc[mask, "ancho_mm"] = ancho_from_width[mask]
+
+    # Horsepower: prefer numeric column, fallback to overlay or parse from text
+    if "caballos_fuerza" in base.columns:
+        base["caballos_fuerza"] = pd.to_numeric(base["caballos_fuerza"], errors="coerce")
+    else:
+        base["caballos_fuerza"] = pd.NA
+    hp_series = pd.to_numeric(base["caballos_fuerza"], errors="coerce")
+    hp_missing = hp_series.isna() | (hp_series <= 0)
+    if hp_missing.any():
+        parsed_hp = base.loc[hp_missing].apply(
+            lambda row: extract_hp_from_text(
+                row.get("version"),
+                row.get("trim"),
+                row.get("version_json"),
+                row.get("model_json"),
+                row.get("metadata"),
+                row.get("header_description"),
+            ),
+            axis=1,
+        )
+        base.loc[hp_missing, "caballos_fuerza"] = parsed_hp
+    base["caballos_fuerza"] = pd.to_numeric(base["caballos_fuerza"], errors="coerce")
 
     base = compute_scores(base)
     base = fuel_costs(base)
