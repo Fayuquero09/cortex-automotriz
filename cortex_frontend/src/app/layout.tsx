@@ -23,6 +23,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <nav className="app-nav">
                 <a className="app-link" href="/ui">OEM</a>
                 <a className="app-link" href="/dealers">Dealers</a>
+                <a className="app-link" href="/membership">Membresía</a>
                 <LangSwitcher />
               </nav>
             </header>

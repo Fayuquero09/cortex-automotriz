@@ -27,6 +27,7 @@ import unicodedata
 import secrets
 import string
 import uuid
+from collections import defaultdict
 
 import psycopg
 import requests
@@ -101,6 +102,13 @@ SUPABASE_URL = os.getenv("SUPABASE_URL") or ""
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or ""
 _SUPABASE_CONN_KW = {"row_factory": dict_row}
 
+MEMBERSHIP_DEBUG_CODES = (os.getenv("MEMBERSHIP_DEBUG_CODES") or "1").lower() not in {"0", "false", "no"}
+_MEMBERSHIP_OTP_TTL = timedelta(minutes=5)
+_MEMBERSHIP_SESSION_TTL = timedelta(hours=12)
+_MEMBERSHIP_OTPS: Dict[str, tuple[str, datetime]] = {}
+_MEMBERSHIP_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_MEMBERSHIP_PROFILES: Dict[str, Dict[str, Any]] = {}
+
 FEATURE_LEVELS: set[str] = {"none", "view", "edit"}
 MANAGEABLE_FEATURE_KEYS: tuple[str, ...] = (
     "compare",
@@ -135,6 +143,57 @@ def _apply_role_feature_defaults(
         flags["dashboard"] = "edit"
 
     return flags
+
+
+def _normalize_phone_number(value: str) -> str:
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if len(digits) < 8 or len(digits) > 16:
+        raise HTTPException(status_code=400, detail="Número de teléfono inválido")
+    if digits.startswith("52") and len(digits) in {12, 13}:
+        # trim leading country code if it results in 10 digits
+        maybe = digits[-10:]
+        if len(maybe) == 10:
+            digits = maybe
+    return digits
+
+
+def _create_membership_session(phone: str) -> str:
+    now = datetime.now(timezone.utc)
+    # cleanup expired sessions/otps occasionally
+    expired_otps = [p for p, (_, exp) in _MEMBERSHIP_OTPS.items() if exp <= now]
+    for key in expired_otps:
+        _MEMBERSHIP_OTPS.pop(key, None)
+    expired_sessions = [sid for sid, meta in _MEMBERSHIP_SESSIONS.items() if meta.get("expires_at") and meta["expires_at"] <= now]
+    for sid in expired_sessions:
+        _MEMBERSHIP_SESSIONS.pop(sid, None)
+        _MEMBERSHIP_PROFILES.pop(sid, None)
+
+    session = secrets.token_urlsafe(24)
+    _MEMBERSHIP_SESSIONS[session] = {
+        "phone": phone,
+        "created_at": now.isoformat(),
+        "expires_at": now + _MEMBERSHIP_SESSION_TTL,
+    }
+    return session
+
+
+def _require_membership_session(session: str) -> Dict[str, Any]:
+    data = _MEMBERSHIP_SESSIONS.get(session)
+    if not data:
+        raise HTTPException(status_code=401, detail="Sesión inválida o expirada")
+    expires_at = data.get("expires_at")
+    if isinstance(expires_at, datetime):
+        expires = expires_at
+    else:
+        try:
+            expires = datetime.fromisoformat(str(expires_at))
+        except Exception:
+            expires = datetime.now(timezone.utc)
+    if expires <= datetime.now(timezone.utc):
+        _MEMBERSHIP_SESSIONS.pop(session, None)
+        _MEMBERSHIP_PROFILES.pop(session, None)
+        raise HTTPException(status_code=401, detail="Sesión de membresía expirada")
+    return data
 
 
 def _open_supabase_conn() -> psycopg.Connection:
@@ -879,6 +938,22 @@ class AdminOrganizationUserCreate(BaseModel):
     email: EmailStr
     role: Literal["oem_user", "superadmin_oem"] = "oem_user"
     name: Optional[str] = None
+
+
+class MembershipSendCode(BaseModel):
+    phone: str
+
+
+class MembershipVerifyCode(BaseModel):
+    phone: str
+    code: str
+
+
+class MembershipProfileInput(BaseModel):
+    session: str
+    brand: str
+    pdf_display_name: str
+    pdf_footer_note: Optional[str] = None
     phone: Optional[str] = None
     features: Optional[Dict[str, Literal["none", "view", "edit"]]] = None
     dealer_admin: Optional[bool] = None
@@ -2492,6 +2567,139 @@ def admin_list_brands(request: Request) -> Dict[str, Any]:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _supabase_http_exception(exc)
+
+
+@app.post("/membership/send_code")
+def membership_send_code(payload: MembershipSendCode) -> Dict[str, Any]:
+    phone = _normalize_phone_number(payload.phone)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    expires = datetime.now(timezone.utc) + _MEMBERSHIP_OTP_TTL
+    _MEMBERSHIP_OTPS[phone] = (code, expires)
+    try:
+        print(f"[membership] OTP {code} for phone {phone} (expires {expires.isoformat()})", flush=True)
+    except Exception:
+        pass
+    result: Dict[str, Any] = {
+        "ok": True,
+        "expires_in": int(_MEMBERSHIP_OTP_TTL.total_seconds()),
+    }
+    if MEMBERSHIP_DEBUG_CODES:
+        result["debug_code"] = code
+    return result
+
+
+@app.post("/membership/verify_code")
+def membership_verify_code(payload: MembershipVerifyCode) -> Dict[str, Any]:
+    phone = _normalize_phone_number(payload.phone)
+    entry = _MEMBERSHIP_OTPS.get(phone)
+    if not entry:
+        raise HTTPException(status_code=400, detail="Código inválido o expirado")
+    code_expected, expires = entry
+    if expires <= datetime.now(timezone.utc):
+        _MEMBERSHIP_OTPS.pop(phone, None)
+        raise HTTPException(status_code=400, detail="Código expirado, solicita uno nuevo")
+    code_received = str(payload.code or "").strip()
+    if code_received != code_expected:
+        raise HTTPException(status_code=400, detail="Código incorrecto")
+    _MEMBERSHIP_OTPS.pop(phone, None)
+    session = _create_membership_session(phone)
+    return {
+        "ok": True,
+        "session": session,
+        "expires_in": int(_MEMBERSHIP_SESSION_TTL.total_seconds()),
+    }
+
+
+@app.get("/membership/brands")
+def membership_brands(session: str = Query(..., description="Token de sesión emitido después de verificar el código")) -> Dict[str, Any]:
+    _require_membership_session(session)
+    brands: List[Dict[str, Any]] = []
+    if SUPABASE_DB_URL:
+        sql = """
+            select
+                b.id,
+                b.name,
+                b.slug,
+                b.logo_url,
+                b.organization_id,
+                o.name as organization_name,
+                b.metadata
+            from cortex.brands b
+            join cortex.organizations o on o.id = b.organization_id
+            order by b.name
+        """
+        try:
+            with _open_supabase_conn() as conn:
+                rows = conn.execute(sql).fetchall()
+                brands.extend(_rows_to_json(rows))
+        except Exception:
+            brands = []
+
+    try:
+        df_catalog = _load_catalog()
+    except Exception:
+        df_catalog = None
+
+    if df_catalog is not None and len(df_catalog) and "make" in df_catalog.columns:
+        seen = {str(item.get("name") or "").strip().upper(): True for item in brands}
+        try:
+            catalog_makes = {
+                str(m).strip()
+                for m in df_catalog["make"].dropna().tolist()
+                if str(m).strip()
+            }
+        except Exception:
+            catalog_makes = set()
+        for mk in sorted(catalog_makes):
+            key = mk.upper()
+            if key in seen:
+                continue
+            seen[key] = True
+            brands.append(
+                {
+                    "id": None,
+                    "name": mk,
+                    "slug": _slugify(mk),
+                    "logo_url": None,
+                    "organization_id": None,
+                    "organization_name": None,
+                    "metadata": {"source": "catalog"},
+                }
+            )
+
+    simplified = [
+        {
+            "name": str(item.get("name") or "").strip(),
+            "slug": _slugify(str(item.get("slug") or item.get("name") or "marca")),
+            "logo_url": item.get("logo_url"),
+            "source": (item.get("metadata") or {}).get("source") if isinstance(item.get("metadata"), dict) else None,
+        }
+        for item in brands
+        if str(item.get("name") or "").strip()
+    ]
+    simplified.sort(key=lambda x: x["name"].upper())
+    return {"items": simplified}
+
+
+@app.post("/membership/profile")
+def membership_profile(payload: MembershipProfileInput) -> Dict[str, Any]:
+    session_data = _require_membership_session(payload.session)
+    brand = str(payload.brand or "").strip()
+    if not brand:
+        raise HTTPException(status_code=400, detail="Selecciona una marca válida")
+    display_name = str(payload.pdf_display_name or "").strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="Ingresa el nombre que deseas mostrar en los PDF")
+    profile = {
+        "phone": session_data.get("phone"),
+        "brand": brand,
+        "pdf_display_name": display_name,
+        "pdf_footer_note": (payload.pdf_footer_note or "").strip() or None,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _MEMBERSHIP_PROFILES[payload.session] = profile
+    session_data["profile"] = profile
+    return {"ok": True, "profile": profile}
 
 
 @app.patch("/admin/brands/{brand_id}")

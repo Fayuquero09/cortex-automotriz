@@ -205,4 +205,41 @@ export const endpoints = {
       return true;
     }),
   dealerStatus: (dealerId: string) => apiGet(`/dealers/${dealerId}/status`),
+  membershipSendCode: (phone: string) =>
+    fetch(buildUrl('/membership/send_code'), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
+  membershipVerifyCode: (payload: { phone: string; code: string }) =>
+    fetch(buildUrl('/membership/verify_code'), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
+  membershipBrands: (session: string) => apiGet('/membership/brands', { session }),
+  membershipSaveProfile: (body: { session: string; brand: string; pdf_display_name: string; pdf_footer_note?: string | null }) =>
+    fetch(buildUrl('/membership/profile'), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
 };
