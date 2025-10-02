@@ -1,3 +1,6 @@
+const USE_SSCMEX_PROXY = process.env.NEXT_PUBLIC_USE_SSCMEX_PROXY === '1';
+const SSCMEX_REMOTE_BASE = (process.env.NEXT_PUBLIC_SSCMEX_REMOTE_BASE || 'https://sslphotos.jato.com/PHOTO400').replace(/\/$/, '');
+
 export function vehicleImageSrc(row: Record<string, any> | null | undefined): string | null {
   if (!row || typeof row !== 'object') return null;
   const candidates: Array<unknown> = [
@@ -24,26 +27,36 @@ function normalizeCandidate(raw: unknown): string | null {
   const withForwardSlashes = value.replace(/\\+/g, '/');
 
   if (/^https?:\/\//i.test(value)) {
-    const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
-    if (idx >= 0) {
-      const suffix = withForwardSlashes.slice(idx);
-      return `/${suffix.replace(/^\/+/, '')}`;
+    if (USE_SSCMEX_PROXY) {
+      const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
+      if (idx >= 0) {
+        const suffix = withForwardSlashes.slice(idx);
+        return `/${suffix.replace(/^\/+/, '')}`;
+      }
     }
-    return value;
+    return withForwardSlashes;
   }
   if (value.startsWith('//')) {
-    const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
-    if (idx >= 0) {
-      const suffix = withForwardSlashes.slice(idx);
-      return `/${suffix.replace(/^\/+/, '')}`;
+    if (USE_SSCMEX_PROXY) {
+      const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
+      if (idx >= 0) {
+        const suffix = withForwardSlashes.slice(idx);
+        return `/${suffix.replace(/^\/+/, '')}`;
+      }
     }
-    return `https:${value}`;
+    const normalized = withForwardSlashes.startsWith('//')
+      ? withForwardSlashes
+      : `//${withForwardSlashes.replace(/^\/+/, '')}`;
+    return `https:${normalized}`;
   }
 
   const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
   if (idx >= 0) {
-    const suffix = withForwardSlashes.slice(idx);
-    return `/${suffix.replace(/^\/+/, '')}`;
+    const suffix = withForwardSlashes.slice(idx).replace(/^\/+/, '');
+    if (USE_SSCMEX_PROXY) {
+      return `/${suffix}`;
+    }
+    return `${SSCMEX_REMOTE_BASE}/${suffix}`;
   }
   if (withForwardSlashes.startsWith('/')) {
     return withForwardSlashes;
