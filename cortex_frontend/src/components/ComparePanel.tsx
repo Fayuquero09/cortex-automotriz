@@ -1,5 +1,6 @@
 "use client";
 import React from 'react';
+import Image from 'next/image';
 import dynamic from 'next/dynamic';
 import * as echarts from 'echarts';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -9,9 +10,54 @@ import { useAppState } from '@/lib/state';
 import { useI18n } from '@/lib/i18n';
 import { endpoints } from '@/lib/api';
 import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
+import { vehicleImageSrc } from '@/lib/media';
 import { renderStruct } from '@/lib/insightsTemplates';
 
 type Row = Record<string, any>;
+
+const THUMB_WIDTH = 116;
+const THUMB_HEIGHT = 72;
+
+function vehicleThumb(row: Row | null | undefined): React.ReactNode {
+  const src = vehicleImageSrc(row);
+  const label = vehicleLabel(row) || 'Vehículo';
+  const baseStyle: React.CSSProperties = {
+    width: THUMB_WIDTH,
+    height: THUMB_HEIGHT,
+    borderRadius: 10,
+    border: '1px solid #e2e8f0',
+    background: '#f8fafc',
+  };
+
+  if (src) {
+    return (
+      <Image
+        src={src}
+        alt={label}
+        width={THUMB_WIDTH}
+        height={THUMB_HEIGHT}
+        loading="lazy"
+        style={{ ...baseStyle, objectFit: 'cover', display: 'block' }}
+      />
+    );
+  }
+
+  return (
+    <div
+      style={{
+        ...baseStyle,
+        borderStyle: 'dashed',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#94a3b8',
+        fontSize: 11,
+      }}
+    >
+      Sin foto
+    </div>
+  );
+}
 
 type ManualBlockProps = {
   manModel: string;
@@ -1047,13 +1093,14 @@ export default function ComparePanel() {
     };
   }, [baseRow, truthyFeature]);
   const headers = [
-    { key: 'vehiculo', label: t('vehicle'), minWidth: 200 },
-    { key: 'msrp', label: t('msrp'), minWidth: 120 },
-    { key: 'precio_transaccion', label: t('tx_price'), minWidth: 120 },
-    { key: 'bono', label: t('bonus'), minWidth: 110 },
+    { key: 'veh_img', label: '', minWidth: THUMB_WIDTH + 24 },
+    { key: 'vehiculo', label: t('vehicle'), minWidth: 240 },
+    { key: 'msrp', label: t('msrp'), minWidth: 120, align: 'center' as const },
+    { key: 'precio_transaccion', label: t('tx_price'), minWidth: 120, align: 'center' as const },
+    { key: 'bono', label: t('bonus'), minWidth: 110, align: 'center' as const },
     { key: 'fuel_cost_60k_mxn', label: t('energy60k'), minWidth: 150 },
-    { key: 'service_cost_60k_mxn', label: t('service60k'), minWidth: 150 },
-    { key: 'tco_60k_mxn', label: t('tco60k'), minWidth: 130 },
+    { key: 'service_cost_60k_mxn', label: t('service60k'), minWidth: 150, align: 'center' as const },
+    { key: 'tco_60k_mxn', label: t('tco60k'), minWidth: 130, align: 'center' as const },
   ];
 
   // Small info icon with tooltip
@@ -2136,7 +2183,7 @@ export default function ComparePanel() {
           <tr>
             {headers.map(h => {
               const thStyle: React.CSSProperties = {
-                textAlign:'left',
+                textAlign: (h as any).align || 'left',
                 padding:'6px 8px',
                 borderBottom:'1px solid #e5e7eb',
                 whiteSpace:'normal',
@@ -2155,24 +2202,28 @@ export default function ComparePanel() {
         <tbody>
           {/* Fila base (vehículo propio) */}
           {baseRow && (<tr>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 200, maxWidth: 240, whiteSpace:'normal', wordBreak:'break-word' }}>
-              <div style={{ fontWeight:700, fontSize:16 }}>{String(baseRow.make||'')}</div>
-              <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
-              <div style={{ fontWeight:500, fontSize:15 }}>{String(baseRow.model||'')}</div>
-              <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(baseRow.version||''))}</div>
-            {/* Segmento/cuota removidos a petición */}
+            <td style={{ padding:'8px', borderBottom:'1px solid #f1f5f9', width: THUMB_WIDTH + 24 }}>
+              {vehicleThumb(baseRow)}
+            </td>
+            <td style={{ padding:'12px 12px 12px 6px', borderBottom:'1px solid #f1f5f9', minWidth: 320, maxWidth: 520, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'break-word' }}>
+              <div style={{ display:'grid', gap:8, lineHeight:1.4 }}>
+                <div style={{ fontWeight:700, fontSize:16 }}>{String(baseRow.make||'')}</div>
+                <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
+                <div style={{ fontWeight:500, fontSize:15 }}>{String(baseRow.model||'')}</div>
+                <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(baseRow.version||''))}</div>
+              </div>
             </td>
             {/* Fila base: sin deltas (es la referencia) */}
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
+            <td style={{ padding:'10px 14px 10px 22px', borderBottom:'1px solid #f1f5f9', fontWeight:600, verticalAlign:'middle', textAlign:'center' }}>
               <div>{fmtMoney(baseRow.msrp)}</div>
             </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
+            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600, textAlign:'center', verticalAlign:'middle' }}>
               <div>{fmtMoney(baseRow.precio_transaccion)}</div>
             </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
+            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600, textAlign:'center', verticalAlign:'middle' }}>
               <div>{fmtMoney(baseRow.bono ?? baseRow.bono_mxn)}</div>
             </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
+            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600, textAlign:'left', verticalAlign:'middle' }}>
               <div>{fmtMoney(baseRow.fuel_cost_60k_mxn)}</div>
               {(() => {
                 const label = energyConsumptionLabel(baseRow);
@@ -2180,11 +2231,11 @@ export default function ComparePanel() {
               })()}
               <div style={{ fontSize:12, opacity:0.75 }}>{fuelLabel(baseRow) || 'Combustible N/D'} {fuelPriceLabel(baseRow)}</div>
             </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
+            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600, textAlign:'center', verticalAlign:'middle' }}>
               <div>{fmtMoney(baseRow.service_cost_60k_mxn)}</div>
               {(() => { const s = serviceSourceLabel(baseRow); return s? <div style={{ fontSize:12, color:'#64748b' }}>{s}</div> : null; })()}
             </td>
-            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600 }}>
+            <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:600, textAlign:'center', verticalAlign:'middle' }}>
               <div>{fmtMoney(baseRow.tco_60k_mxn)}</div>
             </td>
           </tr>)}
@@ -2206,9 +2257,12 @@ export default function ComparePanel() {
             const rowBg = i % 2 === 0 ? '#ffffff' : '#fafafa';
             return (
               <tr key={i} style={{ background: rowBg, ...hoverStyle(i) }} onMouseEnter={()=>setHoverRow(i)} onMouseLeave={()=>setHoverRow(null)}>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 200, maxWidth: 240, whiteSpace:'normal', wordBreak:'break-word' }}>
+                <td style={{ padding:'8px', borderBottom:'1px solid #f1f5f9', width: THUMB_WIDTH + 24 }}>
+                  {vehicleThumb(r)}
+                </td>
+                <td style={{ padding:'12px 12px 12px 6px', borderBottom:'1px solid #f1f5f9', minWidth: 320, maxWidth: 520, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'break-word' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
-                    <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ minWidth:0, display:'grid', gap:8, lineHeight:1.4 }}>
                       <div style={{ fontWeight:600, fontSize:14 }}>{String(r.make||'')}</div>
                       <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano || ''}</div>
                       <div style={{ fontWeight:500, fontSize:13.5 }}>{String(r.model||'')}</div>
@@ -2224,22 +2278,21 @@ export default function ComparePanel() {
                       ×
                     </button>
                   </div>
-                  {/* Segmento/cuota removidos a petición */}
                 </td>
 
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
+                <td style={{ padding:'10px 12px 10px 22px', borderBottom:'1px solid #f1f5f9', verticalAlign:'middle', textAlign:'center' }}>
                   <div>{fmtMoney(r.msrp)}</div>
                   <div style={{ fontSize:12, opacity:0.9, color: d_msrp!=null ? (d_msrp<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_msrp==null?'-':`${tri(d_msrp)} ${fmtMoney(Math.abs(d_msrp))}`}</div>
                 </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', textAlign:'center', verticalAlign:'middle' }}>
                   <div>{fmtMoney(r.precio_transaccion)}</div>
                   <div style={{ fontSize:12, opacity:0.9, color: d_tx!=null ? (d_tx<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_tx==null?'-':`${tri(d_tx)} ${fmtMoney(Math.abs(d_tx))}`}</div>
                 </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', textAlign:'center', verticalAlign:'middle' }}>
                   <div>{fmtMoney(r.bono ?? r.bono_mxn)}</div>
                   <div style={{ fontSize:12, opacity:0.9, color:'#64748b' }}>{d_b==null?'-':`${tri(d_b)} ${fmtMoney(Math.abs(d_b))}`}</div>
                 </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', textAlign:'left', verticalAlign:'middle' }}>
                   <div>{fmtMoney(r.fuel_cost_60k_mxn)}</div>
                   {(() => {
                     const label = energyConsumptionLabel(r);
@@ -2248,12 +2301,12 @@ export default function ComparePanel() {
                   <div style={{ fontSize:12, opacity:0.75 }}>{fuelLabel(r) || 'Combustible N/D'} {fuelPriceLabel(r)}</div>
                   <div style={{ fontSize:12, opacity:0.9, color: d_fuel!=null ? (d_fuel<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_fuel==null?'-':`${tri(d_fuel)} ${fmtMoney(Math.abs(d_fuel))}`}</div>
                 </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', textAlign:'center', verticalAlign:'middle' }}>
                   <div>{fmtMoney(r.service_cost_60k_mxn)}</div>
                   {(() => { const s = serviceSourceLabel(r); return s? <div style={{ fontSize:12, color: s==='Incluido'? '#16a34a':'#64748b' }}>{s}</div> : null; })()}
                   <div style={{ fontSize:12, opacity:0.9, color: d_svc!=null ? (d_svc<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_svc==null?'-':`${tri(d_svc)} ${fmtMoney(Math.abs(d_svc))}`}</div>
                 </td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', textAlign:'center', verticalAlign:'middle' }}>
                   <div>{fmtMoney(r.tco_60k_mxn)}</div>
                   <div style={{ fontSize:12, opacity:0.9, color: d_tco!=null ? (d_tco<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_tco==null?'-':`${tri(d_tco)} ${fmtMoney(Math.abs(d_tco))}`}</div>
                 </td>
@@ -2316,19 +2369,21 @@ export default function ComparePanel() {
           );
         })()}
 
-        <div
-          style={{
-            border: '1px dashed #e2e8f0',
-            borderRadius: 10,
-            padding: '12px 14px',
-            marginTop: 12,
-            color: '#64748b',
-            fontSize: 13,
-            lineHeight: 1.5,
-          }}
-        >
-          Las gráficas del panel OEM se deshabilitaron temporalmente mientras afinamos la cobertura de datos ({preparedChartsCount} preparadas en backend).
-        </div>
+        {preparedChartsCount === 0 ? (
+          <div
+            style={{
+              border: '1px dashed #e2e8f0',
+              borderRadius: 10,
+              padding: '12px 14px',
+              marginTop: 12,
+              color: '#64748b',
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            Las gráficas del panel OEM se deshabilitaron temporalmente mientras afinamos la cobertura de datos.
+          </div>
+        ) : null}
 
         <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, marginTop:16 }}>
           <div style={{ fontWeight:700, marginBottom:6 }}>Insights</div>

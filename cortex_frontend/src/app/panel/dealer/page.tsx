@@ -1,0 +1,131 @@
+"use client";
+
+import React from 'react';
+import useSWR from 'swr';
+import { endpoints } from '@/lib/api';
+
+interface OrganizationSummary {
+  id: string;
+  name: string;
+  package: string;
+  status?: string | null;
+  metadata?: Record<string, any> | null;
+  brand_count: number;
+  dealer_count: number;
+  user_count: number;
+  created_at: string;
+}
+
+interface AdminOverviewResponse {
+  organizations: OrganizationSummary[];
+}
+
+function orgType(meta: Record<string, any> | null | undefined): string {
+  if (!meta) return 'oem';
+  const raw = String(meta.org_type || '').toLowerCase();
+  if (raw.includes('grupo')) return 'grupo';
+  if (raw.includes('dealer')) return 'grupo';
+  return 'oem';
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return '—';
+  try {
+    return new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium' }).format(new Date(value));
+  } catch {
+    return String(value);
+  }
+}
+
+export default function PanelDealerPage(): React.JSX.Element {
+  const { data, error, isLoading } = useSWR<AdminOverviewResponse>('panel_dealer_overview', endpoints.adminOverview);
+  const organizations = React.useMemo(() => {
+    const list = data?.organizations ?? [];
+    return list.filter((org) => orgType(org.metadata) === 'grupo').sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  }, [data?.organizations]);
+
+  const [selectedOrgId, setSelectedOrgId] = React.useState<string>('');
+  const selectedOrg = React.useMemo(() => organizations.find((org) => org.id === selectedOrgId) || null, [organizations, selectedOrgId]);
+
+  return (
+    <main style={{ display: 'grid', gap: 24, padding: 24 }}>
+      <section style={{ display: 'grid', gap: 12 }}>
+        <header>
+          <h1 style={{ fontSize: 26, fontWeight: 600, margin: 0 }}>Panel Dealer (vista operativa)</h1>
+          <p style={{ margin: '4px 0 0', color: '#475569', maxWidth: 720 }}>
+            Selecciona un grupo dealer para abrir su panel operativo o editar sus datos desde el superadmin.
+          </p>
+        </header>
+
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          <a
+            href="/dealers"
+            style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #2563eb', color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
+          >
+            Abrir vista Dealer (sin filtro)
+          </a>
+          <a
+            href="/admin"
+            style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #334155', color: '#334155', textDecoration: 'none', fontWeight: 600 }}
+          >
+            Abrir panel Superadmin
+          </a>
+        </div>
+      </section>
+
+      <section style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'grid', gap: 6 }}>
+          <label style={{ fontWeight: 600 }}>Grupo dealer</label>
+          <select
+            value={selectedOrgId}
+            onChange={(event) => setSelectedOrgId(event.target.value)}
+            style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid #cbd5e1', maxWidth: 320 }}
+          >
+            <option value="">Selecciona un grupo…</option>
+            {organizations.map((org) => (
+              <option key={org.id} value={org.id}>
+                {org.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {isLoading ? (
+          <p style={{ color: '#64748b', fontSize: 13 }}>Cargando grupos…</p>
+        ) : error ? (
+          <p style={{ color: '#dc2626', fontSize: 13 }}>No se pudieron cargar las organizaciones.</p>
+        ) : organizations.length === 0 ? (
+          <p style={{ color: '#64748b', fontSize: 13 }}>Aún no has creado grupos dealer.</p>
+        ) : null}
+
+        {selectedOrg ? (
+          <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, background: '#fff', display: 'grid', gap: 12 }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 18 }}>{selectedOrg.name}</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Paquete {selectedOrg.package === 'black_ops' ? 'Black Ops' : 'Marca'} · Alta {formatDate(selectedOrg.created_at)}</div>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 12, color: '#475569' }}>
+              <span><strong>Marcas:</strong> {selectedOrg.brand_count}</span>
+              <span><strong>Dealers:</strong> {selectedOrg.dealer_count}</span>
+              <span><strong>Usuarios:</strong> {selectedOrg.user_count}</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+              <a
+                href={`/admin?view=oem&org=${selectedOrg.id}`}
+                style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #2563eb', color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
+              >
+                Abrir panel Dealer (impersonar)
+              </a>
+              <a
+                href={`/admin?org=${selectedOrg.id}`}
+                style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #334155', color: '#334155', textDecoration: 'none', fontWeight: 600 }}
+              >
+                Editar en Superadmin
+              </a>
+            </div>
+          </div>
+        ) : null}
+      </section>
+    </main>
+  );
+}

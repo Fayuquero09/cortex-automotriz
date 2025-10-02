@@ -10,6 +10,8 @@ export const metadata: Metadata = {
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const showAdmin = Boolean(process.env.NEXT_PUBLIC_SUPERADMIN_TOKEN);
+  const compactNav = (process.env.NEXT_PUBLIC_NAV_COMPACT || '').toLowerCase() === 'true';
   return (
     <html lang="es">
       <body className="cortex-app">
@@ -21,10 +23,29 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <span className="app-badge">v2 OEM &amp; Dealers</span>
               </div>
               <nav className="app-nav">
-                <a className="app-link" href="/ui">OEM</a>
-                <a className="app-link" href="/dealers">Dealers</a>
-                <a className="app-link" href="/membership">Membresía</a>
-                <LangSwitcher />
+                {compactNav ? (
+                  <>
+                    {showAdmin ? (
+                      <>
+                        <a className="app-link" href="/admin/control">Control</a>
+                        <a className="app-link" href="/panel/oem">Panel OEM</a>
+                        <a className="app-link" href="/panel/dealer">Panel Dealer</a>
+                      </>
+                    ) : (
+                      <a className="app-link" href="/ui">Inicio</a>
+                    )}
+                    <LangSwitcher />
+                  </>
+                ) : (
+                  <>
+                    <a className="app-link" href="/admin/control">Control</a>
+                    <a className="app-link" href="/panel/oem">Panel OEM</a>
+                    <a className="app-link" href="/panel/dealer">Panel Dealer</a>
+                    <a className="app-link" href="/membership">Self-service</a>
+                    {showAdmin ? <a className="app-link" href="/admin">Superadmin</a> : null}
+                    <LangSwitcher />
+                  </>
+                )}
               </nav>
             </header>
             <AppProvider>
