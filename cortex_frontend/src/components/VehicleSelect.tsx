@@ -366,9 +366,22 @@ export default function VehicleSelect() {
       try {
         // Marca única del catálogo
         if (!mk) {
-          const set = new Set<string>();
-          catalogForModel.forEach(r => { const m = String(r?.make || '').trim().toUpperCase(); if (m) set.add(m); });
-          if (set.size === 1) mk = Array.from(set)[0];
+          let canonical = '';
+          const seen = new Set<string>();
+          catalogForModel.forEach((r) => {
+            const raw = String(r?.make || r?.brand || '').trim();
+            if (!raw) return;
+            if (!canonical) canonical = raw;
+            seen.add(raw.toUpperCase());
+          });
+          if (canonical) {
+            if (seen.size === 1) {
+              mk = canonical;
+            } else if (!mk) {
+              // Aunque existan variaciones (mayúsculas, espacios), toma la primera coincidencia.
+              mk = canonical;
+            }
+          }
         }
         // Años del catálogo (filtrar a permitidos 2024–2026)
         const years: number[] = [];
