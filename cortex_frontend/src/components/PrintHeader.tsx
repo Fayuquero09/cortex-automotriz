@@ -5,6 +5,14 @@ import { endpoints } from '@/lib/api';
 
 export default function PrintHeader(){
   const { data: cfg } = useSWR<any>('config_print_header', endpoints.config);
+  const [printed, setPrinted] = React.useState('');
+  React.useEffect(() => {
+    try {
+      setPrinted(new Date().toLocaleString('es-MX', { dateStyle:'medium', timeStyle:'short' }));
+    } catch {
+      setPrinted('');
+    }
+  }, []);
   const updated = (()=>{
     try {
       const s = cfg?.data_last_updated as string | undefined;
@@ -19,7 +27,7 @@ export default function PrintHeader(){
   const updIndustry = (()=>{
     try { const s = cfg?.industry_last_updated; return s ? new Date(s).toLocaleString('es-MX', { dateStyle:'medium', timeStyle:'short' }) : ''; } catch { return ''; }
   })();
-  const printed = new Date().toLocaleString('es-MX', { dateStyle:'medium', timeStyle:'short' });
+  const printedLabel = printed || '—';
   // Visible solo al imprimir mediante clase global .print-only
   return (
     <header className="print-only" style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff' }}>
@@ -34,7 +42,7 @@ export default function PrintHeader(){
             <div style={{ fontSize:12, color:'#64748b' }}>{updIndustry ? `Industria: ${updIndustry}` : null}</div>
           </div>
         </div>
-        <div style={{ textAlign:'right', fontSize:12, color:'#64748b' }}>Fecha de impresión: {printed}</div>
+        <div style={{ textAlign:'right', fontSize:12, color:'#64748b' }}>Fecha de impresión: {printedLabel}</div>
       </div>
     </header>
   );

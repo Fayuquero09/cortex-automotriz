@@ -20,6 +20,14 @@ interface AdminOverviewResponse {
   organizations: OrganizationSummary[];
 }
 
+interface OrganizationDetail {
+  organization: {
+    id: string;
+    name: string;
+  };
+  brands: Array<{ id: string; name: string; slug?: string | null }>;
+}
+
 function orgType(meta: Record<string, any> | null | undefined): string {
   if (!meta) return 'oem';
   const raw = String(meta.org_type || '').toLowerCase();
@@ -46,6 +54,75 @@ export default function PanelOemPage(): React.JSX.Element {
 
   const [selectedOrgId, setSelectedOrgId] = React.useState<string>('');
   const selectedOrg = React.useMemo(() => organizations.find((org) => org.id === selectedOrgId) || null, [organizations, selectedOrgId]);
+  const { data: orgDetail } = useSWR<OrganizationDetail>(
+    selectedOrgId ? ['panel_oem_org_detail', selectedOrgId] : null,
+    () => endpoints.adminOrganization(selectedOrgId),
+  );
+
+  const selectedOrgBrands = React.useMemo(() => {
+    const brands = orgDetail?.brands || [];
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const brand of brands) {
+      const label = String(brand?.name || '').trim();
+      if (!label) continue;
+      const key = label.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(label);
+    }
+    return list;
+  }, [orgDetail?.brands]);
+
+  const resetAllowedBrands = React.useCallback(() => {
+    try {
+      window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
+      window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: [] }));
+    } catch {}
+  }, []);
+
+  const handleOpenOemPanel = React.useCallback(
+    (
+      event: React.MouseEvent<HTMLButtonElement | HTMLAnchorElement>,
+      org: OrganizationSummary | null,
+      brandList: string[],
+    ) => {
+      event.preventDefault();
+      if (!org || typeof window === 'undefined') return;
+      try {
+        resetAllowedBrands();
+        const storage = window.localStorage;
+        const cleanupKeys = [
+          'CORTEX_DEALER_ID',
+          'CORTEX_DEALER_CONTEXT',
+          'CORTEX_DEALER_ALLOWED_BRAND',
+          'CORTEX_DEALER_CONTEXT_LOCKED',
+          'CORTEX_DEALER_PREVIEW',
+          'CORTEX_MEMBERSHIP_SESSION',
+          'CORTEX_MEMBERSHIP_STATUS',
+          'CORTEX_MEMBERSHIP_BRAND',
+          'CORTEX_MEMBERSHIP_PHONE',
+        ];
+        cleanupKeys.forEach((key) => {
+          try { storage.removeItem(key); } catch {}
+        });
+        storage.setItem('CORTEX_SUPERADMIN_ORG_ID', org.id);
+        storage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+        window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
+        if (brandList.length) {
+          storage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(brandList));
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: brandList }));
+        } else {
+          storage.removeItem('CORTEX_ALLOWED_BRANDS');
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: [] }));
+        }
+        const target = new URL('/ui', window.location.origin);
+        target.searchParams.set('org', org.id);
+        window.open(target.toString(), '_blank', 'noopener');
+      } catch {}
+    },
+    [resetAllowedBrands],
+  );
 
   const handleOpenOemView = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
@@ -58,6 +135,10 @@ export default function PanelOemPage(): React.JSX.Element {
         storage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
         storage.removeItem('CORTEX_DEALER_PREVIEW');
         storage.removeItem('CORTEX_SUPERADMIN_ORG_ID');
+        storage.removeItem('CORTEX_MEMBERSHIP_SESSION');
+        storage.removeItem('CORTEX_MEMBERSHIP_STATUS');
+        storage.removeItem('CORTEX_MEMBERSHIP_BRAND');
+        storage.removeItem('CORTEX_MEMBERSHIP_PHONE');
       } catch {}
       try {
         window.location.assign('/ui');
@@ -78,20 +159,22 @@ export default function PanelOemPage(): React.JSX.Element {
           </p>
         </header>
 
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <a
-            href="/ui"
-            onClick={handleOpenOemView}
-            style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #2563eb', color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+              <a
+                href="/ui"
+                onClick={handleOpenOemView}
+                style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #2563eb', color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
+              >
+                Abrir vista OEM (sin filtro)
+              </a>
+          <button
+            type="button"
+            onClick={(event) => handleOpenOemPanel(event, selectedOrg, selectedOrgBrands)}
+            style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #334155', background: '#fff', color: '#334155', fontWeight: 600, cursor: selectedOrg ? 'pointer' : 'not-allowed', opacity: selectedOrg ? 1 : 0.5 }}
+            disabled={!selectedOrg}
           >
-            Abrir vista OEM (sin filtro)
-          </a>
-          <a
-            href="/admin"
-            style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #334155', color: '#334155', textDecoration: 'none', fontWeight: 600 }}
-          >
-            Abrir panel Superadmin
-          </a>
+            Abrir panel OEM (impersonar)
+          </button>
         </div>
       </section>
 
@@ -132,18 +215,13 @@ export default function PanelOemPage(): React.JSX.Element {
               <span><strong>Usuarios:</strong> {selectedOrg.user_count}</span>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-              <a
-                href={`/admin?view=oem&org=${selectedOrg.id}`}
-                style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #2563eb', color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
+              <button
+                type="button"
+                onClick={(event) => handleOpenOemPanel(event, selectedOrg, selectedOrgBrands)}
+                style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #2563eb', background: '#fff', color: '#2563eb', fontWeight: 600, cursor: 'pointer' }}
               >
                 Abrir panel OEM (impersonar)
-              </a>
-              <a
-                href={`/admin?org=${selectedOrg.id}`}
-                style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #334155', color: '#334155', textDecoration: 'none', fontWeight: 600 }}
-              >
-                Editar en Superadmin
-              </a>
+              </button>
             </div>
           </div>
         ) : null}

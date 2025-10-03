@@ -111,6 +111,51 @@ const PRESETS: Array<{ label: string; description: string; package: OrgPackage; 
   },
 ];
 
+const isCatalogBrand = (name: string): boolean => {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized.startsWith('grupo ')) return false;
+  if (normalized.includes(' grupo ')) return false;
+  if (normalized.includes('grupo empresarial')) return false;
+  return true;
+};
+
+const humanizeSlug = (slug: string): string => {
+  if (typeof slug !== 'string') return '';
+  const normalized = slug.replace(/_/g, '-').trim();
+  if (!normalized) return '';
+  const words = normalized
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.length ? part[0].toUpperCase() + part.slice(1) : '')
+    .join(' ')
+    .trim();
+  if (!words) return '';
+  if (words.length <= 4) return words.toUpperCase();
+  return words;
+};
+
+function persistAllowedBrands(brands: string[]): void {
+  if (typeof window === 'undefined') return;
+  const unique = Array.from(
+    new Set(
+      (brands || [])
+        .map((value) => String(value || '').trim())
+        .filter((value) => value.length > 0)
+    )
+  );
+  try {
+    if (unique.length) {
+      window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(unique));
+    } else {
+      window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
+    }
+    window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: unique }));
+  } catch {
+    /* ignore */
+  }
+}
+
 function organizationType(meta?: Record<string, any> | null): OrgType {
   if (!meta) return 'oem';
   const token = String(meta.org_type || '').toLowerCase();
@@ -155,6 +200,26 @@ export default function AdminControlPage(): JSX.Element {
   const [userForm, setUserForm] = React.useState({ email: '', role: 'superadmin_oem', dealerAdmin: true });
   const [userFormStatus, setUserFormStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [userFormLoading, setUserFormLoading] = React.useState(false);
+  const [deleteUserStatus, setDeleteUserStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [deletingUserId, setDeletingUserId] = React.useState('');
+  const [deletingOrg, setDeletingOrg] = React.useState(false);
+  const [dealerForm, setDealerForm] = React.useState({
+    brandId: '',
+    name: '',
+    address: '',
+    city: '',
+    state: '',
+    postalCode: '',
+    contactName: '',
+    contactPhone: '',
+    serviceStartedAt: '',
+  });
+  const [dealerFormStatus, setDealerFormStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [dealerFormLoading, setDealerFormLoading] = React.useState(false);
+  const [dealerStatusNotice, setDealerStatusNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [dealerStatusUpdating, setDealerStatusUpdating] = React.useState('');
+  const [orgStatusNotice, setOrgStatusNotice] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [orgStatusUpdating, setOrgStatusUpdating] = React.useState(false);
 
   const organizations = React.useMemo(() => data?.organizations ?? [], [data?.organizations]);
   const oemCount = React.useMemo(() => organizations.filter((org) => organizationType(org.metadata) === 'oem').length, [organizations]);
@@ -165,7 +230,7 @@ export default function AdminControlPage(): JSX.Element {
     const options: Array<{ id: string; name: string }> = [];
     for (const item of catalog) {
       const rawName = String(item?.name || '').trim();
-      if (!rawName) continue;
+      if (!rawName || !isCatalogBrand(rawName)) continue;
       const key = rawName.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -181,6 +246,13 @@ export default function AdminControlPage(): JSX.Element {
     isLoading: editingLoading,
     mutate: mutateEditingDetail,
   } = useSWR<AdminOrganizationDetail>(editingOrgId ? ['admin_control_org_detail', editingOrgId] : null, () => endpoints.adminOrganization(editingOrgId));
+  const dealerMap = React.useMemo(() => {
+    const map = new Map<string, AdminOrganizationDetail['dealers'][number]>();
+    for (const dealer of editingDetail?.dealers || []) {
+      if (dealer?.id) map.set(dealer.id, dealer);
+    }
+    return map;
+  }, [editingDetail?.dealers]);
   const availableBrandOptionsEdit = React.useMemo(() => {
     const assigned = new Set<string>();
     for (const brand of editingDetail?.brands || []) {
@@ -235,6 +307,25 @@ export default function AdminControlPage(): JSX.Element {
       setUserFormStatus(null);
       setBrandForm({ brandId: '', dealerLimit: '' });
       setUserForm({ email: '', role: 'superadmin_oem', dealerAdmin: true });
+      setDeleteUserStatus(null);
+      setDeletingUserId('');
+      setDealerForm({
+        brandId: '',
+        name: '',
+        address: '',
+        city: '',
+        state: '',
+        postalCode: '',
+        contactName: '',
+        contactPhone: '',
+        serviceStartedAt: '',
+      });
+      setDealerFormStatus(null);
+      setDealerFormLoading(false);
+      setDealerStatusNotice(null);
+      setDealerStatusUpdating('');
+      setOrgStatusNotice(null);
+      setOrgStatusUpdating(false);
       return;
     }
     hydrateEditForm();
@@ -242,7 +333,28 @@ export default function AdminControlPage(): JSX.Element {
     setBrandLimitFeedback(null);
     setBrandFormStatus(null);
     setUserFormStatus(null);
-  }, [editingOrgId, hydrateEditForm]);
+    setDeletingOrg(false);
+    setDeleteUserStatus(null);
+    setDeletingUserId('');
+    const firstBrandId = editingDetail?.brands?.[0]?.id ?? '';
+    setDealerForm({
+      brandId: firstBrandId,
+      name: '',
+      address: '',
+      city: '',
+      state: '',
+      postalCode: '',
+      contactName: '',
+      contactPhone: '',
+      serviceStartedAt: '',
+    });
+    setDealerFormStatus(null);
+    setDealerFormLoading(false);
+    setDealerStatusNotice(null);
+    setDealerStatusUpdating('');
+    setOrgStatusNotice(null);
+    setOrgStatusUpdating(false);
+  }, [editingDetail?.brands, editingOrgId, hydrateEditForm]);
 
   const applyPreset = React.useCallback((preset: typeof PRESETS[number]) => {
     setForm((prev) => ({
@@ -319,32 +431,311 @@ export default function AdminControlPage(): JSX.Element {
     },
     [brandLimitDrafts, mutateEditingDetail],
   );
-  const applyAllowedBrands = React.useCallback((brands: string[]) => {
-    if (typeof window === 'undefined') return;
-    const unique = Array.from(
-      new Set(
-        (brands || [])
-          .map((value) => String(value || '').trim())
-          .filter((value) => value.length > 0)
-      )
-    );
-    try {
-      if (unique.length) {
-        window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(unique));
-      } else {
-        window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
+
+  const handleCreateDealer = React.useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!editingOrgId) return;
+      const { brandId, name, address, city, state, postalCode, contactName, contactPhone, serviceStartedAt } = dealerForm;
+      if (!brandId.trim()) {
+        setDealerFormStatus({ type: 'error', message: 'Selecciona la marca del dealer.' });
+        return;
       }
-      window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: unique }));
-    } catch {
-      /* ignore */
+      if (!name.trim()) {
+        setDealerFormStatus({ type: 'error', message: 'El nombre del dealer es obligatorio.' });
+        return;
+      }
+      if (!address.trim()) {
+        setDealerFormStatus({ type: 'error', message: 'Captura la dirección completa del dealer.' });
+        return;
+      }
+      if (!serviceStartedAt.trim()) {
+        setDealerFormStatus({ type: 'error', message: 'Indica la fecha de arranque del servicio.' });
+        return;
+      }
+      const started = new Date(serviceStartedAt);
+      if (Number.isNaN(started.getTime())) {
+        setDealerFormStatus({ type: 'error', message: 'La fecha de servicio no es válida (formato AAAA-MM-DD).' });
+        return;
+      }
+      setDealerFormLoading(true);
+      setDealerFormStatus(null);
+      try {
+        await endpoints.adminCreateDealer(editingOrgId, {
+          brand_id: brandId,
+          name: name.trim(),
+          address: address.trim(),
+          city: city.trim() || undefined,
+          state: state.trim() || undefined,
+          postal_code: postalCode.trim() || undefined,
+          contact_name: contactName.trim() || undefined,
+          contact_phone: contactPhone.trim() || undefined,
+          service_started_at: started.toISOString(),
+        });
+        setDealerFormStatus({ type: 'success', message: 'Dealer creado correctamente.' });
+        setDealerForm({
+          brandId,
+          name: '',
+          address: '',
+          city: '',
+          state: '',
+          postalCode: '',
+          contactName: '',
+          contactPhone: '',
+          serviceStartedAt: '',
+        });
+        await Promise.all([mutateEditingDetail(), mutate()]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'No se pudo crear el dealer.';
+        setDealerFormStatus({ type: 'error', message });
+      } finally {
+        setDealerFormLoading(false);
+      }
+    },
+    [dealerForm, editingOrgId, mutate, mutateEditingDetail],
+  );
+
+  const handleToggleDealerStatus = React.useCallback(
+    async (dealerId: string, currentStatus?: string | null) => {
+      if (!dealerId) return;
+      setDealerStatusUpdating(dealerId);
+      setDealerStatusNotice(null);
+      try {
+        const nextAction = currentStatus === 'paused' ? 'resume' : 'pause';
+        await endpoints.adminUpdateDealerStatus(dealerId, { action: nextAction });
+        await Promise.all([mutateEditingDetail(), mutate()]);
+        setDealerStatusNotice({
+          type: 'success',
+          message: nextAction === 'pause' ? 'Servicio del dealer pausado.' : 'Servicio del dealer reactivado.',
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'No se pudo actualizar el estado del dealer.';
+        setDealerStatusNotice({ type: 'error', message });
+      } finally {
+        setDealerStatusUpdating('');
+      }
+    },
+    [mutate, mutateEditingDetail],
+  );
+
+  const handleToggleOrgStatus = React.useCallback(async () => {
+    if (!editingOrgId || !editingDetail?.organization) return;
+    setOrgStatusUpdating(true);
+    setOrgStatusNotice(null);
+    try {
+      const current = (editingDetail.organization.status || 'active').toLowerCase();
+      const action = current === 'paused' ? 'resume' : 'pause';
+      await endpoints.adminUpdateOrganizationStatus(editingOrgId, { action });
+      await Promise.all([mutate(), mutateEditingDetail()]);
+      setOrgStatusNotice({
+        type: 'success',
+        message: action === 'pause' ? 'Organización pausada.' : 'Organización reactivada.',
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo actualizar el estado de la organización.';
+      setOrgStatusNotice({ type: 'error', message });
+    } finally {
+      setOrgStatusUpdating(false);
     }
-  }, []);
+  }, [editingDetail?.organization, editingOrgId, mutate, mutateEditingDetail]);
+
+  const handleCreateUser = React.useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!editingOrgId) return;
+      const email = userForm.email.trim();
+      if (!email) {
+        setUserFormStatus({ type: 'error', message: 'Ingresa el correo del usuario.' });
+        return;
+      }
+      setUserFormLoading(true);
+      setUserFormStatus(null);
+      try {
+        await endpoints.adminCreateOrgUser(editingOrgId, {
+          email,
+          role: userForm.role,
+          dealer_admin: userForm.dealerAdmin,
+        });
+        setUserForm({ email: '', role: userForm.role, dealerAdmin: true });
+        setUserFormStatus({ type: 'success', message: 'Usuario creado correctamente.' });
+        await Promise.all([mutateEditingDetail(), mutate()]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'No se pudo crear el usuario.';
+        setUserFormStatus({ type: 'error', message });
+      } finally {
+        setUserFormLoading(false);
+      }
+    },
+    [editingOrgId, mutate, mutateEditingDetail, userForm],
+  );
+
+  const handleDeleteUser = React.useCallback(
+    async (userId: string, email?: string | null) => {
+      if (!userId) return;
+      if (typeof window !== 'undefined') {
+        const confirmed = window.confirm(`¿Eliminar al usuario ${email || userId}?`);
+        if (!confirmed) return;
+      }
+      setDeletingUserId(userId);
+      setDeleteUserStatus(null);
+      try {
+        await endpoints.adminDeleteUser(userId);
+        setDeleteUserStatus({ type: 'success', message: 'Usuario eliminado correctamente.' });
+        await Promise.all([mutateEditingDetail(), mutate()]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'No se pudo eliminar el usuario.';
+        setDeleteUserStatus({ type: 'error', message });
+      } finally {
+        setDeletingUserId('');
+      }
+    },
+    [mutate, mutateEditingDetail],
+  );
+
+  const handleOpenDealerPanel = React.useCallback(
+    (dealerId: string) => {
+      if (!editingOrgId || typeof window === 'undefined') return;
+      const dealer = dealerMap.get(dealerId);
+      if (!dealer) {
+        setDealerStatusNotice({ type: 'error', message: 'No se encontró la ficha del dealer seleccionado.' });
+        return;
+      }
+
+      const dealerMeta = (dealer.metadata || {}) as Record<string, any>;
+      const brandFromMap = dealer.brand_id ? (brandMap.get(dealer.brand_id) || '') : '';
+      const brandRecord = editingDetail?.brands?.find((brand) => brand.id === dealer.brand_id);
+      const brandFromDetail = brandRecord?.name || '';
+      const metaBrandCandidates = [
+        dealerMeta.brand_label,
+        dealerMeta.brand_name,
+        dealerMeta.brand,
+        dealerMeta.brand_display_name,
+      ];
+      const brandFromMeta = metaBrandCandidates
+        .map((value) => (typeof value === 'string' ? value.trim() : ''))
+        .find((value) => value.length > 0) || '';
+      const brandSlugCandidates = [
+        brandRecord?.slug,
+        typeof dealerMeta.brand_slug === 'string' ? dealerMeta.brand_slug : '',
+        typeof dealerMeta.brandCode === 'string' ? dealerMeta.brandCode : '',
+      ];
+      const brandFromSlug = brandSlugCandidates
+        .map((value) => (typeof value === 'string' ? humanizeSlug(value) : ''))
+        .find((value) => value.length > 0) || '';
+      const brandName = [brandFromDetail, brandFromMeta, brandFromMap, brandFromSlug]
+        .map((value) => String(value || '').trim())
+        .find((value) => value.length > 0) || '';
+      const shouldLockBrand = brandName.length > 0;
+      const locationMeta = (dealerMeta.location || {}) as Record<string, any>;
+      const salesContactMeta = (dealerMeta.sales_contact || dealerMeta.contact || {}) as Record<string, any>;
+      const normalizedAddress = String(dealerMeta.normalized_address || '').trim();
+      const locationLabel =
+        (locationMeta?.city && locationMeta?.state
+          ? `${locationMeta.city}, ${locationMeta.state}`
+          : locationMeta?.normalized) ||
+        normalizedAddress ||
+        dealer.address ||
+        '';
+
+      const contextPayload = {
+        id: dealer.id,
+        name: dealer.name || '',
+        brandId: dealer.brand_id || '',
+        brandName,
+        address: dealer.address || '',
+        normalizedAddress,
+        location: locationLabel,
+        city: locationMeta?.city ? String(locationMeta.city) : '',
+        state: locationMeta?.state ? String(locationMeta.state) : '',
+        postalCode: locationMeta?.postal_code ? String(locationMeta.postal_code) : '',
+        contactName: salesContactMeta?.name ? String(salesContactMeta.name) : '',
+        contactPhone: salesContactMeta?.phone ? String(salesContactMeta.phone) : '',
+        serviceStartedAt: dealer.service_started_at || '',
+        locked: shouldLockBrand,
+      };
+
+      const dealerUsers = (editingDetail?.users || []).filter((user) => {
+        const assignedDealer = String(user?.dealer_location_id || '').trim();
+        return assignedDealer && assignedDealer === dealer.id;
+      });
+      const dealerUsersPayload = dealerUsers.map((user) => {
+        const meta = (user?.metadata || {}) as Record<string, any>;
+        const contact = (meta?.contact || {}) as Record<string, any>;
+        const phone =
+          (typeof meta?.phone === 'string' && meta.phone.trim())
+            ? meta.phone.trim()
+            : (typeof contact?.phone === 'string' ? contact.phone.trim() : '');
+        return {
+          id: user?.id || '',
+          email: user?.email || '',
+          role: user?.role || '',
+          phone,
+          name: typeof meta?.name === 'string' ? meta.name.trim() : '',
+          createdAt: user?.created_at || '',
+          dealerAdmin: Boolean((user?.feature_flags || ({} as Record<string, any>)).dealer_admin),
+        };
+      });
+
+      try {
+        const storage = window.localStorage;
+        storage.setItem('CORTEX_DEALER_ID', dealer.id);
+        storage.setItem('CORTEX_DEALER_CONTEXT', JSON.stringify(contextPayload));
+        storage.setItem('CORTEX_DEALER_USERS', JSON.stringify(dealerUsersPayload));
+        storage.removeItem('CORTEX_DEALER_ADMIN_USER_ID');
+        storage.removeItem('CORTEX_DEALER_ADMIN_EMAIL');
+        storage.removeItem('CORTEX_SUPERADMIN_USER_ID');
+        storage.removeItem('CORTEX_SUPERADMIN_EMAIL');
+        if (shouldLockBrand) {
+          storage.setItem('CORTEX_DEALER_CONTEXT_LOCKED', '1');
+          storage.setItem('CORTEX_DEALER_ALLOWED_BRAND', brandName);
+          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: brandName }));
+          persistAllowedBrands([brandName]);
+          window.dispatchEvent(new CustomEvent('cortex:dealer_context_lock', { detail: true }));
+        } else {
+          storage.removeItem('CORTEX_DEALER_CONTEXT_LOCKED');
+          storage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
+          persistAllowedBrands([]);
+          window.dispatchEvent(new CustomEvent('cortex:dealer_context_lock', { detail: false }));
+        }
+        window.dispatchEvent(new CustomEvent('cortex:dealer_context', { detail: contextPayload }));
+        window.dispatchEvent(new CustomEvent('cortex:dealer_users', { detail: dealerUsersPayload }));
+
+        const target = new URL('/dealers', window.location.origin);
+        target.searchParams.set('dealer', dealer.id);
+        if (brandName) target.searchParams.set('brand', brandName);
+        window.open(target.toString(), '_blank', 'noopener');
+        setDealerStatusNotice({
+          type: 'success',
+          message: `Se abrió el panel del dealer ${dealer.name || dealer.id} en una pestaña nueva.`,
+        });
+      } catch {
+        setDealerStatusNotice({ type: 'error', message: 'No se pudo abrir el panel del dealer en este navegador.' });
+      }
+    },
+    [brandMap, dealerMap, editingDetail?.users, editingOrgId],
+  );
 
   const handleOpenOemPanel = React.useCallback(
     (orgId: string, orgName: string) => {
       if (typeof window === 'undefined') return;
       try {
-        applyAllowedBrands([]);
+        persistAllowedBrands([]);
+        const storage = window.localStorage;
+        const cleanupKeys = [
+          'CORTEX_DEALER_ID',
+          'CORTEX_DEALER_CONTEXT',
+          'CORTEX_DEALER_ALLOWED_BRAND',
+          'CORTEX_ALLOWED_BRANDS',
+          'CORTEX_DEALER_PREVIEW',
+          'CORTEX_MEMBERSHIP_SESSION',
+          'CORTEX_MEMBERSHIP_STATUS',
+          'CORTEX_MEMBERSHIP_BRAND',
+          'CORTEX_MEMBERSHIP_PHONE',
+        ];
+        cleanupKeys.forEach((key) => {
+          try { storage.removeItem(key); } catch {}
+        });
         window.localStorage.setItem('CORTEX_SUPERADMIN_ORG_ID', orgId);
         window.open(`/panel/oem?org=${orgId}`, '_blank', 'noopener');
         setPanelNotice({ type: 'success', message: `Se abrió el panel OEM como ${orgName}.` });
@@ -352,8 +743,29 @@ export default function AdminControlPage(): JSX.Element {
         setPanelNotice({ type: 'error', message: 'No se pudo abrir el panel OEM en este navegador.' });
       }
     },
-    [applyAllowedBrands],
+    [],
   );
+
+  const handleDeleteOrganization = React.useCallback(async () => {
+    if (!editingOrgId || !editingDetail?.organization) return;
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm(`¿Eliminar la organización "${editingDetail.organization.name}" y todos sus dealers y usuarios asociados?`);
+      if (!confirmed) return;
+    }
+    setDeletingOrg(true);
+    setEditFeedback(null);
+    try {
+      await endpoints.adminDeleteOrganization(editingOrgId);
+      setEditingOrgId('');
+      await mutate();
+      setPanelNotice({ type: 'success', message: 'Organización eliminada correctamente.' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo eliminar la organización.';
+      setEditFeedback({ type: 'error', message });
+    } finally {
+      setDeletingOrg(false);
+    }
+  }, [editingDetail?.organization, editingOrgId, mutate]);
 
 
   const handleSubmit = React.useCallback(
@@ -863,6 +1275,325 @@ export default function AdminControlPage(): JSX.Element {
               {brandLimitFeedback ? (
                 <p style={{ fontSize: 12, color: brandLimitFeedback.type === 'success' ? '#047857' : '#dc2626' }}>{brandLimitFeedback.message}</p>
               ) : null}
+
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 12, display: 'grid', gap: 10 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>Dealers ({editingDetail.dealers?.length ?? 0})</div>
+                {editingDetail.brands?.length ? (
+                  <form onSubmit={handleCreateDealer} style={{ display: 'grid', gap: 8 }}>
+                    <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                      <select
+                        value={dealerForm.brandId}
+                        onChange={(event) => {
+                          setDealerForm((prev) => ({ ...prev, brandId: event.target.value }));
+                          setDealerFormStatus(null);
+                        }}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      >
+                        <option value="">Marca…</option>
+                        {editingDetail.brands.map((brand) => (
+                          <option key={brand.id} value={brand.id}>
+                            {brand.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={dealerForm.name}
+                        onChange={(event) => {
+                          setDealerForm((prev) => ({ ...prev, name: event.target.value }));
+                          setDealerFormStatus(null);
+                        }}
+                        placeholder="Nombre del dealer"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                      <input
+                        value={dealerForm.address}
+                        onChange={(event) => {
+                          setDealerForm((prev) => ({ ...prev, address: event.target.value }));
+                          setDealerFormStatus(null);
+                        }}
+                        placeholder="Dirección completa"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                      <input
+                        value={dealerForm.city}
+                        onChange={(event) => setDealerForm((prev) => ({ ...prev, city: event.target.value }))}
+                        placeholder="Ciudad"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                      <input
+                        value={dealerForm.state}
+                        onChange={(event) => setDealerForm((prev) => ({ ...prev, state: event.target.value }))}
+                        placeholder="Estado"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                      <input
+                        value={dealerForm.postalCode}
+                        onChange={(event) => setDealerForm((prev) => ({ ...prev, postalCode: event.target.value }))}
+                        placeholder="Código postal"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                      <input
+                        value={dealerForm.contactName}
+                        onChange={(event) => setDealerForm((prev) => ({ ...prev, contactName: event.target.value }))}
+                        placeholder="Asesor responsable"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                      <input
+                        value={dealerForm.contactPhone}
+                        onChange={(event) => setDealerForm((prev) => ({ ...prev, contactPhone: event.target.value }))}
+                        placeholder="Teléfono asesor"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                      <input
+                        type="date"
+                        value={dealerForm.serviceStartedAt}
+                        onChange={(event) => setDealerForm((prev) => ({ ...prev, serviceStartedAt: event.target.value }))}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <button
+                        type="submit"
+                        disabled={dealerFormLoading}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: '1px solid #047857',
+                          background: dealerFormLoading ? '#bbf7d0' : '#047857',
+                          color: '#fff',
+                          fontWeight: 600,
+                          cursor: dealerFormLoading ? 'default' : 'pointer',
+                        }}
+                      >
+                        {dealerFormLoading ? 'Creando…' : 'Agregar dealer'}
+                      </button>
+                      {dealerFormStatus ? (
+                        <span style={{ fontSize: 12, color: dealerFormStatus.type === 'success' ? '#047857' : '#dc2626' }}>
+                          {dealerFormStatus.message}
+                        </span>
+                      ) : null}
+                    </div>
+                  </form>
+                ) : (
+                  <p style={{ fontSize: 12, color: '#64748b' }}>Agrega al menos una marca para habilitar el alta de dealers.</p>
+                )}
+
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead style={{ background: '#f8fafc' }}>
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Dealer</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Marca</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Servicio desde</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Estado</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editingDetail.dealers?.length ? (
+                        editingDetail.dealers.map((dealer) => {
+                          const brandName = dealer.brand_id ? brandMap.get(dealer.brand_id) || dealer.brand_id : '—';
+                          const isPaused = (dealer.status || '').toLowerCase() === 'paused';
+                          const isUpdating = dealerStatusUpdating === dealer.id;
+                          return (
+                            <tr key={dealer.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                              <td style={{ padding: '6px 10px', fontWeight: 600 }}>{dealer.name || '—'}</td>
+                              <td style={{ padding: '6px 10px' }}>{brandName}</td>
+                              <td style={{ padding: '6px 10px' }}>{formatDate(dealer.service_started_at)}</td>
+                              <td style={{ padding: '6px 10px' }}>{isPaused ? 'Pausado' : 'Activo'}</td>
+                              <td style={{ padding: '6px 10px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleDealerStatus(dealer.id, dealer.status)}
+                                  disabled={isUpdating}
+                                  style={{
+                                    padding: '4px 10px',
+                                    borderRadius: 6,
+                                    border: '1px solid #0f172a',
+                                    background: isPaused ? '#0f172a' : '#f87171',
+                                    color: '#fff',
+                                    fontWeight: 600,
+                                    cursor: isUpdating ? 'default' : 'pointer',
+                                  }}
+                                >
+                                  {isUpdating ? 'Actualizando…' : isPaused ? 'Reactivar' : 'Pausar'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDealerPanel(dealer.id)}
+                                  style={{
+                                    padding: '4px 10px',
+                                    borderRadius: 6,
+                                    border: '1px solid #2563eb',
+                                    background: '#fff',
+                                    color: '#2563eb',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  Abrir panel
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan={5} style={{ padding: '8px 10px', color: '#64748b' }}>
+                            Aún no hay dealers registrados para esta organización.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {dealerStatusNotice ? (
+                  <p style={{ fontSize: 12, color: dealerStatusNotice.type === 'success' ? '#047857' : '#dc2626' }}>{dealerStatusNotice.message}</p>
+                ) : null}
+              </div>
+
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 12, display: 'grid', gap: 10 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>Usuarios ({editingDetail.users?.length ?? 0})</div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead style={{ background: '#f8fafc' }}>
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Usuario</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Rol</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Asignación</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editingDetail.users?.length ? (
+                        editingDetail.users.map((user) => {
+                          const dealer = user.dealer_location_id ? dealerMap.get(user.dealer_location_id) : null;
+                          const roleLabel = user.role === 'superadmin_oem'
+                            ? 'Superadmin OEM'
+                            : user.role === 'oem_user'
+                              ? 'Usuario OEM'
+                              : user.role || '—';
+                          const assignment = dealer
+                            ? `Dealer: ${dealer.name || dealer.id}`
+                            : user.brand_id
+                              ? `Marca: ${brandMap.get(user.brand_id) || user.brand_id}`
+                              : 'OEM';
+                          const isDeleting = deletingUserId === user.id;
+                          return (
+                            <tr key={user.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                              <td style={{ padding: '6px 10px', fontFamily: 'monospace' }}>{user.email || user.id}</td>
+                              <td style={{ padding: '6px 10px' }}>{roleLabel}</td>
+                              <td style={{ padding: '6px 10px' }}>{assignment}</td>
+                              <td style={{ padding: '6px 10px' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteUser(user.id, user.email)}
+                                  disabled={isDeleting}
+                                  style={{
+                                    padding: '4px 10px',
+                                    borderRadius: 6,
+                                    border: '1px solid #dc2626',
+                                    background: isDeleting ? '#fecaca' : '#fff1f2',
+                                    color: '#b91c1c',
+                                    fontWeight: 600,
+                                    cursor: isDeleting ? 'default' : 'pointer',
+                                  }}
+                                >
+                                  {isDeleting ? 'Eliminando…' : 'Eliminar'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan={4} style={{ padding: '8px 10px', color: '#64748b' }}>
+                            Aún no se registran usuarios para esta organización.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                {deleteUserStatus ? (
+                  <p style={{ fontSize: 12, color: deleteUserStatus.type === 'success' ? '#047857' : '#dc2626' }}>{deleteUserStatus.message}</p>
+                ) : null}
+                <form onSubmit={handleCreateUser} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                  <input
+                    value={userForm.email}
+                    onChange={(event) => {
+                      setUserForm((prev) => ({ ...prev, email: event.target.value }));
+                      setUserFormStatus(null);
+                    }}
+                    placeholder="correo@compania.com"
+                    style={{ minWidth: 220, padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5', fontFamily: 'monospace' }}
+                  />
+                  <select
+                    value={userForm.role}
+                    onChange={(event) => {
+                      setUserForm((prev) => ({ ...prev, role: event.target.value }));
+                      setUserFormStatus(null);
+                    }}
+                    style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                  >
+                    <option value="superadmin_oem">Superadmin OEM</option>
+                    <option value="oem_user">Usuario OEM</option>
+                  </select>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={userForm.dealerAdmin}
+                      onChange={(event) => {
+                        setUserForm((prev) => ({ ...prev, dealerAdmin: event.target.checked }));
+                        setUserFormStatus(null);
+                      }}
+                    />
+                    Acceso a panel dealer
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={userFormLoading}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 6,
+                      border: '1px solid #2563eb',
+                      background: userFormLoading ? '#cbd5f5' : '#2563eb',
+                      color: '#fff',
+                      fontWeight: 600,
+                      cursor: userFormLoading ? 'default' : 'pointer',
+                    }}
+                  >
+                    {userFormLoading ? 'Creando…' : 'Crear usuario'}
+                  </button>
+                  {userFormStatus ? (
+                    <span style={{ fontSize: 12, color: userFormStatus.type === 'success' ? '#047857' : '#dc2626' }}>
+                      {userFormStatus.message}
+                    </span>
+                  ) : null}
+                </form>
+              </div>
+
+              <div style={{ borderTop: '1px solid #fee2e2', paddingTop: 16 }}>
+                <p style={{ margin: '0 0 8px', fontSize: 12, color: '#b91c1c' }}>
+                  Esta acción eliminará permanentemente la organización, marcas, dealers y usuarios asociados.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleDeleteOrganization}
+                  disabled={deletingOrg}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #dc2626',
+                    background: deletingOrg ? '#fecaca' : '#fee2e2',
+                    color: '#b91c1c',
+                    fontWeight: 600,
+                    cursor: deletingOrg ? 'default' : 'pointer',
+                  }}
+                >
+                  {deletingOrg ? 'Eliminando…' : 'Eliminar organización'}
+                </button>
+              </div>
             </div>
           ) : null}
     </section>

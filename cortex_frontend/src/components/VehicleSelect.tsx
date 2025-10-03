@@ -113,7 +113,8 @@ export default function VehicleSelect() {
       }
       try {
         const dealerContext = window.localStorage.getItem('CORTEX_DEALER_ID');
-        if (!dealerContext) {
+        const orgContext = window.localStorage.getItem('CORTEX_SUPERADMIN_ORG_ID');
+        if (!dealerContext && !orgContext) {
           setAllowedBrandList([]);
           return;
         }
@@ -335,17 +336,52 @@ export default function VehicleSelect() {
   }, [allowedBrand, allowedBrandList, allowedBrandSet, brand, isSuperadmin, own.model, own.version, own.year, setOwn]);
   // Models filtered by selected brand (if any)
   const { data: forBrand } = useSWR<OptionsPayload>(brandApi ? ['options_brand', brandApi] : null, () => endpoints.options({ make: brandApi }));
-  const brandLocked = Boolean(allowedBrand) && !isSuperadmin;
+  const { data: catalogBrandAllowed } = useSWR<any[]>(brandApi ? ['catalog_brand_allowed', brandApi] : null, async () => {
+    try {
+      const list = await endpoints.catalog({ make: brandApi, limit: 5000 });
+      const rows: any[] = Array.isArray(list)
+        ? list
+        : Array.isArray((list as any)?.items)
+          ? (list as any).items
+          : [];
+      return rows;
+    } catch {
+      return [];
+    }
+  });
+  const brandModelsAllowedSet = React.useMemo(() => {
+    if (!Array.isArray(catalogBrandAllowed) || !catalogBrandAllowed.length) return null;
+    const set = new Set<string>();
+    for (const row of catalogBrandAllowed) {
+      const rawYear = Number.parseInt(String(row?.ano ?? row?.year ?? row?.model_year ?? ''));
+      if (!Number.isFinite(rawYear) || !ALLOWED_YEARS.has(rawYear)) continue;
+      const label = String(row?.model || '').trim();
+      if (!label) continue;
+      set.add(norm(label));
+    }
+    return set.size ? set : null;
+  }, [catalogBrandAllowed, ALLOWED_YEARS]);
+  const brandLocked = !isSuperadmin && (Boolean(allowedBrand) || (allowedBrandList.length === 1 && allowedBrandSet !== null));
   const brandTyping = false;
-  const brandDisplay = brandLocked ? allowedBrand : brand;
+  const brandDisplay = brandLocked ? (allowedBrand || allowedBrandList[0] || '') : brand;
   // Mostrar modelos mientras se escribe la marca; filtrar solo cuando haya match único (brandApi)
   const modelsForBrand = React.useMemo(() => {
     if (brandApi) {
       const list = ((forBrand?.models_for_make || []) as string[]) || [];
+      if (!list.length && brandModelsAllowedSet && brandModelsAllowedSet.size) {
+        return Array.from(brandModelsAllowedSet).map((key) => {
+          const entry = (catalogBrandAllowed || []).find((row) => norm(String(row?.model || '')) === key);
+          return entry ? String(entry.model || '').trim() : key;
+        });
+      }
+      if (brandModelsAllowedSet && brandModelsAllowedSet.size) {
+        const filtered = list.filter((item) => brandModelsAllowedSet.has(norm(String(item || ''))));
+        if (filtered.length) return filtered;
+      }
       return list.length ? list : [];
     }
     return (allModels as string[]) || [];
-  }, [brandApi, forBrand, allModels]);
+  }, [brandApi, forBrand, allModels, brandModelsAllowedSet, catalogBrandAllowed]);
   // Years available for current model (even if year not selected yet)
   // Evita golpear /options?model con 1 solo carácter (ruido en backend)
   const modelQueryKey = (model && model.trim().length >= 2) ? ['options_model', model] : null;
