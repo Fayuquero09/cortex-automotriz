@@ -1,5 +1,6 @@
 "use client";
 import React from 'react';
+import Image from 'next/image';
 import dynamic from 'next/dynamic';
 import * as echarts from 'echarts';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -8,8 +9,76 @@ import { useAppState } from '@/lib/state';
 import { endpoints } from '@/lib/api';
 import { renderStruct } from '@/lib/insightsTemplates';
 import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
+import { vehicleImageSrc } from '@/lib/media';
+import { energyConsumptionLabel } from '@/lib/consumption';
 
 type Row = Record<string, any>;
+
+const THUMB_WIDTH = 116;
+const THUMB_HEIGHT = 72;
+const RADAR_PILLARS = ['seguridad', 'confort', 'audio_y_entretenimiento', 'transmision', 'energia'] as const;
+const RADAR_MAX_SCORE = 100;
+const KPI_ADVANTAGE_FIELDS: Array<{ key: string; label: string; formatter?: (value: any) => string }> = [
+  { key: 'equip_score', label: 'Score de equipamiento', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
+  { key: 'infotainment_score', label: 'Infotenimiento', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
+  { key: 'convenience_score', label: 'Confort & conveniencia', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
+  { key: 'hvac_score', label: 'Climatización', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
+  { key: 'adas_score', label: 'ADAS', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
+  { key: 'safety_score', label: 'Seguridad', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
+  { key: 'warranty_score', label: 'Cobertura de garantía', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
+  { key: 'traction_offroad_score', label: 'Capacidad off-road', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(0)} pts` : 'N/D' },
+  { key: 'lighting_score', label: 'Iluminación', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(0)} pts` : 'N/D' },
+];
+
+const vehicleDisplayName = (row: Row | null | undefined): string => {
+  if (!row) return '';
+  const brand = brandLabel(row);
+  const model = String(row?.model ?? '').trim();
+  const version = String(row?.version ?? '').trim();
+  const parts = [brand, model, version ? `– ${version}` : ''].filter(Boolean);
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
+};
+
+function vehicleThumb(row: Row | null | undefined): React.ReactNode {
+  const src = vehicleImageSrc(row);
+  const label = vehicleLabel(row) || 'Vehículo';
+  const baseStyle: React.CSSProperties = {
+    width: THUMB_WIDTH,
+    height: THUMB_HEIGHT,
+    borderRadius: 10,
+    border: '1px solid #e2e8f0',
+    background: '#f8fafc',
+  };
+
+  if (src) {
+    return (
+      <Image
+        src={src}
+        alt={label}
+        width={THUMB_WIDTH}
+        height={THUMB_HEIGHT}
+        loading="lazy"
+        style={{ ...baseStyle, objectFit: 'cover', display: 'block' }}
+      />
+    );
+  }
+
+  return (
+    <div
+      style={{
+        ...baseStyle,
+        borderStyle: 'dashed',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#94a3b8',
+        fontSize: 11,
+      }}
+    >
+      Sin foto
+    </div>
+  );
+}
 
 type DealerContextInfo = {
   id?: string;
@@ -44,6 +113,20 @@ type DealerPanelProps = {
   dealerStatus?: DealerStatusInfo;
   dealerUserId?: string;
   dealerUserEmail?: string;
+  previewMode?: boolean;
+};
+
+type AdvantageRow = {
+  key: string;
+  label: string;
+  delta: number;
+  ownValue: string;
+  compValue: string;
+};
+
+type AdvantageSection = {
+  comp: Row;
+  rows: AdvantageRow[];
 };
 
 function num(x: any): number | null {
@@ -168,20 +251,23 @@ const formatTemplateDate = (value?: string | null): string => {
   }
 };
 
-export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId, dealerUserEmail }: DealerPanelProps = {}) {
+export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId, dealerUserEmail, previewMode }: DealerPanelProps = {}) {
   const { own, setOwn } = useAppState();
   const { data: cfg } = useSWR<any>('cfg', () => endpoints.config());
   const fuelPrices = cfg?.fuel_prices || {};
-  const blocked = Boolean(dealerStatus?.blocked);
+  const blocked = previewMode ? false : Boolean(dealerStatus?.blocked);
   const hasDealerId = Boolean(dealerContext?.id && dealerContext.id.trim());
-  const ready = !blocked && hasDealerId && !!own.model && !!own.year && (!!own.make || true);
+  const unlocked = previewMode || hasDealerId;
+  const ready = !blocked && unlocked && !!own.model && !!own.year && (!!own.make || true);
   const dealerNameLabel = dealerContext?.name?.trim() || dealerStatus?.dealer_name || 'Dealer configurado';
   const dealerLocationLabel = dealerContext?.location?.trim() || '';
   const dealerContactLabel = dealerContext?.contactName?.trim();
   const dealerContactPhone = dealerContext?.contactPhone?.trim();
-  const allowedBrand = (dealerStatus?.brand_name && typeof dealerStatus.brand_name === 'string')
-    ? dealerStatus.brand_name.trim()
-    : '';
+  const allowedBrand = previewMode
+    ? ''
+    : ((dealerStatus?.brand_name && typeof dealerStatus.brand_name === 'string')
+      ? dealerStatus.brand_name.trim()
+      : '');
   const { data: ownRows } = useSWR<Row[]>(ready ? ['dealer_own', own.make, own.model, own.year, own.version] : null, async () => {
     const params: Record<string, any> = { make: own.make, model: own.model, year: own.year, limit: 50 };
     const list = await endpoints.catalog(params);
@@ -203,6 +289,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
   const [templateSuccess, setTemplateSuccess] = React.useState('');
   const [templateSaving, setTemplateSaving] = React.useState(false);
   const [templateDeleting, setTemplateDeleting] = React.useState<string | null>(null);
+  const [advantageMode, setAdvantageMode] = React.useState<'upsides' | 'gaps'>('upsides');
   const canUseTemplates = Boolean(dealerUserId && dealerUserId.trim());
   const {
     data: templateData,
@@ -457,6 +544,287 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
     return unique.slice(0, 3).join(', ');
   };
 
+  const radarSummary = React.useMemo(() => {
+    if (!baseRow) return null;
+    const baseName = vehicleDisplayName(baseRow) || 'Vehículo propio';
+    const baseSegment = segLabel(baseRow);
+    const candidateRows = [{ row: baseRow, name: baseName }, ...comps.map((row: Row, idx: number) => ({ row, name: vehicleDisplayName(row) || `Competidor ${idx + 1}` }))];
+    const available = candidateRows.filter((item) => item.row);
+    if (!available.length) return null;
+
+    const sample = baseSegment !== '-' ? available.filter((item) => segLabel(item.row) === baseSegment) : available;
+    const radarSource = sample.length ? sample : available;
+
+    const computeValue = (row: Row | null | undefined, pillar: (typeof RADAR_PILLARS)[number]): number | null => {
+      const rawVal = getPillarValue(row, pillar);
+      if (rawVal == null) return null;
+      const numVal = Number(rawVal);
+      if (!Number.isFinite(numVal) || numVal <= 0) return null;
+      return Math.min(RADAR_MAX_SCORE, Math.max(0, Number(numVal.toFixed(1))));
+    };
+
+    const baseValuesRaw = RADAR_PILLARS.map((pillar) => computeValue(baseRow, pillar));
+    const hasAny = baseValuesRaw.some((val) => val != null);
+    if (!hasAny) return null;
+    const baseValues = baseValuesRaw.map((val) => (val == null ? 0 : val));
+
+    const benchmarkValues = RADAR_PILLARS.map((pillar) => {
+      let sum = 0;
+      let count = 0;
+      radarSource.forEach((entry) => {
+        const val = computeValue(entry.row, pillar);
+        if (val != null) {
+          sum += val;
+          count += 1;
+        }
+      });
+      return count ? Number((sum / count).toFixed(1)) : 0;
+    });
+
+    const bestByPillar: Record<string, { value: number; vehicle: string }> = {};
+    RADAR_PILLARS.forEach((pillar) => {
+      let bestVal: number | null = null;
+      let bestVehicle = '';
+      radarSource.forEach((entry) => {
+        const val = computeValue(entry.row, pillar);
+        if (val != null && (bestVal == null || val > bestVal)) {
+          bestVal = val;
+          bestVehicle = vehicleDisplayName(entry.row) || entry.name;
+        }
+      });
+      if (bestVal != null) {
+        bestByPillar[pillar] = { value: Number(bestVal.toFixed(1)), vehicle: bestVehicle };
+      }
+    });
+    const bestValues = RADAR_PILLARS.map((pillar) => bestByPillar[pillar]?.value ?? 0);
+
+    const benchmarkLabel = baseSegment && baseSegment !== '-' ? `Benchmark ${baseSegment}` : 'Benchmark segmento';
+    const bestLabel = 'Best in class';
+    const indicator = RADAR_PILLARS.map((pillar) => ({ name: PILLAR_LABELS[pillar] || pillar, max: RADAR_MAX_SCORE }));
+
+    const option: echarts.EChartsOption = {
+      color: ['#2563eb', '#64748b', '#16a34a'],
+      legend: {
+        bottom: 0,
+        data: [baseName, benchmarkLabel, bestLabel],
+      },
+      tooltip: {
+        trigger: 'item',
+        backgroundColor: '#0f172a',
+        borderRadius: 8,
+        borderWidth: 0,
+        textStyle: { color: '#f8fafc' },
+        formatter: (params: any) => {
+          const values: number[] = Array.isArray(params?.value) ? params.value : [];
+          const title = `<strong>${params?.name || ''}</strong>`;
+          const rows = RADAR_PILLARS.map((pillar, idx) => {
+            const label = PILLAR_LABELS[pillar] || pillar;
+            const val = values[idx] != null ? Number(values[idx]).toFixed(1) : '0.0';
+            const extra = params?.name === bestLabel && bestByPillar[pillar]?.vehicle
+              ? ` — ${bestByPillar[pillar].vehicle}`
+              : '';
+            return `${label}: ${val} pts${extra}`;
+          });
+          return [title, ...rows].join('<br />');
+        },
+      },
+      radar: {
+        indicator,
+        radius: '65%',
+        splitNumber: 5,
+        axisName: { color: '#0f172a', fontSize: 11 },
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
+        splitArea: { areaStyle: { color: ['#ffffff', '#f8fafc'] } },
+        axisLine: { lineStyle: { color: '#cbd5f5' } },
+      },
+      series: [
+        {
+          type: 'radar',
+          data: [
+            {
+              value: baseValues,
+              name: baseName,
+              areaStyle: { color: 'rgba(37, 99, 235, 0.18)' },
+              lineStyle: { color: '#2563eb', width: 2 },
+              symbol: 'circle',
+              symbolSize: 4,
+            },
+            {
+              value: benchmarkValues,
+              name: benchmarkLabel,
+              areaStyle: { color: 'rgba(100, 116, 139, 0.12)' },
+              lineStyle: { color: '#64748b', type: 'dashed', width: 2 },
+              symbol: 'none',
+            },
+            {
+              value: bestValues,
+              name: bestLabel,
+              areaStyle: { color: 'rgba(22, 163, 74, 0.12)' },
+              lineStyle: { color: '#16a34a', width: 2 },
+              symbol: 'circle',
+              symbolSize: 6,
+            },
+          ],
+        },
+      ],
+    };
+
+    const highlights = RADAR_PILLARS.map((pillar) => {
+      const info = bestByPillar[pillar];
+      if (!info) return null;
+      return `${PILLAR_LABELS[pillar] || pillar}: ${info.value.toFixed(1)} pts — ${info.vehicle}`;
+    }).filter(Boolean) as string[];
+
+    return {
+      option,
+      highlights,
+      benchmarkLabel,
+      bestLabel,
+      baseName,
+      segmentLabel: baseSegment,
+      sampleSize: radarSource.length,
+    };
+  }, [baseRow, comps]);
+
+  const radarBenchmarkLabel = radarSummary?.benchmarkLabel ?? 'Benchmark segmento';
+  const radarSegmentLabel = radarSummary?.segmentLabel && radarSummary.segmentLabel !== '-' ? radarSummary.segmentLabel : 'segmento seleccionado';
+
+  const formatKpiValue = React.useCallback((cfg: { formatter?: (value: any) => string }, value: any) => {
+    if (typeof cfg?.formatter === 'function') {
+      return cfg.formatter(value);
+    }
+    return fmtNum(value);
+  }, []);
+
+  const advantageData = React.useMemo<AdvantageSection[]>(() => {
+    if (!baseRow) return [];
+    return comps
+      .map((comp) => {
+        const rows: AdvantageRow[] = KPI_ADVANTAGE_FIELDS.map((cfg) => {
+          const deltaRaw = (comp as any)?.__deltas?.[cfg.key]?.delta;
+          const delta = typeof deltaRaw === 'number' ? deltaRaw : Number(deltaRaw);
+          if (!Number.isFinite(delta) || delta === 0) return null;
+          const ownIsBetter = delta < 0;
+          const shouldDisplay = advantageMode === 'upsides' ? ownIsBetter : !ownIsBetter;
+          if (!shouldDisplay) return null;
+          const ownValue = formatKpiValue(cfg, (baseRow as any)?.[cfg.key]);
+          const compValue = formatKpiValue(cfg, (comp as any)?.[cfg.key]);
+          return {
+            key: cfg.key,
+            label: cfg.label,
+            delta,
+            ownValue,
+            compValue,
+          };
+        }).filter((item): item is AdvantageRow => Boolean(item));
+        if (!rows.length) return null;
+        return { comp, rows } as AdvantageSection;
+      })
+      .filter((item): item is AdvantageSection => Boolean(item));
+  }, [baseRow, comps, advantageMode, formatKpiValue]);
+
+  const buildAdvantageOption = React.useCallback(
+    (rows: AdvantageRow[]): echarts.EChartsOption => {
+      const color = advantageMode === 'upsides' ? '#16a34a' : '#dc2626';
+      return {
+        color: [color],
+        grid: { left: 140, right: 24, top: 24, bottom: 36, containLabel: true },
+        tooltip: {
+          trigger: 'item',
+          backgroundColor: '#0f172a',
+          borderWidth: 0,
+          borderRadius: 10,
+          textStyle: { color: '#f8fafc' },
+          formatter: (params: any) => {
+            const data = params?.data || {};
+            const direction = data?.delta < 0 ? 'Nosotros' : 'Competidor';
+            const deltaText = `${data?.delta < 0 ? '-' : '+'}${Math.abs(Number(data?.delta || 0)).toFixed(1)}`;
+            const ownLine = `<span style="color:#38bdf8">Nosotros:</span> ${data?.ownValue ?? '-'}`;
+            const compLine = `<span style="color:#fbbf24">Competidor:</span> ${data?.compValue ?? '-'}`;
+            return `<strong>${data?.label || ''}</strong><br/>Δ (competidor - nosotros): ${deltaText}<br/>${ownLine}<br/>${compLine}`;
+          },
+        },
+        xAxis: {
+          type: 'value',
+          axisLabel: { color: '#475569' },
+          splitLine: { lineStyle: { color: '#e2e8f0' } },
+        },
+        yAxis: {
+          type: 'category',
+          data: rows.map((row) => row.label),
+          axisLabel: { color: '#1e293b', fontSize: 12 },
+        },
+      series: [
+        {
+          type: 'bar',
+          barWidth: 22,
+          data: rows.map((row) => ({
+            value: Number(Math.abs(row.delta).toFixed(2)),
+            delta: row.delta,
+            label: row.label,
+            ownValue: row.ownValue,
+            compValue: row.compValue,
+          })) as any,
+        },
+      ],
+    };
+  },
+    [advantageMode],
+  );
+
+  const salesChart = React.useMemo<
+    | {
+        year: number;
+        option: echarts.EChartsOption;
+      }
+    | null
+  >(() => {
+    const participants = [{ name: vehicleDisplayName(baseRow) || 'Propio', row: baseRow }, ...comps.map((comp) => ({ name: vehicleDisplayName(comp) || brandLabel(comp), row: comp }))];
+    const yearSet = new Set<number>();
+    const SALES_REGEX = /^ventas_(\d{4})_(\d{2})$/;
+    participants.forEach((entry) => {
+      if (!entry.row) return;
+      Object.keys(entry.row).forEach((key) => {
+        const match = key.match(SALES_REGEX);
+        if (match) yearSet.add(Number(match[1]));
+      });
+    });
+    if (yearSet.size === 0) return null;
+    const years = Array.from(yearSet).sort();
+    const year = years[years.length - 1];
+    const monthCodes = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+    const monthLabels = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const series = participants
+      .map((entry) => {
+        const data = monthCodes.map((code) => {
+          const key = `ventas_${year}_${code}`;
+          const val = num((entry.row as any)?.[key]);
+          return val ?? 0;
+        });
+        const total = data.reduce((acc, val) => acc + val, 0);
+        if (total <= 0) return null;
+        return {
+          name: entry.name,
+          type: 'line' as const,
+          smooth: true,
+          data,
+        };
+      })
+      .filter((item): item is { name: string; type: 'line'; smooth: true; data: number[] } => Boolean(item));
+    if (!series.length) return null;
+    return {
+      year,
+      option: {
+        tooltip: { trigger: 'axis' },
+        legend: { top: 0, data: series.map((s) => s.name) },
+        grid: { left: 60, right: 20, top: 40, bottom: 32 },
+        xAxis: { type: 'category', data: monthLabels },
+        yAxis: { type: 'value', name: 'Unidades', minInterval: 1 },
+        series,
+      },
+    };
+  }, [baseRow, comps]);
+
   const buildFallbackScript = React.useCallback(() => {
     if (!baseRow) return { sections: [] };
     const baseName = `${brandLabel(baseRow)} ${baseRow.model || ''}${baseRow.version ? ` – ${baseRow.version}` : ''}`.trim();
@@ -707,7 +1075,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
         ) : null}
       </div>
 
-      {!hasDealerId ? (
+      {!hasDealerId && !previewMode ? (
         <div style={{ border:'1px solid #fca5a5', borderRadius:10, padding:16, background:'#fef2f2', color:'#991b1b' }}>
           Ingresa y guarda el UUID del dealer para habilitar los comparativos y registrar historial.
         </div>
@@ -893,16 +1261,30 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
             <tbody>
               <tr>
                 <td></td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-          <div style={{ fontWeight:700 }}>{brandLabel(baseRow)} {String(baseRow.model||'')}</div>
-                  <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
-                  <div style={{ fontWeight:500 }}>{String(baseRow.version||'')}</div>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 260, maxWidth: 360, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'anywhere' }}>
+                  <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(160px, 1fr)`, gap:8, alignItems:'flex-start' }}>
+                    <div>{vehicleThumb(baseRow)}</div>
+                    <div>
+                      <div style={{ fontWeight:700 }}>{brandLabel(baseRow)} {String(baseRow.model||'')}</div>
+                      <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
+                      <div style={{ fontWeight:500 }}>{String(baseRow.version||'')}</div>
+                    </div>
+                  </div>
                 </td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.msrp)}</td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.precio_transaccion)}</td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                   {fmtMoney(baseRow.fuel_cost_60k_mxn)}
-              <div style={{ fontSize:12, opacity:0.75 }}>{fuelLabel(baseRow) || 'Combustible N/D'} {fuelPriceLabel(baseRow)} • Rendimiento Combinado</div>
+                  {(() => {
+                    const fuelInfo = `${fuelLabel(baseRow) || 'Combustible N/D'} ${fuelPriceLabel(baseRow)}`.trim();
+                    const label = energyConsumptionLabel(baseRow);
+                    return (
+                      <div style={{ fontSize:12, opacity:0.75 }}>
+                        Rendimiento combinado: {label || 'N/D'}
+                        {fuelInfo ? <span>{` • ${fuelInfo}`}</span> : null}
+                      </div>
+                    );
+                  })()}
                 </td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.service_cost_60k_mxn)}</td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.tco_60k_mxn)}</td>
@@ -919,16 +1301,30 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                       <button className="no-print" onClick={()=>removeComp(i)} title="Quitar" style={{ border:'1px solid #e5e7eb', background:'#fff', borderRadius:6, padding:'2px 6px' }}>×</button>
                     </td>
-                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-                      <div style={{ fontWeight:600 }}>{brandLabel(r)} {String(r.model||'')}</div>
-                      <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano||''}</div>
-                      <div style={{ fontWeight:500 }}>{String(r.version||'')}</div>
+                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 260, maxWidth: 360, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'anywhere' }}>
+                      <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(160px, 1fr)`, gap:8, alignItems:'flex-start' }}>
+                        <div>{vehicleThumb(r)}</div>
+                        <div>
+                          <div style={{ fontWeight:600 }}>{brandLabel(r)} {String(r.model||'')}</div>
+                          <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano||''}</div>
+                          <div style={{ fontWeight:500 }}>{String(r.version||'')}</div>
+                        </div>
+                      </div>
                     </td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.msrp)}<div style={{ fontSize:12, opacity:0.9, color: d_m!=null ? (d_m<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_m==null?'-':`${tri(d_m)} ${fmtMoney(Math.abs(d_m))}`}</div></td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.precio_transaccion)}<div style={{ fontSize:12, opacity:0.9, color: d_tx!=null ? (d_tx<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_tx==null?'-':`${tri(d_tx)} ${fmtMoney(Math.abs(d_tx))}`}</div></td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                       {fmtMoney(r.fuel_cost_60k_mxn)}
-                      <div style={{ fontSize:12, opacity:0.75 }}>{fuelLabel(r) || 'Combustible N/D'} {fuelPriceLabel(r)} • Rendimiento Combinado</div>
+                      {(() => {
+                        const fuelInfo = `${fuelLabel(r) || 'Combustible N/D'} ${fuelPriceLabel(r)}`.trim();
+                        const label = energyConsumptionLabel(r);
+                        return (
+                          <div style={{ fontSize:12, opacity:0.75 }}>
+                            Rendimiento combinado: {label || 'N/D'}
+                            {fuelInfo ? <span>{` • ${fuelInfo}`}</span> : null}
+                          </div>
+                        );
+                      })()}
                       <div style={{ fontSize:12, opacity:0.9, color: d_f!=null ? (d_f<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_f==null?'-':`${tri(d_f)} ${fmtMoney(Math.abs(d_f))}`}</div>
                     </td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.service_cost_60k_mxn)}<div style={{ fontSize:12, opacity:0.9, color: d_s!=null ? (d_s<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_s==null?'-':`${tri(d_s)} ${fmtMoney(Math.abs(d_s))}`}</div></td>
@@ -981,6 +1377,105 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
           </div>
         );
       })() : null}
+
+      {/* Radar de pilares */}
+      {baseRow ? (
+        <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
+          <div style={{ paddingBottom:8, borderBottom:'1px solid #e5e7eb', marginBottom:12, background:'#fafafa', fontWeight:600 }}>Radar de pilares — propio vs segmento</div>
+          {EChart && radarSummary?.option ? (
+            <EChart echarts={echarts} option={radarSummary.option} opts={{ renderer: 'svg' }} style={{ height: 320 }} />
+          ) : (
+            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos suficientes de pilares para graficar.</div>
+          )}
+          {radarSummary?.highlights?.length ? (
+            <div style={{ marginTop:12, display:'grid', gap:6, fontSize:12, color:'#475569' }}>
+              <div style={{ fontWeight:600 }}>{radarSummary.bestLabel} por pilar:</div>
+              <ul style={{ margin:0, paddingLeft:18, display:'grid', gap:4 }}>
+                {radarSummary.highlights.map((text, idx) => (
+                  <li key={idx}>{text}</li>
+                ))}
+              </ul>
+              <div style={{ color:'#64748b' }}>
+                {radarBenchmarkLabel} calculado con {radarSummary.sampleSize} vehículo{radarSummary.sampleSize === 1 ? '' : 's'} ({radarSegmentLabel}).
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {baseRow ? (
+        <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
+          <div style={{ paddingBottom:8, borderBottom:'1px solid #e5e7eb', marginBottom:12, background:'#fafafa', fontWeight:600 }}>Ventajas vs brechas (equipamiento & prestaciones)</div>
+          <div className="no-print" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }}>
+            <button
+              type="button"
+              onClick={() => setAdvantageMode('upsides')}
+              style={{
+                padding:'6px 12px',
+                borderRadius:8,
+                border: advantageMode === 'upsides' ? '1px solid #16a34a' : '1px solid #cbd5e1',
+                background: advantageMode === 'upsides' ? '#dcfce7' : '#ffffff',
+                color: advantageMode === 'upsides' ? '#166534' : '#0f172a',
+                cursor:'pointer',
+                fontSize:12,
+                fontWeight:600,
+              }}
+            >
+              Nuestras ventajas
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdvantageMode('gaps')}
+              style={{
+                padding:'6px 12px',
+                borderRadius:8,
+                border: advantageMode === 'gaps' ? '1px solid #dc2626' : '1px solid #cbd5e1',
+                background: advantageMode === 'gaps' ? '#fee2e2' : '#ffffff',
+                color: advantageMode === 'gaps' ? '#991b1b' : '#0f172a',
+                cursor:'pointer',
+                fontSize:12,
+                fontWeight:600,
+              }}
+            >
+              Brechas vs rivales
+            </button>
+          </div>
+          {advantageData.length ? (
+            <div style={{ display:'grid', gap:12 }}>
+              {advantageData.map((section, idx) => {
+                const name = vehicleDisplayName(section.comp) || brandLabel(section.comp) || `Competidor ${idx + 1}`;
+                const key = String((section.comp as any)?.vehicle_id || `${name}-${idx}`);
+                return (
+                  <div key={key} style={{ border:'1px solid #f1f5f9', borderRadius:10, padding:12, background:'#fff' }}>
+                    <div style={{ fontWeight:600, marginBottom:8 }}>{name}</div>
+                    {EChart ? (
+                      <EChart
+                        echarts={echarts}
+                        option={buildAdvantageOption(section.rows)}
+                        opts={{ renderer: 'svg' }}
+                        style={{ height: Math.max(section.rows.length * 36, 180) }}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin diferencias claras para mostrar en esta selección.</div>
+          )}
+        </div>
+      ) : null}
+
+      {salesChart ? (
+        <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
+          <div style={{ paddingBottom:8, borderBottom:'1px solid #e5e7eb', marginBottom:12, background:'#fafafa', fontWeight:600 }}>
+            Ventas mensuales {salesChart.year}
+          </div>
+          {EChart ? (
+            <EChart echarts={echarts} option={salesChart.option} opts={{ renderer: 'svg' }} style={{ height: 320 }} />
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Charts: HP y Dimensiones */}
       <div className="print-block" style={{ display:'grid', gap:16, gridTemplateColumns:'repeat(auto-fit, minmax(320px,1fr))' }}>

@@ -10,6 +10,7 @@ import { useAppState } from '@/lib/state';
 import { useI18n } from '@/lib/i18n';
 import { endpoints } from '@/lib/api';
 import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
+import { energyConsumptionLabel, isElectric, kmlFromRow, kwhPer100FromRow, parseNumberLike } from '@/lib/consumption';
 import { vehicleImageSrc } from '@/lib/media';
 import { renderStruct } from '@/lib/insightsTemplates';
 
@@ -505,20 +506,65 @@ export default function ComparePanel() {
     let cancelled = false;
     const mk = (manOpts.autofill?.make_from_model || manOpts.selected?.make || '') as string;
     if (mk && !manMake) setManMake(mk);
-    const yrs = (Array.isArray(manOpts.years) ? manOpts.years : []) as number[];
-    const sorted = [...yrs].sort((a, b) => b - a);
+    const baseYears: number[] = Array.isArray(manOpts.years)
+      ? (manOpts.years as number[]).map((value) => Number(value)).filter((value) => Number.isFinite(value))
+      : [];
+    const baseSorted = Array.from(new Set(baseYears)).sort((a, b) => b - a);
+
+    const fetchCatalogYears = async (): Promise<number[]> => {
+      try {
+        const params: Record<string, any> = {
+          limit: 500,
+          model: manModel || undefined,
+          make: manMake || mk || undefined,
+        };
+        const catalog = await endpoints.catalog(params);
+        const rows: Row[] = Array.isArray(catalog)
+          ? catalog
+          : Array.isArray((catalog as any)?.items)
+            ? (catalog as any).items
+            : [];
+        const set = new Set<number>();
+        rows.forEach((row) => {
+          const candidate = Number(row?.ano ?? row?.year ?? row?.modelo ?? row?.model_year);
+          if (Number.isFinite(candidate)) set.add(candidate);
+        });
+        return Array.from(set);
+      } catch {
+        return [];
+      }
+    };
 
     const pickYear = async () => {
-      if (!sorted.length) {
+      const candidateSet = new Set<number>(baseSorted);
+      const needsFallback = (filters.includeDifferentYears || (own.year && !candidateSet.has(Number(own.year))));
+      if (needsFallback && (manModel || mk || manMake)) {
+        try {
+          const extraYears = await fetchCatalogYears();
+          extraYears.forEach((year) => {
+            if (Number.isFinite(year)) candidateSet.add(year);
+          });
+        } catch {
+          // ignore fallback errors
+        }
+      }
+
+      const candidates = Array.from(candidateSet)
+        .map((year) => Number(year))
+        .filter((year) => Number.isFinite(year))
+        .sort((a, b) => b - a);
+
+      if (!candidates.length) {
         if (!filters.includeDifferentYears && own.year && !hasManualFor(mk, manModel, own.year)) {
           setManualNotice(`No encontramos ${own.year} para ${manModel || mk}.`);
         }
         if (!cancelled) setManYear('');
         return;
       }
+
       if (!filters.includeDifferentYears && own.year) {
         const target = Number(own.year);
-        if (sorted.includes(target)) {
+        if (candidates.includes(target)) {
           if (!cancelled) {
             setManYear(target);
             setManualNotice('');
@@ -531,7 +577,8 @@ export default function ComparePanel() {
         }
         return;
       }
-      for (const y of sorted) {
+
+      for (const y of candidates) {
         try {
           const res = await endpoints.catalog({ make: manMake || mk || undefined, model: manModel || undefined, year: y, limit: 20 });
           const rows: Row[] = Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
@@ -544,8 +591,9 @@ export default function ComparePanel() {
           }
         } catch {}
       }
+
       if (!cancelled) {
-        setManYear(sorted[0]);
+        setManYear(candidates[0]);
         setManualNotice('');
       }
     };
@@ -558,14 +606,64 @@ export default function ComparePanel() {
   React.useEffect(() => {
     if (!makeOpts || manModel) return;
     let cancelled = false;
-    const yrs = (Array.isArray(makeOpts.years) ? makeOpts.years : []) as number[];
-    const sorted = [...yrs].sort((a, b) => b - a);
+    const baseYears: number[] = Array.isArray(makeOpts.years)
+      ? (makeOpts.years as number[]).map((value) => Number(value)).filter((value) => Number.isFinite(value))
+      : [];
+    const baseSorted = Array.from(new Set(baseYears)).sort((a, b) => b - a);
+
+    const fetchCatalogYears = async (): Promise<number[]> => {
+      try {
+        const params: Record<string, any> = {
+          limit: 500,
+          make: manMake || undefined,
+        };
+        const catalog = await endpoints.catalog(params);
+        const rows: Row[] = Array.isArray(catalog)
+          ? catalog
+          : Array.isArray((catalog as any)?.items)
+            ? (catalog as any).items
+            : [];
+        const set = new Set<number>();
+        rows.forEach((row) => {
+          const candidate = Number(row?.ano ?? row?.year ?? row?.modelo ?? row?.model_year);
+          if (Number.isFinite(candidate)) set.add(candidate);
+        });
+        return Array.from(set);
+      } catch {
+        return [];
+      }
+    };
 
     const pickYear = async () => {
-      if (!sorted.length) return;
+      const candidateSet = new Set<number>(baseSorted);
+      const needsFallback = (filters.includeDifferentYears || (own.year && !candidateSet.has(Number(own.year))));
+      if (needsFallback && manMake) {
+        try {
+          const extraYears = await fetchCatalogYears();
+          extraYears.forEach((year) => {
+            if (Number.isFinite(year)) candidateSet.add(year);
+          });
+        } catch {
+          // ignore fallback errors
+        }
+      }
+
+      const candidates = Array.from(candidateSet)
+        .map((year) => Number(year))
+        .filter((year) => Number.isFinite(year))
+        .sort((a, b) => b - a);
+
+      if (!candidates.length) {
+        if (!filters.includeDifferentYears && own.year && !hasManualFor(manMake, undefined, own.year)) {
+          setManualNotice(`No encontramos ${own.year} para ${manMake || 'esta marca'}.`);
+        }
+        if (!cancelled) setManYear('');
+        return;
+      }
+
       if (!filters.includeDifferentYears && own.year) {
         const target = Number(own.year);
-        if (sorted.includes(target)) {
+        if (candidates.includes(target)) {
           if (!cancelled) {
             setManYear(target);
             setManualNotice('');
@@ -578,7 +676,8 @@ export default function ComparePanel() {
         }
         return;
       }
-      for (const y of sorted) {
+
+      for (const y of candidates) {
         try {
           const res = await endpoints.catalog({ make: manMake || undefined, year: y, limit: 20 });
           const rows: Row[] = Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
@@ -591,8 +690,9 @@ export default function ComparePanel() {
           }
         } catch {}
       }
+
       if (!cancelled) {
-        setManYear(sorted[0]);
+        setManYear(candidates[0]);
         setManualNotice('');
       }
     };
@@ -820,84 +920,7 @@ export default function ComparePanel() {
   }, [autoGenerate, autoGenSeq, autoItems.length, autoLoading, autoError, auto?.notice]);
 
   const sig = (rows: Row[]) => rows.map(r => `${r.make}|${r.model}|${r.version||''}|${r.ano||''}`).join(',');
-  // Helpers numéricos para consumo energético/combustible
-  function parseNumberLike(value: any): number | null {
-    if (value == null) return null;
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    const str = String(value).trim();
-    if (!str) return null;
-    const match = str.match(/-?\d+[.,]?\d*/);
-    if (!match) return null;
-    let token = match[0];
-    const hasComma = token.includes(',');
-    const hasDot = token.includes('.');
-    if (hasComma && hasDot) {
-      if (token.lastIndexOf(',') > token.lastIndexOf('.')) {
-        token = token.replace(/\./g, '').replace(/,/g, '.');
-      } else {
-        token = token.replace(/,/g, '');
-      }
-    } else if (hasComma) {
-      token = token.replace(/,/g, '.');
-    }
-    const numVal = Number(token);
-    return Number.isFinite(numVal) ? numVal : null;
-  }
-  function isElectric(row: any): boolean {
-    const info = fuelCategory(row);
-    if (info.key === 'phev') return false;
-    if (info.key === 'bev') return true;
-    const raw = info.raw.toLowerCase();
-    if (!raw) return false;
-    if (/phev|enchuf/.test(raw)) return false;
-    return /bev|eléctr|electr/.test(raw);
-  }
-  // Fallback: calcular fuel_cost_60k_mxn si falta (a partir de KML y precios de combustible)
-  function kmlFromRow(row: any): number | null {
-    const cand = [
-      'combinado_kml','kml_mixto','mixto_kml','rendimiento_mixto_kml','consumo_mixto_kml','consumo_combinado_kml',
-      'combinado_km_l','km_l_mixto','mixto_km_l','rendimiento_mixto_km_l','rendimiento_combinado_km_l','consumo_combinado_km_l'
-    ];
-    for (const k of cand) {
-      const v = parseNumberLike(row?.[k]);
-      if (Number.isFinite(v) && (v as number) > 0) return v as number;
-    }
-    // Soporte L/100km -> KML
-    const l100cand = ['mixto_l_100km','consumo_mixto_l_100km','l_100km_mixto'];
-    for (const k of l100cand) {
-      const v = parseNumberLike(row?.[k]);
-      if (Number.isFinite(v) && (v as number) > 0) return 100 / (v as number);
-    }
-    return null;
-  }
-  function kwhPer100FromRow(row: any): number | null {
-    if (!row) return null;
-    const directFields = [
-      'consumo_kwh_100km','consumo_electrico_kwh_100km','kwh_100km','kwh_por_100km','kwh/100km','consumo_ev_kwh_100km'
-    ];
-    for (const key of directFields) {
-      const v = parseNumberLike((row as any)?.[key]);
-      if (Number.isFinite(v) && (v as number) > 0) return v as number;
-    }
-    const perKmFields = ['consumo_kwh_km','kwh_por_km','kwh_km','consumo_electrico_kwh_km'];
-    for (const key of perKmFields) {
-      const v = parseNumberLike((row as any)?.[key]);
-      if (Number.isFinite(v) && (v as number) > 0) return (v as number) * 100;
-    }
-    const batteryFields = ['battery_kwh','bateria_kwh','battery_capacity_kwh','capacidad_bateria_kwh','ev_battery_kwh'];
-    const rangeFields = ['ev_range_km','autonomia_ev_km','autonomia_electrica_km','range_electrico_km','autonomia_electrica'];
-    for (const batKey of batteryFields) {
-      const bat = parseNumberLike((row as any)?.[batKey]);
-      if (!Number.isFinite(bat) || (bat as number) <= 0) continue;
-      for (const rangeKey of rangeFields) {
-        const range = parseNumberLike((row as any)?.[rangeKey]);
-        if (Number.isFinite(range) && (range as number) > 0) {
-          return ((bat as number) / (range as number)) * 100;
-        }
-      }
-    }
-    return null;
-  }
+  // Helpers numéricos para consumo energético/combustible (ver lib/consumption)
   function featureNumber(row: any, category: string, keyword: string): number | null {
     const list = (row?.features && row.features[category]) || [];
     if (!Array.isArray(list)) return null;
@@ -1203,20 +1226,6 @@ export default function ComparePanel() {
     const deduced = kwhPer100FromRow(row);
     return Number.isFinite(deduced) && (deduced as number) > 0 ? Number(deduced) : null;
   }
-  function energyConsumptionLabel(row: any): string {
-    if (isElectric(row)) {
-      const val = energyConsumptionKwh100(row);
-      return val == null ? '' : `${val.toFixed(1)} kWh/100 km`;
-    }
-    const kml = kmlFromRow(row);
-    if (kml != null) {
-      const l100 = kml > 0 ? (100 / kml) : null;
-      const extra = l100 != null ? ` • ${l100.toFixed(1)} L/100 km` : '';
-      return `${kml.toFixed(1)} km/L${extra}`;
-    }
-    return '';
-  }
-
   function segLabel(row: any): string {
     const raw = String(row?.segmento_display || row?.segmento_ventas || row?.body_style || '').toString().trim();
     const s = raw.toLowerCase();
