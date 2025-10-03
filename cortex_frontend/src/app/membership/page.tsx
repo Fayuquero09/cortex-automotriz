@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import { useRouter } from 'next/navigation';
 import { endpoints } from '@/lib/api';
 
 const STEP_LABELS = ['Verifica tu teléfono', 'Confirma tu código', 'Personaliza tu membresía'];
@@ -15,6 +16,7 @@ type BrandOption = {
 type Step = 'phone' | 'code' | 'details' | 'done';
 
 export default function MembershipPage() {
+  const router = useRouter();
   const [step, setStep] = React.useState<Step>('phone');
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -51,7 +53,7 @@ export default function MembershipPage() {
       if (payload?.debug_code) {
         setDebugCode(String(payload.debug_code));
       }
-      setSuccessMessage('Enviamos un código SMS. Consulta tu teléfono e ingrésalo en el siguiente paso.');
+      setSuccessMessage('Enviamos un código por WhatsApp. Revisa la conversación y escríbelo en el siguiente paso.');
       setStep('code');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo enviar el código.');
@@ -68,6 +70,16 @@ export default function MembershipPage() {
       const payload = await endpoints.membershipVerifyCode({ phone, code });
       if (!payload?.session) {
         throw new Error('No recibimos la sesión de membresía.');
+      }
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem('CORTEX_MEMBERSHIP_SESSION', payload.session);
+          if (payload?.paid) {
+            window.localStorage.setItem('CORTEX_MEMBERSHIP_STATUS', payload.paid ? 'paid' : 'free');
+          } else {
+            window.localStorage.setItem('CORTEX_MEMBERSHIP_STATUS', 'free');
+          }
+        } catch {}
       }
       setSessionToken(payload.session);
       setStep('details');
@@ -117,6 +129,27 @@ export default function MembershipPage() {
         pdf_footer_note: footerNote || undefined,
       };
       await endpoints.membershipSaveProfile(body);
+      const selectedOption = brands.find((b) => (b.slug || b.name) === selectedBrand) || null;
+      const brandLabel = (selectedOption?.name || selectedBrand || '').trim();
+      if (typeof window !== 'undefined') {
+        try {
+          const list = brandLabel ? [brandLabel] : [];
+          if (list.length) {
+            window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(list));
+            window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', brandLabel);
+            window.localStorage.setItem('CORTEX_MEMBERSHIP_BRAND', brandLabel);
+          } else {
+            window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
+            window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+            window.localStorage.removeItem('CORTEX_MEMBERSHIP_BRAND');
+          }
+          window.localStorage.setItem('CORTEX_MEMBERSHIP_STATUS', 'active');
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: list }));
+          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: brandLabel }));
+        } catch {
+          /* ignore storage errors */
+        }
+      }
       setSuccessMessage('¡Tu membresía self-service quedó configurada!');
       setStep('done');
     } catch (err) {
@@ -209,7 +242,7 @@ export default function MembershipPage() {
       {step === 'code' ? (
         <div style={{ display: 'grid', gap: 12, maxWidth: 420 }}>
           <p style={{ color: '#475569', fontSize: 13 }}>
-            Ingresa el código de 6 dígitos que enviamos vía SMS.
+            Ingresa el código de 6 dígitos que enviamos vía WhatsApp.
           </p>
           {debugCode ? (
             <div style={{ fontSize: 12, color: '#16a34a' }}>
@@ -217,7 +250,7 @@ export default function MembershipPage() {
             </div>
           ) : null}
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontWeight: 600 }}>Código SMS</span>
+            <span style={{ fontWeight: 600 }}>Código WhatsApp</span>
             <input
               type="text"
               value={code}
@@ -298,7 +331,7 @@ export default function MembershipPage() {
             <textarea
               value={footerNote}
               onChange={(e) => setFooterNote(e.target.value)}
-              placeholder="Ej. \"Oferta válida hasta agotar existencias\""
+              placeholder={'Ej. "Oferta válida hasta agotar existencias"'}
               rows={3}
               style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid #cbd5e1', resize: 'vertical' }}
               disabled={loading}
@@ -334,16 +367,47 @@ export default function MembershipPage() {
             <div><strong>Nombre en PDF:</strong> {displayName}</div>
             {footerNote ? <div><strong>Nota de pie:</strong> {footerNote}</div> : null}
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setStep('details');
-              setSuccessMessage('Puedes ajustar tus datos y volver a guardar si lo necesitas.');
-            }}
-            style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #34d399', background: '#fff', color: '#065f46', fontWeight: 600, cursor: 'pointer' }}
-          >
-            Editar configuración
-          </button>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  window.location.href = '/ui';
+                } catch {
+                  router.push('/ui');
+                }
+              }}
+              style={{
+                padding: '10px 14px',
+                borderRadius: 8,
+                border: 'none',
+                background: '#2563eb',
+                color: '#fff',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Ir al panel del vendedor
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setStep('details');
+                setSuccessMessage('Puedes ajustar tus datos y volver a guardar si lo necesitas.');
+              }}
+              style={{
+                padding: '10px 14px',
+                borderRadius: 8,
+                border: '1px solid #34d399',
+                background: '#fff',
+                color: '#065f46',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Editar configuración
+            </button>
+          </div>
         </div>
       ) : null}
     </section>

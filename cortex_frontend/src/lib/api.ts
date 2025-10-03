@@ -47,6 +47,10 @@ function withAuth(init: RequestInit = {}): RequestInit {
       const adminUserId = window.localStorage.getItem('CORTEX_SUPERADMIN_USER_ID');
       if (adminUserId) headers.set('x-admin-user-id', adminUserId);
     } catch {}
+    try {
+      const membershipSession = window.localStorage.getItem('CORTEX_MEMBERSHIP_SESSION');
+      if (membershipSession) headers.set('x-membership-session', membershipSession);
+    } catch {}
   }
   return { ...init, headers };
 }
@@ -58,17 +62,59 @@ export const endpoints = {
   seasonality: (params?: { segment?: string; year?: number }) => apiGet('/seasonality', params),
   options: (params?: Record<string, any>) => apiGet('/options', params),
   catalog: (params?: Record<string, any>) => apiGet('/catalog', params),
-  compare: (body: Record<string, any>) => {
+  compare: async (body: Record<string, any>) => {
     const payload = injectDealerContext(body || {});
-    return fetch(buildUrl('/compare'), withAuth({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })).then(r=>r.json());
+    const res = await fetch(buildUrl('/compare'), withAuth({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }));
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch (err) {
+      data = null;
+    }
+    if (!res.ok) {
+      const message = data?.message || data?.detail || data?.error || `Error ${res.status}`;
+      const error = new Error(String(message));
+      (error as any).status = res.status;
+      (error as any).data = data;
+      throw error;
+    }
+    return data;
   },
-  autoCompetitors: (body: Record<string, any>) => {
+  autoCompetitors: async (body: Record<string, any>) => {
     const payload = injectDealerContext(body || {});
-    return fetch(buildUrl('/auto_competitors'), withAuth({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })).then(r=>r.json());
+    const res = await fetch(buildUrl('/auto_competitors'), withAuth({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }));
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch (err) {
+      data = null;
+    }
+    if (!res.ok) {
+      const message = data?.message || data?.detail || data?.error || `Error ${res.status}`;
+      const error = new Error(String(message));
+      (error as any).status = res.status;
+      (error as any).data = data;
+      throw error;
+    }
+    return data;
   },
-  insights: (body: Record<string, any>) => {
+  insights: async (body: Record<string, any>) => {
     const payload = injectDealerContext(body || {});
-    return fetch(buildUrl('/insights'), withAuth({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })).then(r=>r.json());
+    const res = await fetch(buildUrl('/insights'), withAuth({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }));
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch (err) {
+      data = null;
+    }
+    if (!res.ok) {
+      const message = data?.message || data?.detail || data?.error || `Error ${res.status}`;
+      const error = new Error(String(message));
+      (error as any).status = res.status;
+      (error as any).data = data;
+      throw error;
+    }
+    return data;
   },
   versionDiffs: (params?: Record<string, any>) => apiGet('/version_diffs', params),
   adminOverview: () => apiGet('/admin/overview'),
@@ -146,6 +192,18 @@ export const endpoints = {
       }
       return res.json();
     }),
+  adminCreateOrgUser: (orgId: string, body: Record<string, any>) =>
+    fetch(buildUrl(`/admin/organizations/${orgId}/users`), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
   adminDealerBillingEvents: (dealerId: string, params?: Record<string, any>) =>
     apiGet(`/admin/dealers/${dealerId}/billing-events`, params),
   adminCreateDealerBillingEvent: (dealerId: string, body: Record<string, any>) =>
@@ -184,6 +242,18 @@ export const endpoints = {
       }
       return res.json();
     }),
+  adminUpdateUser: (userId: string, body: Record<string, any>) =>
+    fetch(buildUrl(`/admin/users/${userId}`), withAuth({
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
   adminUpdateOrganizationStatus: (orgId: string, body: Record<string, any>) =>
     fetch(buildUrl(`/admin/organizations/${orgId}/status`), withAuth({
       method: 'PATCH',
@@ -198,6 +268,27 @@ export const endpoints = {
     }),
   adminDeleteOrganization: (orgId: string) =>
     fetch(buildUrl(`/admin/organizations/${orgId}`), withAuth({ method: 'DELETE' })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return true;
+    }),
+  dealerTemplates: () => apiGet('/dealer/templates'),
+  dealerSaveTemplate: (body: Record<string, any>) =>
+    fetch(buildUrl('/dealer/templates'), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
+  dealerDeleteTemplate: (templateId: string) =>
+    fetch(buildUrl(`/dealer/templates/${templateId}`), withAuth({ method: 'DELETE' })).then(async (res) => {
       if (!res.ok) {
         const msg = await res.text();
         throw new Error(msg || `Error ${res.status}`);
@@ -242,4 +333,49 @@ export const endpoints = {
       }
       return res.json();
     }),
+  membershipCheckout: async () => {
+    if (typeof window === 'undefined') throw new Error('Disponible solo en el navegador');
+    const session = window.localStorage.getItem('CORTEX_MEMBERSHIP_SESSION');
+    if (!session) throw new Error('No hay una sesión de membresía activa.');
+    const res = await fetch(buildUrl('/membership/checkout'), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session }),
+    }));
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch (err) {
+      data = null;
+    }
+    if (!res.ok) {
+      const message = data?.message || data?.detail || data?.error || `Error ${res.status}`;
+      const error = new Error(String(message));
+      (error as any).status = res.status;
+      (error as any).data = data;
+      throw error;
+    }
+    return data;
+  },
+  membershipConfirmCheckout: async (payload: { session: string; checkout_session_id: string }) => {
+    const res = await fetch(buildUrl('/membership/checkout/confirm'), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }));
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch (err) {
+      data = null;
+    }
+    if (!res.ok) {
+      const message = data?.message || data?.detail || data?.error || `Error ${res.status}`;
+      const error = new Error(String(message));
+      (error as any).status = res.status;
+      (error as any).data = data;
+      throw error;
+    }
+    return data;
+  },
 };

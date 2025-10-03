@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Literal, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Literal, Union, Sequence
+import logging
 from decimal import Decimal
 from collections import deque
 import os
@@ -23,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 import re
 from urllib.request import urlopen
 from urllib.error import URLError
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import unicodedata
 import secrets
 import string
@@ -102,6 +104,34 @@ SUPABASE_URL = os.getenv("SUPABASE_URL") or ""
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or ""
 _SUPABASE_CONN_KW = {"row_factory": dict_row}
 
+EVOLUTION_API_BASE_URL = os.getenv("EVOLUTION_API_BASE_URL") or ""
+EVOLUTION_API_TOKEN = os.getenv("EVOLUTION_API_TOKEN") or os.getenv("EVOLUTION_API_KEY") or ""
+EVOLUTION_API_SESSION = os.getenv("EVOLUTION_API_SESSION") or os.getenv("EVOLUTION_API_INSTANCE") or ""
+EVOLUTION_API_SEND_TEXT_ENDPOINT = os.getenv("EVOLUTION_API_SEND_TEXT_ENDPOINT") or ""
+EVOLUTION_API_NUMBER_TEMPLATE = os.getenv("EVOLUTION_API_NUMBER_TEMPLATE") or ""
+EVOLUTION_API_DEFAULT_COUNTRY_CODE = os.getenv("EVOLUTION_API_DEFAULT_COUNTRY_CODE") or ""
+EVOLUTION_API_MESSAGE_TEMPLATE = os.getenv("EVOLUTION_API_MESSAGE_TEMPLATE") or ""
+EVOLUTION_API_APIKEY = os.getenv("EVOLUTION_API_APIKEY") or EVOLUTION_API_TOKEN
+try:
+    _EVOLUTION_API_TIMEOUT = float(os.getenv("EVOLUTION_API_TIMEOUT", "15"))
+except ValueError:
+    _EVOLUTION_API_TIMEOUT = 15.0
+
+EVOLUTION_API_FORCE_CREATE = (os.getenv("EVOLUTION_API_FORCE_CREATE") or "1").lower() not in {"0", "false", "no"}
+
+try:
+    _MEMBERSHIP_FREE_LIMIT = max(0, int(os.getenv("MEMBERSHIP_FREE_SEARCH_LIMIT", "5") or "5"))
+except ValueError:
+    _MEMBERSHIP_FREE_LIMIT = 5
+
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY") or ""
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID") or ""
+STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL") or ""
+STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL") or ""
+STRIPE_CHECKOUT_MODE = os.getenv("STRIPE_CHECKOUT_MODE") or "payment"
+
+logger = logging.getLogger(__name__)
+
 MEMBERSHIP_DEBUG_CODES = (os.getenv("MEMBERSHIP_DEBUG_CODES") or "1").lower() not in {"0", "false", "no"}
 _MEMBERSHIP_OTP_TTL = timedelta(minutes=5)
 _MEMBERSHIP_SESSION_TTL = timedelta(hours=12)
@@ -168,31 +198,109 @@ def _create_membership_session(phone: str) -> str:
         _MEMBERSHIP_SESSIONS.pop(sid, None)
         _MEMBERSHIP_PROFILES.pop(sid, None)
 
+    membership = _ensure_self_membership(phone)
+    expires_at = now + _MEMBERSHIP_SESSION_TTL
     session = secrets.token_urlsafe(24)
-    _MEMBERSHIP_SESSIONS[session] = {
+
+    try:
+        _record_self_membership_session(str(membership.get("id")), session, expires_at)
+        _self_membership_update(
+            str(membership.get("id")),
+            {
+                "last_session_token": session,
+                "last_session_at": now,
+            },
+        )
+    except Exception:
+        pass
+
+    session_payload: Dict[str, Any] = {
         "phone": phone,
-        "created_at": now.isoformat(),
-        "expires_at": now + _MEMBERSHIP_SESSION_TTL,
+        "created_at": now,
+        "expires_at": expires_at,
+        "membership_id": str(membership.get("id")),
+        "search_count": int(membership.get("search_count") or 0),
+        "free_limit": int(membership.get("free_limit") or _MEMBERSHIP_FREE_LIMIT),
+        "paid": bool(membership.get("paid")),
+        "status": str(membership.get("status") or "trial"),
+        "brand_slug": membership.get("brand_slug"),
+        "brand_label": membership.get("brand_label"),
+        "display_name": membership.get("display_name"),
+        "footer_note": membership.get("footer_note"),
     }
+    _MEMBERSHIP_SESSIONS[session] = session_payload
+
+    if session_payload.get("brand_slug") or session_payload.get("display_name"):
+        _MEMBERSHIP_PROFILES[session] = {
+            "phone": phone,
+            "brand": session_payload.get("brand_slug") or session_payload.get("brand_label"),
+            "pdf_display_name": session_payload.get("display_name"),
+            "pdf_footer_note": session_payload.get("footer_note"),
+        }
+
     return session
 
 
 def _require_membership_session(session: str) -> Dict[str, Any]:
     data = _MEMBERSHIP_SESSIONS.get(session)
     if not data:
-        raise HTTPException(status_code=401, detail="Sesión inválida o expirada")
+        record = _fetch_self_membership_session(session)
+        if not record:
+            raise HTTPException(status_code=401, detail="Sesión inválida o expirada")
+        data = {
+            "phone": record.get("phone"),
+            "created_at": record.get("issued_at") or datetime.now(timezone.utc),
+            "expires_at": record.get("expires_at"),
+            "membership_id": str(record.get("membership_id")),
+            "search_count": int(record.get("search_count") or 0),
+            "free_limit": int(record.get("free_limit") or _MEMBERSHIP_FREE_LIMIT),
+            "paid": bool(record.get("paid")),
+            "status": str(record.get("status") or "trial"),
+            "brand_slug": record.get("brand_slug"),
+            "brand_label": record.get("brand_label"),
+            "display_name": record.get("display_name"),
+            "footer_note": record.get("footer_note"),
+        }
+        _MEMBERSHIP_SESSIONS[session] = data
+        if data.get("brand_slug") or data.get("display_name"):
+            _MEMBERSHIP_PROFILES[session] = {
+                "phone": record.get("phone"),
+                "brand": data.get("brand_slug") or data.get("brand_label"),
+                "pdf_display_name": data.get("display_name"),
+                "pdf_footer_note": data.get("footer_note"),
+            }
+        revoked_at = record.get("revoked_at")
+        if revoked_at is not None:
+            _MEMBERSHIP_SESSIONS.pop(session, None)
+            _MEMBERSHIP_PROFILES.pop(session, None)
+            raise HTTPException(status_code=401, detail="Sesión de membresía revocada")
+
     expires_at = data.get("expires_at")
-    if isinstance(expires_at, datetime):
-        expires = expires_at
-    else:
+    if not isinstance(expires_at, datetime):
         try:
             expires = datetime.fromisoformat(str(expires_at))
         except Exception:
             expires = datetime.now(timezone.utc)
-    if expires <= datetime.now(timezone.utc):
+    else:
+        expires = expires_at
+
+    now = datetime.now(timezone.utc)
+    if expires <= now:
         _MEMBERSHIP_SESSIONS.pop(session, None)
         _MEMBERSHIP_PROFILES.pop(session, None)
+        _revoke_self_membership_session(session)
         raise HTTPException(status_code=401, detail="Sesión de membresía expirada")
+
+    status = str(data.get("status") or "trial").lower()
+    if status == "blocked":
+        raise HTTPException(status_code=403, detail={"error": "membership_blocked", "message": "La membresía está bloqueada."})
+
+    if "search_count" not in data:
+        data["search_count"] = 0
+    if "free_limit" not in data:
+        data["free_limit"] = _MEMBERSHIP_FREE_LIMIT
+    if "paid" not in data:
+        data["paid"] = False
     return data
 
 
@@ -300,6 +408,276 @@ def _update_supabase_user_metadata(user_id: str, user_metadata: Dict[str, Any]) 
         raise HTTPException(status_code=resp.status_code, detail=detail)
 
 
+def _update_supabase_allowed_brands(user_id: str, brand_ids: Sequence[str]) -> None:
+    if not SUPABASE_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_URL no configurado")
+    endpoint = SUPABASE_URL.rstrip("/") + f"/auth/v1/admin/users/{user_id}"
+    payload = {"app_metadata": {"allowed_brands": list(brand_ids)}}
+    try:
+        resp = requests.put(endpoint, headers=_supabase_admin_headers(), json=payload, timeout=20)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"No se pudo actualizar las marcas autorizadas en Auth: {exc}")
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json()
+        except Exception:  # noqa: BLE001
+            detail = resp.text or resp.reason
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+
+def _ensure_self_membership(phone: str) -> Dict[str, Any]:
+    normalized = str(phone or "").strip()
+    if not normalized:
+        raise ValueError("Número de teléfono vacío")
+    row: Optional[Mapping[str, Any]] = None
+    try:
+        logger.warning("[membership] ensuring membership for %s using DSN %s", normalized, (SUPABASE_DB_URL or '')[:64])
+        with _open_supabase_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into cortex.self_memberships (phone, free_limit)
+                    values (%s, %s)
+                    on conflict (phone) do nothing
+                    returning *
+                    """,
+                    (normalized, _MEMBERSHIP_FREE_LIMIT),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    cur.execute(
+                        "select * from cortex.self_memberships where phone = %s",
+                        (normalized,),
+                    )
+                    row = cur.fetchone()
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error("[membership] DB ensure failed for %s using %s: %s", normalized, SUPABASE_DB_URL, exc)
+        raise HTTPException(status_code=500, detail=f"No se pudo asegurar la membresía: {exc}") from exc
+    if row is None:
+        raise HTTPException(status_code=500, detail="No se pudo crear la membresía self-service")
+    membership = dict(row)
+    membership.setdefault("free_limit", _MEMBERSHIP_FREE_LIMIT)
+    membership.setdefault("search_count", 0)
+    return membership
+
+
+def _self_membership_update(membership_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not updates:
+        return None
+    columns = list(updates.keys())
+    set_clause = ", ".join(f"{col} = %s" for col in columns)
+    params = [updates[col] for col in columns]
+    params.append(membership_id)
+    try:
+        with _open_supabase_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"update cortex.self_memberships set {set_clause} where id = %s returning *",
+                    params,
+                )
+                row = cur.fetchone()
+            conn.commit()
+    except Exception:
+        return None
+    return dict(row) if row else None
+
+
+def _record_self_membership_session(
+    membership_id: str,
+    session_token: str,
+    expires_at: datetime,
+    *,
+    user_agent: Optional[str] = None,
+    ip_address: Optional[str] = None,
+) -> None:
+    try:
+        with _open_supabase_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into cortex.self_membership_sessions (
+                        membership_id, session_token, expires_at, user_agent, ip_address
+                    ) values (%s, %s, %s, %s, %s)
+                    on conflict (session_token) do update
+                    set expires_at = excluded.expires_at,
+                        revoked_at = null,
+                        user_agent = excluded.user_agent,
+                        ip_address = excluded.ip_address,
+                        last_used_at = now()
+                    """,
+                    (membership_id, session_token, expires_at, user_agent, ip_address),
+                )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _fetch_self_membership_session(session_token: str) -> Optional[Dict[str, Any]]:
+    try:
+        with _open_supabase_conn() as conn:
+            row = conn.execute(
+                """
+                select
+                    s.session_token,
+                    s.membership_id,
+                    s.issued_at,
+                    s.expires_at,
+                    s.last_used_at,
+                    s.revoked_at,
+                    m.phone,
+                    m.brand_slug,
+                    m.brand_label,
+                    m.display_name,
+                    m.footer_note,
+                    m.status,
+                    m.search_count,
+                    m.free_limit,
+                    m.paid,
+                    m.paid_at,
+                    m.metadata
+                from cortex.self_membership_sessions s
+                join cortex.self_memberships m on m.id = s.membership_id
+                where s.session_token = %s
+                """,
+                (session_token,),
+            ).fetchone()
+    except Exception:
+        return None
+    return dict(row) if row else None
+
+
+def _increment_self_membership_usage(membership_id: str, session_token: Optional[str] = None) -> None:
+    try:
+        with _open_supabase_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "update cortex.self_memberships set search_count = coalesce(search_count, 0) + 1 where id = %s",
+                    (membership_id,),
+                )
+                if session_token:
+                    cur.execute(
+                        "update cortex.self_membership_sessions set last_used_at = now() where session_token = %s",
+                        (session_token,),
+                    )
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _revoke_self_membership_session(session_token: str) -> None:
+    try:
+        with _open_supabase_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "update cortex.self_membership_sessions set revoked_at = now() where session_token = %s",
+                    (session_token,),
+                )
+            conn.commit()
+    except Exception:
+        pass
+
+def _evolution_api_configured() -> bool:
+    if EVOLUTION_API_SEND_TEXT_ENDPOINT:
+        return bool(EVOLUTION_API_BASE_URL and EVOLUTION_API_TOKEN)
+    return bool(EVOLUTION_API_BASE_URL and EVOLUTION_API_TOKEN and EVOLUTION_API_SESSION)
+
+
+def _format_phone_for_evolution(phone: str) -> str:
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    if not digits:
+        raise ValueError("Número de teléfono inválido para Evolution API")
+    if EVOLUTION_API_NUMBER_TEMPLATE:
+        return EVOLUTION_API_NUMBER_TEMPLATE.replace("{number}", digits)
+    code = EVOLUTION_API_DEFAULT_COUNTRY_CODE.strip()
+    if code and not digits.startswith(code):
+        digits = f"{code}{digits}"
+    return digits
+
+
+def _build_evolution_send_url() -> str:
+    base = EVOLUTION_API_BASE_URL.strip()
+    if not base:
+        raise RuntimeError("EVOLUTION_API_BASE_URL no configurado")
+    endpoint = EVOLUTION_API_SEND_TEXT_ENDPOINT.strip()
+    if endpoint:
+        if endpoint.startswith("http://") or endpoint.startswith("https://"):
+            return endpoint
+        return f"{base.rstrip('/')}/{endpoint.lstrip('/')}"
+    session = EVOLUTION_API_SESSION.strip()
+    if not session:
+        raise RuntimeError("EVOLUTION_API_SESSION no configurado")
+    return f"{base.rstrip('/')}/message/sendText/{session}"
+
+
+def _send_membership_otp_via_evolution(phone: str, code: str) -> None:
+    if not _evolution_api_configured():
+        raise RuntimeError("Evolution API no configurado")
+    number = _format_phone_for_evolution(phone)
+    expires_minutes = max(1, int(_MEMBERSHIP_OTP_TTL.total_seconds() // 60))
+    template = EVOLUTION_API_MESSAGE_TEMPLATE or (
+        "Tu código de verificación de Cortex Automotriz es {code}. Expira en {minutes} minutos."
+    )
+    message = template.format(code=code, minutes=expires_minutes)
+    url = _build_evolution_send_url()
+    headers = {
+        "Authorization": f"Bearer {EVOLUTION_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    if EVOLUTION_API_APIKEY:
+        headers.setdefault("apikey", EVOLUTION_API_APIKEY)
+    payload = {"number": number, "text": message}
+    if EVOLUTION_API_FORCE_CREATE:
+        payload["create"] = True
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=_EVOLUTION_API_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Error al invocar Evolution API: {exc}") from exc
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = resp.text or resp.reason
+        raise RuntimeError(f"Evolution API respondió {resp.status_code}: {detail}")
+
+
+def _sync_org_allowed_brands(conn: psycopg.Connection, org_id: str) -> None:
+    brand_rows = conn.execute(
+        "select id from cortex.brands where organization_id = %s::uuid",
+        (org_id,),
+    ).fetchall()
+    allowed_brands: List[str] = []
+    for row in brand_rows:
+        if isinstance(row, Mapping):
+            value = row.get("id")
+        else:
+            value = row[0]
+        if not value:
+            continue
+        allowed_brands.append(str(value))
+
+    user_rows = conn.execute(
+        """
+        select id
+        from cortex.app_users
+        where organization_id = %s::uuid
+          and role in ('superadmin_oem', 'oem_user')
+        """,
+        (org_id,),
+    ).fetchall()
+
+    for row in user_rows:
+        if isinstance(row, Mapping):
+            user_id = row.get("id")
+        else:
+            user_id = row[0]
+        if not user_id:
+            continue
+        _update_supabase_allowed_brands(str(user_id), allowed_brands)
+
+
 def _slugify(text: str) -> str:
     import unicodedata as _ud
     import re as _re
@@ -361,6 +739,94 @@ def _extract_dealer_id(request: Request, payload: Optional[Mapping[str, Any]] = 
             if dealer_id:
                 return dealer_id
     return None
+
+
+def _extract_membership_session(request: Optional[Request], payload: Optional[Mapping[str, Any]] = None) -> Optional[str]:
+    if request is not None:
+        token = str(request.headers.get("x-membership-session") or "").strip()
+        if token:
+            return token
+        try:
+            query_token = request.query_params.get("membership_session")  # type: ignore[attr-defined]
+        except Exception:
+            query_token = None
+        if query_token:
+            token = str(query_token).strip()
+            if token:
+                return token
+    if payload and isinstance(payload, Mapping):
+        raw = payload.get("membership_session")
+        if isinstance(raw, str):
+            token = raw.strip()
+            if token:
+                return token
+    return None
+
+
+def _membership_usage_precheck(
+    request: Optional[Request],
+    payload: Optional[Mapping[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    if request is None:
+        return None
+    session_token = _extract_membership_session(request, payload)
+    if not session_token:
+        return None
+    try:
+        session_data = _require_membership_session(session_token)
+    except HTTPException as exc:
+        detail = {
+            "error": "membership_session_invalid",
+            "message": str(exc.detail),
+        }
+        raise HTTPException(status_code=401, detail=detail) from exc
+
+    limit = session_data.get("free_limit", _MEMBERSHIP_FREE_LIMIT)
+    paid = bool(session_data.get("paid"))
+    if not paid and isinstance(limit, int) and limit >= 0:
+        used = int(session_data.get("search_count", 0))
+        if used >= limit:
+            detail = {
+                "error": "membership_payment_required",
+                "message": f"Alcanzaste el límite gratuito de {limit} búsquedas.",
+                "limit": limit,
+                "used": used,
+                "membership_session": session_token,
+                "paid": False,
+                "checkout_available": bool(STRIPE_SECRET_KEY and STRIPE_PRICE_ID and STRIPE_SUCCESS_URL),
+            }
+            if STRIPE_SECRET_KEY and STRIPE_PRICE_ID and STRIPE_SUCCESS_URL:
+                detail["checkout_endpoint"] = "/membership/checkout"
+            raise HTTPException(status_code=402, detail=detail)
+
+    return {"token": session_token, "data": session_data}
+
+
+def _membership_usage_commit(ctx: Optional[Dict[str, Any]], usage_key: str) -> None:
+    if not ctx:
+        return
+    data = ctx.get("data")
+    if not isinstance(data, dict):
+        return
+    try:
+        data["search_count"] = int(data.get("search_count", 0)) + 1
+    except Exception:
+        data["search_count"] = 1
+    history = data.setdefault("usage_history", [])
+    if isinstance(history, list):
+        try:
+            history.append({
+                "usage": usage_key,
+                "at": datetime.now(timezone.utc).isoformat(),
+            })
+            if len(history) > 100:
+                del history[:-100]
+        except Exception:
+            pass
+    membership_id = data.get("membership_id")
+    token = ctx.get("token") if isinstance(ctx, dict) else None
+    if membership_id:
+        _increment_self_membership_usage(str(membership_id), token if isinstance(token, str) else None)
 
 
 def _enforce_dealer_access(dealer_id: Optional[str]) -> None:
@@ -959,6 +1425,16 @@ class MembershipProfileInput(BaseModel):
     dealer_admin: Optional[bool] = None
 
 
+class MembershipCheckoutRequest(BaseModel):
+    session: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class MembershipCheckoutConfirm(BaseModel):
+    session: str
+    checkout_session_id: str
+
+
 class DealerUserCreate(BaseModel):
     email: EmailStr
     name: Optional[str] = None
@@ -1249,23 +1725,326 @@ def ensure_pillars(row: Dict[str, _Any]) -> Dict[str, _Any]:
         cur = _to_num_shared(out.get(col))
         if cur is None or cur <= 0:
             out[col] = round(max(0.0, min(100.0, val)), 1)
-    adas = sum(_to01_shared(out.get(k)) for k in ("alerta_colision","sensor_punto_ciego","camara_360","asistente_estac_frontal","asistente_estac_trasero"))
-    _maybe("equip_p_adas", (adas/5.0)*100.0)
-    safety = sum(_to01_shared(out.get(k)) for k in ("abs","control_estabilidad","bolsas_cortina_todas_filas","bolsas_aire_delanteras_conductor","bolsas_aire_delanteras_pasajero"))
-    _maybe("equip_p_safety", (safety/5.0)*100.0)
-    comfort = sum(_to01_shared(out.get(k)) for k in ("llave_inteligente","aire_acondicionado","apertura_remota_maletero","cierre_automatico_maletero","ventanas_electricas","seguros_electricos"))
-    _maybe("equip_p_comfort", (comfort/6.0)*100.0)
-    info = sum(_to01_shared(out.get(k)) for k in ("tiene_pantalla_tactil","android_auto","apple_carplay","bocinas"))
-    _maybe("equip_p_infotainment", (info/4.0)*100.0)
+
+    def _flag(*names: str, mode: str = "bool") -> int:
+        for name in names:
+            if name not in out:
+                continue
+            val = out.get(name)
+            if mode == "presence":
+                try:
+                    if val is None:
+                        continue
+                    s = str(val).strip().lower()
+                    if s and s not in {"-", "na", "n/a", "no disponible", "none", "null"}:
+                        return 1
+                except Exception:
+                    return 0
+            else:
+                if _to01_shared(val) == 1:
+                    return 1
+        return 0
+
     try:
-        dw = str(out.get("driven_wheels") or out.get("traccion_original") or "").lower()
+        drivetrain_raw = str(out.get("drivetrain") or out.get("driven_wheels") or "").lower()
     except Exception:
-        dw = ""
-    trac = _to01_shared(out.get("control_electrico_de_traccion")) or (1 if ("4x4" in dw or "awd" in dw or "4wd" in dw) else 0)
-    _maybe("equip_p_traction", trac*100.0)
-    util = sum(_to01_shared(out.get(k)) for k in ("rieles_techo","enchufe_12v","preparacion_remolque","enganche_remolque","tercera_fila"))
-    _maybe("equip_p_utility", (util/5.0)*100.0)
+        drivetrain_raw = ""
+
+    adas = (
+        _flag("alerta_colision", "adas_forward_collision_warning")
+        + _flag("sensor_punto_ciego", "adas_blind_spot_warning")
+        + _flag("camara_360", "adas_surround_view")
+        + _flag("asistente_estac_frontal", "adas_parking_sensors_front")
+        + _flag("asistente_estac_trasero", "adas_parking_sensors_rear")
+    )
+    _maybe("equip_p_adas", (adas / 5.0) * 100.0)
+
+    safety = (
+        _flag("abs", "safety_abs")
+        + _flag("control_estabilidad", "safety_esc")
+        + _flag("bolsas_cortina_todas_filas", "airbags_curtain_row1", "airbags_curtain_row2")
+        + _flag("bolsas_aire_delanteras_conductor", "airbags_front_driver")
+        + _flag("bolsas_aire_delanteras_pasajero", "airbags_front_passenger")
+    )
+    _maybe("equip_p_safety", (safety / 5.0) * 100.0)
+
+    comfort = (
+        _flag("llave_inteligente", "security_alarm")
+        + max(_flag("aire_acondicionado"), 1 if _to_num_shared(out.get("hvac_zones")) and _to_num_shared(out.get("hvac_zones")) > 0 else 0)
+        + _flag("apertura_remota_maletero", "comfort_power_tailgate")
+        + _flag("cierre_automatico_maletero", "comfort_auto_door_close")
+        + _flag("ventanas_electricas")
+        + _flag("seguros_electricos", "comfort_memory_settings", "comfort_memory_mirrors")
+    )
+    _maybe("equip_p_comfort", (comfort / 6.0) * 100.0)
+
+    info = (
+        _flag("tiene_pantalla_tactil", "infotainment_touchscreen")
+        + _flag("android_auto", "infotainment_android_auto", "infotainment_android_auto_wireless")
+        + _flag("apple_carplay", "infotainment_carplay", "infotainment_carplay_wireless")
+        + _flag("bocinas", "infotainment_audio_speakers")
+    )
+    _maybe("equip_p_infotainment", (info / 4.0) * 100.0)
+
+    traction = _flag("control_electrico_de_traccion", "safety_traction_control")
+    if not traction and drivetrain_raw:
+        if any(token in drivetrain_raw for token in ("4x4", "awd", "4wd")):
+            traction = 1
+    _maybe("equip_p_traction", traction * 100.0)
+
+    utility = (
+        _flag("rieles_techo")
+        + (1 if _to_num_shared(out.get("power_12v_count")) and _to_num_shared(out.get("power_12v_count")) > 0 else 0)
+        + _flag("preparacion_remolque", "enganche_remolque", "asistente_remolque")
+        + _flag("tercera_fila")
+        + (1 if _to_num_shared(out.get("power_110v_count")) and _to_num_shared(out.get("power_110v_count")) > 0 else 0)
+    )
+    _maybe("equip_p_utility", (utility / 5.0) * 100.0)
     return out
+
+
+_AUTORADAR_JSON_ENV = "AUTORADAR_JSON_PATH"
+_AUTORADAR_JSON_CACHE: Dict[str, Any] = {"path": None, "mtime": None, "df": None}
+_CATALOG_SOURCE: Optional[str] = None
+
+
+def _slug_column_name(name: str) -> str:
+    s = str(name or "").strip().lower()
+    try:
+        s = unicodedata.normalize("NFD", s)
+        s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    except Exception:
+        pass
+    out = []
+    for ch in s:
+        if ch.isalnum():
+            out.append(ch)
+        else:
+            out.append("_")
+    s = "".join(out)
+    while "__" in s:
+        s = s.replace("__", "_")
+    return s.strip("_")
+
+
+def _autoradar_json_path() -> Path:
+    env = os.getenv(_AUTORADAR_JSON_ENV)
+    if env:
+        candidate = Path(env)
+        if not candidate.is_absolute():
+            candidate = ROOT / candidate
+    else:
+        candidate = ROOT.parent / "Strapi" / "data" / "autoradar" / "normalized.jato.json"
+    return candidate
+
+
+def _load_autoradar_dataframe() -> "pd.DataFrame":  # type: ignore[name-defined]
+    if pd is None:
+        raise HTTPException(status_code=500, detail="pandas not available in environment")
+    path = _autoradar_json_path()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Autoradar catalog JSON not found: {path}")
+    mtime = path.stat().st_mtime
+    cache = _AUTORADAR_JSON_CACHE
+    cached_df = cache.get("df") if cache.get("mtime") == mtime else None
+    if cached_df is not None:
+        return cached_df.copy()
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Could not parse Autoradar catalog JSON: {exc}") from exc
+
+    vehicles = payload.get("vehicles", []) if isinstance(payload, dict) else []
+    rows: list[Dict[str, Any]] = []
+    for entry in vehicles:
+        if not isinstance(entry, dict):
+            continue
+        row = dict(entry)
+        manufacturer = row.get("manufacturer")
+        if row.get("make") is None:
+            if isinstance(manufacturer, dict):
+                row["make"] = manufacturer.get("name")
+        model_obj = row.get("model")
+        if isinstance(model_obj, dict):
+            row.setdefault("model", model_obj.get("name"))
+        version_obj = row.get("version")
+        if isinstance(version_obj, dict):
+            row.setdefault("version", version_obj.get("name"))
+            if row.get("year") is None and version_obj.get("year") is not None:
+                row["year"] = version_obj.get("year")
+
+        row.setdefault("vehicle_id", row.get("uid"))
+        row.setdefault("ano", row.get("year"))
+        row.setdefault("msrp", row.get("price_msrp"))
+        row.setdefault("precio_transaccion", row.get("price_transaction"))
+        row.setdefault("categoria_combustible_final", row.get("fuel_type"))
+        row.setdefault("tipo_de_combustible_original", row.get("fuel_type_detail"))
+        row.setdefault("combinado_kml", row.get("fuel_combined_kml"))
+        row.setdefault("ciudad_kml", row.get("fuel_city_kml"))
+        row.setdefault("carretera_kml", row.get("fuel_highway_kml"))
+        row.setdefault("caballos_fuerza", row.get("engine_power_hp"))
+        row.setdefault("longitud_mm", row.get("length_mm"))
+        row.setdefault("traccion", row.get("drivetrain"))
+        row.setdefault("transmision", row.get("transmission"))
+        if not row.get("images_default"):
+            row["images_default"] = row.get("image_url") or row.get("photo_path")
+
+        # Legacy column aliases for downstream compatibility
+        if "infotainment_android_auto" in row:
+            row.setdefault("android_auto", row.get("infotainment_android_auto"))
+        if "infotainment_android_auto_wireless" in row:
+            row.setdefault("android_auto_wireless", row.get("infotainment_android_auto_wireless"))
+        if "infotainment_carplay" in row:
+            row.setdefault("apple_carplay", row.get("infotainment_carplay"))
+        if "infotainment_carplay_wireless" in row:
+            row.setdefault("apple_carplay_wireless", row.get("infotainment_carplay_wireless"))
+        if "infotainment_touchscreen" in row:
+            row.setdefault("tiene_pantalla_tactil", row.get("infotainment_touchscreen"))
+        if "infotainment_audio_speakers" in row:
+            row.setdefault("bocinas", row.get("infotainment_audio_speakers"))
+        if "comfort_power_tailgate" in row:
+            row.setdefault("apertura_remota_maletero", row.get("comfort_power_tailgate"))
+        if "comfort_auto_door_close" in row:
+            row.setdefault("cierre_automatico_maletero", row.get("comfort_auto_door_close"))
+        if "comfort_wireless_charging" in row:
+            row.setdefault("carga_inalambrica", row.get("comfort_wireless_charging"))
+        if "security_alarm" in row:
+            row.setdefault("llave_inteligente", row.get("security_alarm"))
+        if "exterior_sunroof" in row:
+            row.setdefault("techo_corredizo", row.get("exterior_sunroof"))
+        if "comfort_front_seat_heating" in row:
+            row.setdefault("asientos_calefaccion_conductor", row.get("comfort_front_seat_heating"))
+            row.setdefault("asientos_calefaccion_pasajero", row.get("comfort_front_seat_heating"))
+        if "comfort_front_seat_ventilation" in row:
+            row.setdefault("asientos_ventilacion_conductor", row.get("comfort_front_seat_ventilation"))
+            row.setdefault("asientos_ventilacion_pasajero", row.get("comfort_front_seat_ventilation"))
+        if "hvac_zones" in row and row.get("aire_acondicionado") is None:
+            zones = row.get("hvac_zones")
+            try:
+                row["aire_acondicionado"] = (float(zones) if zones is not None else 0) > 0
+            except Exception:
+                row["aire_acondicionado"] = zones
+        if "adas_forward_collision_warning" in row:
+            row.setdefault("alerta_colision", row.get("adas_forward_collision_warning"))
+        if "adas_blind_spot_warning" in row:
+            row.setdefault("sensor_punto_ciego", row.get("adas_blind_spot_warning"))
+        if "adas_surround_view" in row:
+            row.setdefault("camara_360", row.get("adas_surround_view"))
+        if "adas_parking_sensors_front" in row:
+            row.setdefault("asistente_estac_frontal", row.get("adas_parking_sensors_front"))
+        if "adas_parking_sensors_rear" in row:
+            row.setdefault("asistente_estac_trasero", row.get("adas_parking_sensors_rear"))
+        if "safety_abs" in row:
+            row.setdefault("abs", row.get("safety_abs"))
+        if "safety_esc" in row:
+            row.setdefault("control_estabilidad", row.get("safety_esc"))
+        if "airbags_curtain_row1" in row and "bolsas_cortina_todas_filas" not in row:
+            try:
+                curtain = bool(row.get("airbags_curtain_row1")) or bool(row.get("airbags_curtain_row2"))
+            except Exception:
+                curtain = row.get("airbags_curtain_row1")
+            row["bolsas_cortina_todas_filas"] = curtain
+        if "airbags_front_driver" in row:
+            row.setdefault("bolsas_aire_delanteras_conductor", row.get("airbags_front_driver"))
+        if "airbags_front_passenger" in row:
+            row.setdefault("bolsas_aire_delanteras_pasajero", row.get("airbags_front_passenger"))
+        if "power_12v_count" in row and row.get("enchufe_12v") is None:
+            try:
+                row["enchufe_12v"] = (float(row.get("power_12v_count")) if row.get("power_12v_count") is not None else 0) > 0
+            except Exception:
+                row["enchufe_12v"] = row.get("power_12v_count")
+        if "drivetrain" in row:
+            row.setdefault("driven_wheels", row.get("drivetrain"))
+
+        row = ensure_pillars(row)
+        row = ensure_equip_score(row)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        df = pd.DataFrame(columns=["vehicle_id", "make", "model", "version", "ano"])
+
+    if "vehicle_id" in df.columns:
+        df["vehicle_id"] = df["vehicle_id"].fillna("").astype(str)
+    if "ano" in df.columns:
+        df["ano"] = pd.to_numeric(df["ano"], errors="coerce").astype("Int64")
+    for col in ("make", "model", "version"):
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+
+    # Merge legacy catalog data (transaction price / bonus) when JSON lacks it
+    try:
+        legacy_path = ROOT / "data" / "enriched" / "current.csv"
+        if legacy_path.exists():
+            desired_cols = {"vehicle_id", "precio_transaccion", "bono", "bono_mxn", "msrp"}
+            legacy = pd.read_csv(
+                legacy_path,
+                usecols=lambda c: c in desired_cols,
+                low_memory=False,
+            )
+            if "vehicle_id" in legacy.columns:
+                legacy["vehicle_id"] = legacy["vehicle_id"].astype(str)
+                legacy = legacy.drop_duplicates(subset=["vehicle_id"], keep="first")
+                legacy = legacy[[c for c in legacy.columns if c in desired_cols]]
+                suffix_map = {c: f"{c}__legacy" for c in legacy.columns if c != "vehicle_id"}
+                legacy.rename(columns=suffix_map, inplace=True)
+                df = df.merge(legacy, on="vehicle_id", how="left")
+
+                def _to_num(series):
+                    return pd.to_numeric(series, errors="coerce") if series is not None else series
+
+                if "precio_transaccion__legacy" in df.columns:
+                    primary = _to_num(df.get("precio_transaccion"))
+                    fallback = _to_num(df.get("precio_transaccion__legacy"))
+                    msrp_vals = _to_num(df.get("msrp"))
+                    mask = fallback.notna()
+                    if primary is not None:
+                        mask &= (primary.isna()) | (primary <= 0)
+                        if msrp_vals is not None:
+                            mask |= fallback.notna() & (primary == msrp_vals)
+                    if mask.any():
+                        df.loc[mask, "precio_transaccion"] = fallback[mask]
+                        if "price_transaction" in df.columns:
+                            df.loc[mask, "price_transaction"] = fallback[mask]
+
+                if "msrp__legacy" in df.columns:
+                    primary_msrp = _to_num(df.get("msrp"))
+                    legacy_msrp = _to_num(df.get("msrp__legacy"))
+                    mask_msrp = legacy_msrp.notna()
+                    if primary_msrp is not None:
+                        mask_msrp &= (primary_msrp.isna()) | (primary_msrp <= 0)
+                    if mask_msrp.any():
+                        df.loc[mask_msrp, "msrp"] = legacy_msrp[mask_msrp]
+                        if "price_msrp" in df.columns:
+                            df.loc[mask_msrp, "price_msrp"] = legacy_msrp[mask_msrp]
+
+                if "bono__legacy" in df.columns:
+                    legacy_bono = _to_num(df.get("bono__legacy"))
+                    if legacy_bono is not None:
+                        mask = legacy_bono.notna() & (legacy_bono > 0)
+                        if mask.any():
+                            df.loc[mask, "bono"] = legacy_bono[mask]
+                            if "bono_mxn" in df.columns:
+                                df.loc[mask, "bono_mxn"] = df.loc[mask, "bono"]
+                if "bono_mxn__legacy" in df.columns:
+                    legacy_bono_mxn = _to_num(df.get("bono_mxn__legacy"))
+                    if legacy_bono_mxn is not None:
+                        mask = legacy_bono_mxn.notna() & (legacy_bono_mxn > 0)
+                        if mask.any():
+                            df.loc[mask, "bono_mxn"] = legacy_bono_mxn[mask]
+
+                df.drop(columns=[c for c in df.columns if c.endswith("__legacy")], inplace=True)
+                if "bono" in df.columns and "bono_mxn" not in df.columns:
+                    df["bono_mxn"] = df["bono"]
+    except Exception:
+        pass
+
+    mapping = {c: _slug_column_name(c) for c in df.columns}
+    df.rename(columns=mapping, inplace=True)
+
+    cache.update({"path": str(path), "mtime": mtime, "df": df.copy()})
+    return df
 
 # --------------------------- Prompt File Loader ---------------------------
 _PROMPT_CACHE: Dict[str, Dict[str, _Any]] = {}
@@ -1468,8 +2247,10 @@ def _load_vehicle_json_entries() -> list[dict[str, Any]]:
     def _up(s: Any) -> str:
         return str(s or "").strip().upper()
 
+    autoradar_repo_new = ROOT.parent / "Strapi" / "data" / "autoradar" / "normalized.jato.json"
     autoradar_repo = ROOT.parent / "Strapi" / "data" / "autoradar" / "normalized.json"
     candidates = [
+        autoradar_repo_new,
         autoradar_repo,
         ROOT / "data" / "vehiculos-todos-augmented.normalized.json",
         ROOT / "data" / "vehiculos-todos-augmented.json",
@@ -1579,10 +2360,14 @@ def _options_paths() -> Dict[str, Path]:
             paths["versiones95"] = ver
 
     # Fallback to previous multi-source strategy
-    try:
-        paths["catalog"] = _catalog_path()
-    except Exception:
-        pass
+    json_path = _autoradar_json_path()
+    if json_path.exists():
+        paths["catalog_json"] = json_path
+    else:
+        try:
+            paths["catalog"] = _catalog_csv_path()
+        except Exception:
+            pass
     paths["processed"] = ROOT / "data" / "equipo_veh_limpio_procesado.csv"
     paths["flat"] = ROOT / "data" / "enriched" / "vehiculos_todos_flat.csv"
     p = ROOT / "data" / "vehiculos-todos-augmented.json"
@@ -2150,10 +2935,17 @@ def admin_create_brand(org_id: str, payload: AdminBrandCreate, request: Request)
                         ),
                     )
                     cur.fetchone()
+                _sync_org_allowed_brands(conn, org_id)
                 conn.commit()
             except UniqueViolation as exc:
                 conn.rollback()
                 raise HTTPException(status_code=409, detail="Slug duplicado dentro de la organización") from exc
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
 
             return _fetch_admin_org_detail(conn, org_id)
     except HTTPException:
@@ -2572,13 +3364,42 @@ def admin_list_brands(request: Request) -> Dict[str, Any]:
 @app.post("/membership/send_code")
 def membership_send_code(payload: MembershipSendCode) -> Dict[str, Any]:
     phone = _normalize_phone_number(payload.phone)
+    membership_id: Optional[str] = None
+    try:
+        membership = _ensure_self_membership(phone)
+        membership_id = str(membership.get("id")) if isinstance(membership, dict) else None
+        if membership_id:
+            _self_membership_update(membership_id, {"last_otp_at": datetime.now(timezone.utc)})
+    except Exception as exc:  # noqa: BLE001
+        membership_id = None
+        logger.error("[membership] continuing without persistence for %s: %s", phone, exc)
     code = f"{secrets.randbelow(1_000_000):06d}"
     expires = datetime.now(timezone.utc) + _MEMBERSHIP_OTP_TTL
+    send_error: Optional[Exception] = None
+    if _evolution_api_configured():
+        try:
+            _send_membership_otp_via_evolution(phone, code)
+        except Exception as exc:  # noqa: BLE001
+            send_error = exc
+            logger.warning("Evolution API OTP send failure for %s: %s", phone, exc)
+    else:
+        send_error = RuntimeError("Evolution API no configurado")
+
+    if send_error and not MEMBERSHIP_DEBUG_CODES:
+        raise HTTPException(status_code=502, detail="No se pudo enviar el código, intenta más tarde")
+
     _MEMBERSHIP_OTPS[phone] = (code, expires)
-    try:
-        print(f"[membership] OTP {code} for phone {phone} (expires {expires.isoformat()})", flush=True)
-    except Exception:
-        pass
+
+    if MEMBERSHIP_DEBUG_CODES:
+        try:
+            print(
+                f"[membership] OTP {code} for phone {phone} (expires {expires.isoformat()})"
+                + (f" [evolution_error={send_error}]" if send_error else ""),
+                flush=True,
+            )
+        except Exception:
+            pass
+
     result: Dict[str, Any] = {
         "ok": True,
         "expires_in": int(_MEMBERSHIP_OTP_TTL.total_seconds()),
@@ -2603,10 +3424,21 @@ def membership_verify_code(payload: MembershipVerifyCode) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="Código incorrecto")
     _MEMBERSHIP_OTPS.pop(phone, None)
     session = _create_membership_session(phone)
+    session_data = _require_membership_session(session)
+    membership_id = session_data.get("membership_id")
+    if membership_id:
+        try:
+            _self_membership_update(str(membership_id), {"status": "trial"})
+        except Exception:
+            pass
     return {
         "ok": True,
         "session": session,
         "expires_in": int(_MEMBERSHIP_SESSION_TTL.total_seconds()),
+        "free_limit": session_data.get("free_limit", _MEMBERSHIP_FREE_LIMIT),
+        "search_count": session_data.get("search_count", 0),
+        "paid": bool(session_data.get("paid")),
+        "status": session_data.get("status", "trial"),
     }
 
 
@@ -2690,16 +3522,188 @@ def membership_profile(payload: MembershipProfileInput) -> Dict[str, Any]:
     display_name = str(payload.pdf_display_name or "").strip()
     if not display_name:
         raise HTTPException(status_code=400, detail="Ingresa el nombre que deseas mostrar en los PDF")
+    brand_slug = _slugify(brand)
+    brand_label = brand
+    footer_note = (payload.pdf_footer_note or "").strip() or None
+    membership_id = session_data.get("membership_id")
+    if membership_id:
+        updates: Dict[str, Any] = {
+            "brand_slug": brand_slug,
+            "brand_label": brand_label,
+            "display_name": display_name,
+            "footer_note": footer_note,
+            "status": "active" if session_data.get("paid") else "trial",
+        }
+        _self_membership_update(str(membership_id), updates)
     profile = {
         "phone": session_data.get("phone"),
-        "brand": brand,
+        "brand": brand_slug,
+        "brand_label": brand_label,
         "pdf_display_name": display_name,
-        "pdf_footer_note": (payload.pdf_footer_note or "").strip() or None,
+        "pdf_footer_note": footer_note,
         "saved_at": datetime.now(timezone.utc).isoformat(),
     }
     _MEMBERSHIP_PROFILES[payload.session] = profile
     session_data["profile"] = profile
-    return {"ok": True, "profile": profile}
+    session_data["brand"] = brand_slug
+    session_data["brand_slug"] = brand_slug
+    session_data["brand_label"] = brand_label
+    session_data["pdf_display_name"] = display_name
+    session_data["pdf_footer_note"] = footer_note
+    session_data["profile_saved_at"] = profile["saved_at"]
+    session_data["status"] = "active" if session_data.get("paid") else "trial"
+    usage = {
+        "search_count": session_data.get("search_count", 0),
+        "free_limit": session_data.get("free_limit", _MEMBERSHIP_FREE_LIMIT),
+        "paid": bool(session_data.get("paid")),
+        "status": session_data.get("status", "trial"),
+    }
+    return {"ok": True, "profile": profile, "usage": usage}
+
+
+def _stripe_is_configured() -> bool:
+    return bool(STRIPE_SECRET_KEY and STRIPE_PRICE_ID and STRIPE_SUCCESS_URL)
+
+
+def _augment_stripe_url(base: str, session_token: str, *, include_placeholder: bool) -> str:
+    if not base:
+        raise HTTPException(status_code=503, detail="Stripe no está configurado")
+    parsed = urlsplit(base)
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    query: Dict[str, Any] = {}
+    for key, value in query_items:
+        query.setdefault(key, value)
+    if "membership_session" not in query:
+        query["membership_session"] = session_token
+    placeholder_present = any("{CHECKOUT_SESSION_ID}" in str(val) for val in query.values())
+    if include_placeholder and not placeholder_present:
+        query.setdefault("session_id", "{CHECKOUT_SESSION_ID}")
+    new_query = urlencode(query, doseq=True)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+
+
+def _prepare_stripe_urls(session_token: str) -> tuple[str, str]:
+    success_url = _augment_stripe_url(STRIPE_SUCCESS_URL, session_token, include_placeholder=True)
+    cancel_base = STRIPE_CANCEL_URL or STRIPE_SUCCESS_URL
+    cancel_url = _augment_stripe_url(cancel_base, session_token, include_placeholder=False)
+    return success_url, cancel_url
+
+
+@app.post("/membership/checkout")
+def membership_checkout(payload: MembershipCheckoutRequest) -> Dict[str, Any]:
+    session_token = str(payload.session or "").strip()
+    if not session_token:
+        raise HTTPException(status_code=400, detail="La sesión es obligatoria")
+    session_data = _require_membership_session(session_token)
+    if session_data.get("paid"):
+        return {"ok": True, "already_paid": True}
+    if not _stripe_is_configured():
+        raise HTTPException(status_code=503, detail="Stripe no está configurado")
+    try:
+        import stripe  # type: ignore
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="Stripe no está instalado en el servidor") from exc
+
+    success_url, cancel_url = _prepare_stripe_urls(session_token)
+    stripe.api_key = STRIPE_SECRET_KEY
+    metadata = payload.metadata.copy() if isinstance(payload.metadata, dict) else {}
+    metadata.setdefault("membership_session", session_token)
+    if session_data.get("phone"):
+        metadata.setdefault("phone", str(session_data.get("phone")))
+    try:
+        checkout_session = stripe.checkout.Session.create(
+            mode=STRIPE_CHECKOUT_MODE,
+            line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata=metadata,
+            automatic_tax={"enabled": False},
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"No se pudo iniciar el pago: {exc}") from exc
+
+    session_data["checkout_session_id"] = checkout_session.get("id")
+    session_data.setdefault("stripe_history", []).append(
+        {
+            "id": checkout_session.get("id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    membership_id = session_data.get("membership_id")
+    if membership_id:
+        _self_membership_update(
+            str(membership_id),
+            {
+                "status": "pending",
+                "last_checkout_session": checkout_session.get("id"),
+            },
+        )
+        session_data["status"] = "pending"
+    return {
+        "ok": True,
+        "checkout_url": checkout_session.get("url"),
+        "session_id": checkout_session.get("id"),
+    }
+
+
+@app.post("/membership/checkout/confirm")
+def membership_checkout_confirm(payload: MembershipCheckoutConfirm) -> Dict[str, Any]:
+    session_token = str(payload.session or "").strip()
+    checkout_session_id = str(payload.checkout_session_id or "").strip()
+    if not session_token or not checkout_session_id:
+        raise HTTPException(status_code=400, detail="La sesión y el checkout son obligatorios")
+    session_data = _require_membership_session(session_token)
+    if session_data.get("paid"):
+        return {"ok": True, "paid": True, "already_paid": True}
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe no está configurado")
+    try:
+        import stripe  # type: ignore
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="Stripe no está instalado en el servidor") from exc
+
+    stripe.api_key = STRIPE_SECRET_KEY
+    try:
+        checkout_session = stripe.checkout.Session.retrieve(checkout_session_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"No se pudo verificar el pago: {exc}") from exc
+
+    payment_status = None
+    try:
+        payment_status = checkout_session.get("payment_status")
+    except Exception:
+        payment_status = None
+    if payment_status not in {"paid", "no_payment_required"}:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "payment_not_completed",
+                "status": payment_status,
+                "message": "El pago aún no está completado en Stripe.",
+            },
+        )
+
+    session_data["paid"] = True
+    session_data["paid_at"] = datetime.now(timezone.utc).isoformat()
+    session_data["checkout_session_id"] = checkout_session_id
+    usage = {
+        "search_count": session_data.get("search_count", 0),
+        "free_limit": session_data.get("free_limit", _MEMBERSHIP_FREE_LIMIT),
+        "paid": True,
+        "status": "active",
+    }
+    membership_id = session_data.get("membership_id")
+    if membership_id:
+        _self_membership_update(
+            str(membership_id),
+            {
+                "paid": True,
+                "paid_at": datetime.now(timezone.utc),
+                "status": "active",
+            },
+        )
+    session_data["status"] = "active"
+    return {"ok": True, "paid": True, "usage": usage}
 
 
 @app.patch("/admin/brands/{brand_id}")
@@ -2741,6 +3745,7 @@ def admin_update_brand(brand_id: str, payload: AdminBrandUpdate, request: Reques
             updates: List[str] = []
             params: List[Any] = []
             metadata_updated = False
+            affected_org_ids = {current_org_id}
 
             if payload.name is not None:
                 name = payload.name.strip()
@@ -2786,6 +3791,7 @@ def admin_update_brand(brand_id: str, payload: AdminBrandUpdate, request: Reques
                     updates.append("organization_id = %s::uuid")
                     params.append(target_org_id)
                     new_org_id = target_org_id
+                    affected_org_ids.add(target_org_id)
 
             if metadata_updated:
                 updates.append("metadata = %s::jsonb")
@@ -2814,6 +3820,16 @@ def admin_update_brand(brand_id: str, payload: AdminBrandUpdate, request: Reques
                         """,
                         (new_org_id, brand_id),
                     )
+
+            try:
+                for org in affected_org_ids:
+                    _sync_org_allowed_brands(conn, org)
+            except HTTPException:
+                conn.rollback()
+                raise
+            except Exception:
+                conn.rollback()
+                raise
 
             conn.commit()
 
@@ -3482,7 +4498,7 @@ def get_config() -> Dict[str, Any]:
             data_mtimes["catalog"] = float(_DF_MTIME)
             prices_mtime = float(_DF_MTIME)
         else:
-            pcat = _catalog_path()
+            pcat = _catalog_csv_path()
             if pcat.exists():
                 mt = float(pcat.stat().st_mtime)
                 data_mtimes["catalog"] = mt
@@ -3708,7 +4724,7 @@ def _apply_audio_lookup(row: Dict[str, Any]) -> None:
         pass
 
 
-def _catalog_path() -> Path:
+def _catalog_csv_path() -> Path:
     env = os.getenv(CATALOG_PATH_ENV)
     if env:
         p = Path(env)
@@ -3724,33 +4740,32 @@ def _catalog_path() -> Path:
 
 
 def _load_catalog():
-    global _DF, _DF_MTIME
+    global _DF, _DF_MTIME, _CATALOG_SOURCE
     if pd is None:
         raise HTTPException(status_code=500, detail="pandas not available in environment")
-    path = _catalog_path()
+
+    json_path = _autoradar_json_path()
+    from_json = json_path.exists()
+    path = json_path if from_json else _catalog_csv_path()
     if not path.exists():
-        raise HTTPException(status_code=404, detail=f"Catalog CSV not found: {path}")
+        raise HTTPException(status_code=404, detail=f"Catalog source not found: {path}")
+
     m = path.stat().st_mtime
-    if _DF is None or _DF_MTIME != m:
-        df = pd.read_csv(path, low_memory=False)
+    needs_reload = (
+        _DF is None
+        or _DF_MTIME != m
+        or (_CATALOG_SOURCE == "json" and not from_json)
+        or (_CATALOG_SOURCE == "csv" and from_json)
+    )
+
+    if needs_reload:
+        if from_json:
+            df = _load_autoradar_dataframe()
+        else:
+            df = pd.read_csv(path, low_memory=False)
 
         def _slug(s: str) -> str:
-            s = str(s or "").strip().lower()
-            try:
-                s = unicodedata.normalize("NFD", s)
-                s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
-            except Exception:
-                pass
-            out = []
-            for ch in s:
-                if ch.isalnum():
-                    out.append(ch)
-                else:
-                    out.append("_")
-            s = "".join(out)
-            while "__" in s:
-                s = s.replace("__", "_")
-            return s.strip("_")
+            return _slug_column_name(s)
 
         mapping = {c: _slug(c) for c in df.columns}
         df.rename(columns=mapping, inplace=True)
@@ -5167,6 +6182,7 @@ def _load_catalog():
 
         _DF = df
         _DF_MTIME = m
+        _CATALOG_SOURCE = "json" if from_json else "csv"
     return _DF
 
 
@@ -5278,19 +6294,16 @@ def get_options(make: Optional[str] = None, model: Optional[str] = None, year: O
                         models_set.update(t["model"].astype(str).str.upper().dropna().unique().tolist())
             except Exception:
                 pass
-            # c) catálogo principal (solo columnas make/model para evitar carga pesada)
+            # c) catálogo principal (usar dataframe ya cargado)
             try:
-                pcat = _catalog_path()
-                if pcat.exists():
-                    t = pd.read_csv(pcat, usecols=["make","model"], low_memory=True)
-                    t.columns = [str(c).strip().lower() for c in t.columns]
-                    if "make" in t.columns:
-                        for mk in t["make"].astype(str).dropna().unique().tolist():
-                            mk_norm = _canon_make(mk) or str(mk).strip().upper()
-                            if mk_norm:
-                                makes_set.add(mk_norm)
-                    if "model" in t.columns:
-                        models_set.update(t["model"].astype(str).str.upper().dropna().unique().tolist())
+                cat_df = _load_catalog()
+                if "make" in cat_df.columns:
+                    for mk in cat_df["make"].astype(str).dropna().unique().tolist():
+                        mk_norm = _canon_make(mk) or str(mk).strip().upper()
+                        if mk_norm:
+                            makes_set.add(mk_norm)
+                if "model" in cat_df.columns:
+                    models_set.update(cat_df["model"].astype(str).str.upper().dropna().unique().tolist())
             except Exception:
                 pass
             makes_all = sorted(list(makes_set))
@@ -5739,7 +6752,13 @@ NUMERIC_KEYS = [
 ]
 
 
-def _compare_core(payload: Dict[str, Any], request: Optional[Request]) -> Dict[str, Any]:
+def _compare_core(
+    payload: Dict[str, Any],
+    request: Optional[Request],
+    *,
+    increment_usage: bool = True,
+) -> Dict[str, Any]:
+    usage_ctx = _membership_usage_precheck(request, payload) if increment_usage else None
     _enforce_dealer_access(_extract_dealer_id(request, payload))
     own = payload.get("own") or {}
     competitors = payload.get("competitors") or []
@@ -8277,11 +9296,14 @@ def _compare_core(payload: Dict[str, Any], request: Optional[Request]) -> Dict[s
         for key, val in entry.items():
             cleaned_entry[key] = _drop_nulls(val)
         comps_clean.append(cleaned_entry)
-    return {
+    result = {
         "own": own_clean,
         "competitors": comps_clean,
         "meta": {"delta_convention": "competitor_minus_base"},
     }
+    if increment_usage:
+        _membership_usage_commit(usage_ctx, "compare")
+    return result
 
 
 @app.post("/compare")
@@ -8310,6 +9332,7 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
                     "competitors": payload.get("competitors") or [],
                 },
                 request,
+                increment_usage=False,
             )
         else:
             comp_json = payload.get("compare") or {}
@@ -11027,6 +12050,12 @@ def auto_competitors(payload: Dict[str, Any], request: Request) -> Dict[str, Any
         if c in out.columns:
             out = out.drop(columns=[c], errors="ignore")
     rows = out.where(out.notna(), None).to_dict(orient="records")
+    for row in rows:
+        try:
+            row["__allow_zero_sales"] = True
+            row["__auto_competitor"] = True
+        except Exception:
+            pass
     # Report filters used back to client
     used_filters = {
         "k": k,

@@ -275,6 +275,16 @@ const FEATURE_LABELS: Record<string, string> = FEATURE_FIELD_DEFS.reduce((acc, d
 
 const ADAS_FEATURE_DEFS = FEATURE_FIELD_DEFS.filter((def) => def.group === 'ADAS');
 
+type PaywallState = {
+  message: string;
+  limit?: number;
+  used?: number;
+  checkoutEndpoint?: string;
+  checkoutAvailable?: boolean;
+  status?: number;
+  raw?: any;
+};
+
 export default function ComparePanel() {
   const { t } = useI18n() as any;
   const { own, filters, autoGenSeq, autoGenerate, triggerAutoGen } = useAppState();
@@ -324,6 +334,9 @@ export default function ComparePanel() {
   };
   const [hoverRow, setHoverRow] = React.useState<number | null>(null);
   const hoverStyle = (idx: number) => (hoverRow === idx ? { background:'#f8fafc' } : {});
+  const [paywall, setPaywall] = React.useState<PaywallState | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = React.useState(false);
+  const [checkoutError, setCheckoutError] = React.useState<string | null>(null);
 
   const { data: ownRows } = useSWR<Row[]>(ready ? ['own_row', own.make, own.model, own.year, own.version] : null, async () => {
     const params: Record<string, any> = { make: own.make, model: own.model, year: own.year, limit: 50 };
@@ -349,6 +362,24 @@ export default function ComparePanel() {
       }
     }
   }, [autoGenerate, ownRow, autoKey, triggerAutoGen]);
+
+  const triggerCheckout = React.useCallback(async () => {
+    if (checkoutLoading) return;
+    setCheckoutError(null);
+    try {
+      setCheckoutLoading(true);
+      const resp = await endpoints.membershipCheckout();
+      if (resp?.checkout_url) {
+        window.location.href = resp.checkout_url;
+        return;
+      }
+      setCheckoutError('No recibimos el enlace de pago de Stripe.');
+    } catch (error) {
+      setCheckoutError(error instanceof Error ? error.message : 'No se pudo iniciar el pago.');
+    } finally {
+      setCheckoutLoading(false);
+    }
+  }, [checkoutLoading]);
 
   // Helpers: YTD units and month
   function ytdUnits(row: any, year?: number): number | null {
@@ -1006,7 +1037,7 @@ export default function ComparePanel() {
   }
 
   const dismissedSignature = React.useMemo(() => Array.from(dismissedKeys).sort().join(','), [dismissedKeys]);
-  const { data: compared } = useSWR(ownRow ? ['compare', ownRow?.id || ownRow?.model, ownRow?.ano, sig((auto?.items||[]) as Row[]), sig(manual), dismissedSignature, !!cfg] : null, async () => {
+  const { data: compared, error: compareError } = useSWR(ownRow ? ['compare', ownRow?.id || ownRow?.model, ownRow?.ano, sig((auto?.items||[]) as Row[]), sig(manual), dismissedSignature, !!cfg] : null, async () => {
     const autoRows: Row[] = (auto?.items || []) as Row[];
     // merge unique (auto + manual)
     const seen = new Set<string>();
@@ -1021,6 +1052,43 @@ export default function ComparePanel() {
     const itemsW = items.map(ensureFuel60);
     return endpoints.compare({ own: ownW, competitors: itemsW });
   });
+
+  React.useEffect(() => {
+    if (!compareError) {
+      setPaywall(null);
+      setCheckoutError(null);
+      return;
+    }
+    const status = (compareError as any)?.status;
+    const data = (compareError as any)?.data;
+    if (status === 402 && data) {
+      setPaywall({
+        message: data.message || 'Alcanzaste el límite gratuito de la membresía.',
+        limit: typeof data.limit === 'number' ? data.limit : undefined,
+        used: typeof data.used === 'number' ? data.used : undefined,
+        checkoutEndpoint: data.checkout_endpoint,
+        checkoutAvailable: data.checkout_available !== false,
+        status,
+        raw: data,
+      });
+      return;
+    }
+    if (status === 401 && data?.error === 'membership_session_invalid') {
+      setPaywall({
+        message: 'Tu sesión de membresía expiró. Vuelve a verificar tu teléfono desde la página de membresía.',
+        checkoutAvailable: false,
+        status,
+        raw: data,
+      });
+      return;
+    }
+    setPaywall({
+      message: compareError instanceof Error ? compareError.message : 'No pudimos ejecutar la comparación.',
+      checkoutAvailable: false,
+      status,
+      raw: data,
+    });
+  }, [compareError]);
 
   // Evitar returns tempranos que cambian el orden de hooks.
   // Usar valores de respaldo cuando aún no hay base/ownRow listo.
@@ -2055,6 +2123,66 @@ export default function ComparePanel() {
     ];
     return legendItems.length + sources.filter(Boolean).length;
   }, [legendItems, scoreVsPriceOption, msrpVsHpWithLinesOption, hpVsPriceOption, adasAdoptionOption, deltaHpOption, deltaLenOption, deltaAccelOption, footprintOption, salesLineOption]);
+
+  if (paywall) {
+    const usedCount = typeof paywall.used === 'number' ? paywall.used : undefined;
+    const limitCount = typeof paywall.limit === 'number' ? paywall.limit : undefined;
+    return (
+      <section style={{ maxWidth: 560, margin: '40px auto', padding: '24px', borderRadius: 12, border: '1px solid #e2e8f0', background: '#fff', display: 'grid', gap: 16 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#1f2937' }}>Activa tu membresía</h2>
+        <p style={{ color: '#334155', fontSize: 15 }}>{paywall.message}</p>
+        {limitCount !== undefined && (
+          <p style={{ color: '#475569', fontSize: 14 }}>
+            {usedCount !== undefined ? `Usaste ${usedCount} de ${limitCount} búsquedas gratuitas.` : `Límite gratuito: ${limitCount} búsquedas.`}
+          </p>
+        )}
+        {checkoutError ? (
+          <p style={{ color: '#dc2626', fontSize: 13 }}>{checkoutError}</p>
+        ) : null}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+          {paywall.checkoutAvailable ? (
+            <button
+              type="button"
+              onClick={triggerCheckout}
+              disabled={checkoutLoading}
+              style={{
+                padding: '10px 18px',
+                borderRadius: 8,
+                border: 'none',
+                background: checkoutLoading ? '#818cf8' : '#4f46e5',
+                color: '#fff',
+                fontWeight: 600,
+                cursor: checkoutLoading ? 'wait' : 'pointer',
+              }}
+            >
+              {checkoutLoading ? 'Abriendo Stripe…' : 'Pagar con Stripe'}
+            </button>
+          ) : (
+            <span style={{ fontSize: 12, color: '#64748b' }}>Stripe no está disponible, contacta a soporte.</span>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.location.href = '/membership';
+              }
+            }}
+            style={{
+              padding: '10px 18px',
+              borderRadius: 8,
+              border: '1px solid #cbd5e1',
+              background: '#fff',
+              color: '#1f2937',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Volver a Membresía
+          </button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <>
