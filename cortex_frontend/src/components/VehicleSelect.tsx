@@ -112,6 +112,11 @@ export default function VehicleSelect() {
         return;
       }
       try {
+        const dealerContext = window.localStorage.getItem('CORTEX_DEALER_ID');
+        if (!dealerContext) {
+          setAllowedBrandList([]);
+          return;
+        }
         const raw = window.localStorage.getItem('CORTEX_ALLOWED_BRANDS');
         if (!raw || !raw.length) {
           setAllowedBrandList([]);
@@ -306,23 +311,32 @@ export default function VehicleSelect() {
     if (!allowedBrandList.length) return;
     if (!allowedBrandSet) return;
     const current = String(brand || '').trim();
+    const normalizedCurrent = current ? brandNorm(current) : '';
+    const singleAllowed = allowedBrandList.length === 1 ? String(allowedBrandList[0] || '').trim() : '';
+
     if (current) {
-      const isAllowed = allowedBrandSet.has(brandNorm(current));
+      const isAllowed = allowedBrandSet.has(normalizedCurrent);
       if (!isAllowed) {
-        if (allowedBrandList.length === 1) {
-          setOwn({ make: allowedBrandList[0], model: '', year: '', version: '' });
-        } else {
+        if (singleAllowed) {
+          const normalizedTarget = brandNorm(singleAllowed);
+          if (normalizedTarget !== normalizedCurrent || current !== singleAllowed) {
+            setOwn({ ...own, make: singleAllowed });
+          }
+        } else if (current || own.model || own.year || own.version) {
           setOwn({ make: '', model: '', year: '', version: '' });
         }
       }
-    } else if (allowedBrandList.length === 1) {
-      setOwn({ make: allowedBrandList[0], model: '', year: '', version: '' });
+    } else if (singleAllowed) {
+      const normalizedTarget = brandNorm(singleAllowed);
+      if (normalizedTarget !== normalizedCurrent || own.make !== singleAllowed) {
+        setOwn({ ...own, make: singleAllowed });
+      }
     }
-  }, [allowedBrand, allowedBrandList, allowedBrandSet, brand, setOwn, isSuperadmin]);
+  }, [allowedBrand, allowedBrandList, allowedBrandSet, brand, isSuperadmin, own.model, own.version, own.year, setOwn]);
   // Models filtered by selected brand (if any)
   const { data: forBrand } = useSWR<OptionsPayload>(brandApi ? ['options_brand', brandApi] : null, () => endpoints.options({ make: brandApi }));
   const brandLocked = Boolean(allowedBrand) && !isSuperadmin;
-  const brandTyping = brandLocked ? false : ((brand || '').trim().length > 0 && !brandApi);
+  const brandTyping = false;
   const brandDisplay = brandLocked ? allowedBrand : brand;
   // Mostrar modelos mientras se escribe la marca; filtrar solo cuando haya match único (brandApi)
   const modelsForBrand = React.useMemo(() => {
