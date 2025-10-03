@@ -483,12 +483,91 @@ export default function VehicleSelect() {
     if (brand && !model) setOpenModelSugg(true);
   }, [brand, model]);
 
+  const tryApplyBrand = React.useCallback(
+    (candidate: string | null | undefined) => {
+      const trimmed = String(candidate || '').trim();
+      if (!trimmed) return false;
+      const normalized = brandNorm(trimmed);
+      setOwn((prev) => {
+        const current = String(prev.make || '').trim();
+        if (brandNorm(current) === normalized) return prev;
+        return { ...prev, make: trimmed };
+      });
+      return true;
+    },
+    [allowedBrandSet, setOwn],
+  );
+
+  const inferBrandForModel = React.useCallback(
+    async (modelValue: string) => {
+      if (!modelValue || brandLocked) return;
+      try {
+        const detail = await endpoints.options({ model: modelValue });
+        const autofill = detail?.autofill || {};
+        const selected = detail?.selected || {};
+        const candidate =
+          (typeof autofill.make_from_model === 'string' && autofill.make_from_model.trim())
+            || (typeof selected.make === 'string' && selected.make.trim())
+            || (Array.isArray(detail?.makes_for_model) && detail?.makes_for_model.length === 1
+              ? String(detail.makes_for_model[0] || '')
+              : '');
+        if (candidate && tryApplyBrand(candidate)) return;
+      } catch {
+        /* ignore */
+      }
+      try {
+        const catalog = await endpoints.catalog({ q: modelValue, limit: 500 });
+        const rows: any[] = Array.isArray(catalog)
+          ? catalog
+          : Array.isArray((catalog as any)?.items)
+            ? (catalog as any).items
+            : [];
+        let canonical = '';
+        const seen = new Set<string>();
+        rows.forEach((row) => {
+          const raw = String(row?.make || row?.brand || '').trim();
+          if (!raw) return;
+          if (!canonical) canonical = raw;
+          seen.add(raw.toUpperCase());
+        });
+        if (canonical) tryApplyBrand(canonical);
+      } catch {
+        /* ignore */
+      }
+    },
+    [brandLocked, tryApplyBrand],
+  );
+
   function selectModel(m: string){
     setOwn({ ...own, model: m });
     setOpenModelSugg(false);
     // keep focus on input for quick year/version next
     setTimeout(()=>modelRef.current?.focus(), 0);
+    void inferBrandForModel(m);
   }
+
+  React.useEffect(() => {
+    if (!model) return;
+    if (!brandApi) return;
+    const current = String(brand || '').trim();
+    const normalizedCurrent = brandNorm(current);
+    const normalizedCandidate = brandNorm(brandApi);
+    if (normalizedCurrent === normalizedCandidate) return;
+    if (allowedBrandSet && !allowedBrandSet.has(normalizedCandidate)) return;
+    tryApplyBrand(brandApi);
+  }, [model, brandApi, brand, allowedBrandSet, tryApplyBrand]);
+
+  React.useEffect(() => {
+    if (!model || brandLocked) return;
+    const candidate =
+      (typeof forModel?.autofill?.make_from_model === 'string' && forModel?.autofill?.make_from_model.trim())
+      || (typeof forModel?.selected?.make === 'string' && forModel?.selected?.make.trim())
+      || (Array.isArray(forModel?.makes_for_model) && forModel?.makes_for_model.length === 1
+        ? String(forModel.makes_for_model[0] || '')
+        : '');
+    if (candidate && tryApplyBrand(candidate)) return;
+    if (brandApi) tryApplyBrand(brandApi);
+  }, [model, brandLocked, forModel?.autofill?.make_from_model, forModel?.selected?.make, forModel?.makes_for_model, brandApi, tryApplyBrand]);
 
   function onModelKeyDown(e: React.KeyboardEvent<HTMLInputElement>){
     const N = modelSuggest.length;
@@ -560,7 +639,11 @@ export default function VehicleSelect() {
             value={model}
             onChange={e=>{ setOwn({ ...own, model: e.target.value }); setOpenModelSugg(true); }}
             onFocus={()=> setOpenModelSugg(true)}
-            onBlur={()=> setTimeout(()=>setOpenModelSugg(false), 120)}
+            onBlur={()=> {
+              setTimeout(()=>setOpenModelSugg(false), 120);
+              const trimmed = model.trim();
+              if (trimmed && !brandLocked) void inferBrandForModel(trimmed);
+            }}
             onKeyDown={onModelKeyDown}
             style={{ width:'100%' }}
             disabled={brandTyping}
