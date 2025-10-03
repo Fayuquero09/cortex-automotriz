@@ -54,6 +54,7 @@ type FormState = {
   brandLimits: Record<string, string>;
   allowDealerCreation: boolean;
   dealerLimit: string;
+  promptProfile: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -66,6 +67,7 @@ const EMPTY_FORM: FormState = {
   brandLimits: {},
   allowDealerCreation: false,
   dealerLimit: '',
+  promptProfile: '',
 };
 
 type EditFormState = {
@@ -75,6 +77,7 @@ type EditFormState = {
   orgType: OrgType;
   allowDealerCreation: boolean;
   dealerLimit: string;
+  promptProfile: string;
 };
 
 const EMPTY_EDIT_FORM: EditFormState = {
@@ -84,6 +87,7 @@ const EMPTY_EDIT_FORM: EditFormState = {
   orgType: 'oem',
   allowDealerCreation: false,
   dealerLimit: '',
+  promptProfile: '',
 };
 
 const PRESETS: Array<{ label: string; description: string; package: OrgPackage; orgType: OrgType }> = [
@@ -217,6 +221,7 @@ export default function AdminControlPage(): JSX.Element {
       orgType: organizationType(metadata),
       allowDealerCreation: Boolean(metadata.allow_dealer_creation),
       dealerLimit,
+      promptProfile: typeof metadata.prompt_profile === 'string' ? metadata.prompt_profile : '',
     });
     setEditFeedback(null);
   }, [editingDetail?.organization]);
@@ -245,6 +250,7 @@ export default function AdminControlPage(): JSX.Element {
       package: preset.package,
       orgType: preset.orgType,
       allowDealerCreation: preset.orgType === 'grupo' ? true : prev.allowDealerCreation,
+      promptProfile: preset.orgType === 'grupo' ? 'dealer_vendor' : prev.promptProfile,
     }));
     setFeedback({ type: 'success', message: `Plantilla “${preset.label}” aplicada. Completa el nombre y guarda.` });
   }, []);
@@ -376,6 +382,12 @@ export default function AdminControlPage(): JSX.Element {
       } else {
         delete metadata.dealer_creation_limit;
       }
+      const promptKey = form.promptProfile.trim();
+      if (promptKey) {
+        metadata.prompt_profile = toSlug(promptKey);
+      } else {
+        delete metadata.prompt_profile;
+      }
 
       const payload: Record<string, any> = {
         name: trimmedName,
@@ -504,6 +516,12 @@ export default function AdminControlPage(): JSX.Element {
       } else {
         delete metadata.dealer_creation_limit;
       }
+      const promptKey = editForm.promptProfile.trim();
+      if (promptKey) {
+        metadata.prompt_profile = toSlug(promptKey);
+      } else {
+        delete metadata.prompt_profile;
+      }
 
       const metadataChanged = JSON.stringify(metadata) !== JSON.stringify(originalMetadata || {});
       if (metadataChanged) {
@@ -608,6 +626,18 @@ export default function AdminControlPage(): JSX.Element {
                 <option value="oem">OEM / Marca</option>
                 <option value="grupo">Grupo dealer</option>
               </select>
+            </label>
+            <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+              Perfil de prompt
+              <input
+                value={editForm.promptProfile}
+                onChange={(event) => updateEditField('promptProfile', event.target.value)}
+                placeholder="ej. nissan"
+                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5f5', fontFamily: 'monospace' }}
+              />
+              <span style={{ fontSize: 11, color: '#64748b' }}>
+                Ajusta la clave que determinará qué archivos de prompt personalizados se cargan para esta organización.
+              </span>
             </label>
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
@@ -924,16 +954,28 @@ export default function AdminControlPage(): JSX.Element {
               />
               <span style={{ fontSize: 11, color: '#64748b' }}>Todos los usuarios OEM deberán usar este dominio.</span>
             </label>
-            <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
-              Teléfono superadmin
-              <input
-                value={form.superPhone}
-                onChange={(event) => updateField('superPhone', event.target.value)}
-                placeholder="+52 ..."
-                style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
-              />
-            </label>
-          </div>
+          <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+            Teléfono superadmin
+            <input
+              value={form.superPhone}
+              onChange={(event) => updateField('superPhone', event.target.value)}
+              placeholder="+52 ..."
+              style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+            Perfil de prompt
+            <input
+              value={form.promptProfile}
+              onChange={(event) => updateField('promptProfile', event.target.value)}
+              placeholder="ej. nissan"
+              style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5f5', fontFamily: 'monospace' }}
+            />
+            <span style={{ fontSize: 11, color: '#64748b' }}>
+              Define la clave que buscará los archivos <code>prompt_*</code> personalizados. Usa minúsculas sin espacios.
+            </span>
+          </label>
+        </div>
           <div style={{ display: 'grid', gap: 6 }}>
             <span style={{ fontSize: 12, fontWeight: 600 }}>Marcas disponibles</span>
             <div style={{ display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', maxHeight: 220, overflowY: 'auto', padding: 8, border: '1px solid #e2e8f0', borderRadius: 8 }}>

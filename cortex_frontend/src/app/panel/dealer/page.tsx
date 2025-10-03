@@ -102,12 +102,16 @@ export default function PanelDealerPage(): React.JSX.Element {
   const [userForm, setUserForm] = React.useState({ email: '', role: 'superadmin_oem', dealerAdmin: true });
   const [userFormStatus, setUserFormStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [userFormLoading, setUserFormLoading] = React.useState(false);
+  const [deleteUserStatus, setDeleteUserStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [deletingUserId, setDeletingUserId] = React.useState('');
 
   React.useEffect(() => {
     if (!selectedOrg || !orgDetail?.organization) {
       setEditMode(false);
       setEditStatus(null);
       setSelectedUserId('');
+      setDeleteUserStatus(null);
+      setDeletingUserId('');
       return;
     }
     const org = orgDetail.organization;
@@ -129,6 +133,8 @@ export default function PanelDealerPage(): React.JSX.Element {
     setImpersonationNotice(null);
     setBrandLimitDrafts({});
     setBrandLimitFeedback(null);
+    setDeleteUserStatus(null);
+    setDeletingUserId('');
   }, [orgDetail?.organization, orgDetail?.users, selectedOrg]);
 
   React.useEffect(() => {
@@ -454,6 +460,24 @@ export default function PanelDealerPage(): React.JSX.Element {
     [brandForm, mutateOrgDetail, mutateOverview, selectedOrgId],
   );
 
+  const handleOpenDealerPreview = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      applyAllowedBrands([]);
+      window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+      window.localStorage.removeItem('CORTEX_DEALER_ADMIN_USER_ID');
+      window.localStorage.removeItem('CORTEX_DEALER_ADMIN_EMAIL');
+      window.localStorage.removeItem('CORTEX_DEALER_ID');
+      window.localStorage.removeItem('CORTEX_DEALER_CONTEXT');
+      window.localStorage.setItem('CORTEX_DEALER_PREVIEW', '1');
+    } catch {}
+    try {
+      const url = new URL('/dealers', window.location.origin);
+      url.searchParams.set('preview', '1');
+      window.open(url.toString(), '_blank', 'noopener');
+    } catch {}
+  }, [applyAllowedBrands]);
+
   const handleCreateUser = React.useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -484,6 +508,34 @@ export default function PanelDealerPage(): React.JSX.Element {
     [mutateOrgDetail, mutateOverview, selectedOrgId, userForm],
   );
 
+  const handleDeleteUser = React.useCallback(
+    async (userId: string, email?: string | null) => {
+      if (!userId) return;
+      if (typeof window !== 'undefined') {
+        const label = email ? ` ${email}` : '';
+        const confirmed = window.confirm(`¿Eliminar al usuario${label}?`);
+        if (!confirmed) return;
+      }
+      setDeletingUserId(userId);
+      setDeleteUserStatus(null);
+      try {
+        await endpoints.adminDeleteUser(userId);
+        if (selectedUserId === userId) {
+          const fallback = orgDetail?.users?.find((user) => user.id !== userId)?.id ?? '';
+          setSelectedUserId(fallback);
+        }
+        setDeleteUserStatus({ type: 'success', message: 'Usuario eliminado correctamente.' });
+        await Promise.all([mutateOrgDetail(), mutateOverview()]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'No se pudo eliminar el usuario.';
+        setDeleteUserStatus({ type: 'error', message });
+      } finally {
+        setDeletingUserId('');
+      }
+    },
+    [mutateOrgDetail, mutateOverview, orgDetail?.users, selectedUserId],
+  );
+
   return (
     <main style={{ display: 'grid', gap: 24, padding: 24 }}>
       <section style={{ display: 'grid', gap: 12 }}>
@@ -493,6 +545,21 @@ export default function PanelDealerPage(): React.JSX.Element {
             Selecciona un grupo dealer para abrir su panel operativo, editar sus datos o impersonar usuarios clave.
           </p>
         </header>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={handleOpenDealerPreview}
+            style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #2563eb', background: '#fff', color: '#2563eb', fontWeight: 600, cursor: 'pointer' }}
+          >
+            Abrir vista Dealer (sin filtro)
+          </button>
+          <a
+            href="/admin"
+            style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #334155', color: '#334155', textDecoration: 'none', fontWeight: 600 }}
+          >
+            Abrir panel Superadmin
+          </a>
+        </div>
       </section>
 
       <section style={{ display: 'grid', gap: 12 }}>
@@ -779,6 +846,68 @@ export default function PanelDealerPage(): React.JSX.Element {
                 ) : null}
               </div>
             ) : null}
+
+            <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 12, display: 'grid', gap: 8 }}>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Usuarios registrados</div>
+              {orgDetail?.users?.length ? (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead style={{ background: '#f8fafc' }}>
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Correo</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Rol</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Dealer admin</th>
+                        <th style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #e2e8f0' }}>Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orgDetail.users.map((user) => {
+                        const flags = (user.feature_flags || {}) as Record<string, any>;
+                        const dealerAdmin = Boolean(flags?.dealer_admin);
+                        const isDeleting = deletingUserId === user.id;
+                        const roleLabel = user.role === 'superadmin_oem'
+                          ? 'Superadmin OEM'
+                          : user.role === 'oem_user'
+                            ? 'Usuario OEM'
+                            : user.role || '—';
+                        return (
+                          <tr key={user.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '6px 10px', fontFamily: 'monospace' }}>{user.email || '—'}</td>
+                            <td style={{ padding: '6px 10px' }}>{roleLabel}</td>
+                            <td style={{ padding: '6px 10px' }}>{dealerAdmin ? 'Sí' : 'No'}</td>
+                            <td style={{ padding: '6px 10px' }}>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteUser(user.id, user.email)}
+                                disabled={isDeleting}
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: 6,
+                                  border: '1px solid #dc2626',
+                                  background: isDeleting ? '#fecaca' : '#fff1f2',
+                                  color: '#b91c1c',
+                                  fontWeight: 600,
+                                  cursor: isDeleting ? 'default' : 'pointer',
+                                }}
+                              >
+                                {isDeleting ? 'Eliminando…' : 'Eliminar'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p style={{ fontSize: 12, color: '#64748b', margin: 0 }}>Aún no se registran usuarios para esta organización.</p>
+              )}
+              {deleteUserStatus ? (
+                <span style={{ fontSize: 12, color: deleteUserStatus.type === 'success' ? '#047857' : '#dc2626' }}>
+                  {deleteUserStatus.message}
+                </span>
+              ) : null}
+            </div>
 
             {orgDetail?.users?.length ? (
               <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 12, display: 'grid', gap: 8 }}>

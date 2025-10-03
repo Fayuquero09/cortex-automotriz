@@ -19,6 +19,7 @@ type SelfMembershipSummary = {
   last_session_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  allowed_brands?: string[] | null;
 };
 
 type AdminSelfMembershipListResponse = {
@@ -49,6 +50,7 @@ type SelfMembershipDetail = {
     metadata?: Record<string, any> | null;
     created_at?: string | null;
     updated_at?: string | null;
+    allowed_brands?: string[] | null;
   } | null;
   sessions: Array<{
     id: string;
@@ -80,6 +82,7 @@ type EditState = {
   status: string;
   paid: boolean;
   adminNotes: string;
+  allowedBrands: string[];
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -104,6 +107,31 @@ const PAID_FILTER_OPTIONS: Array<{ value: PaidFilter; label: string }> = [
 ];
 
 const MEMBERSHIPS_PAGE_SIZE = 40;
+
+function normalizeBrandList(list: string[], primary?: string): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  const push = (value?: string) => {
+    if (!value) return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    result.push(trimmed);
+  };
+  if (primary) push(primary);
+  list.forEach((item) => push(item));
+  return result;
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 function formatDateTime(value?: string | null, includeTime = true): string {
   if (!value) return '—';
@@ -168,6 +196,11 @@ export default function PanelSelfServicePage(): JSX.Element {
   const [initialState, setInitialState] = React.useState<EditState | null>(null);
   const [saveStatus, setSaveStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [saving, setSaving] = React.useState(false);
+  const [impersonateStatus, setImpersonateStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [impersonating, setImpersonating] = React.useState(false);
+  const [deleteStatus, setDeleteStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [deleting, setDeleting] = React.useState(false);
+  const { data: brandCatalog } = useSWR<{ brands: Array<{ id: string; name: string }> }>('admin_self_service_brand_catalog', endpoints.adminBrands);
 
   React.useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -187,6 +220,12 @@ export default function PanelSelfServicePage(): JSX.Element {
     ['admin_self_memberships', searchTerm, statusFilter, paidFilter, page],
     fetchSelfMemberships,
   );
+
+  React.useEffect(() => {
+    if (selectedId) {
+      setDeleteStatus(null);
+    }
+  }, [selectedId]);
 
   React.useEffect(() => {
     if (!data) return;
@@ -224,6 +263,11 @@ export default function PanelSelfServicePage(): JSX.Element {
   );
 
   const membership = detail?.membership;
+  const membershipAllowedRaw = membership?.allowed_brands;
+  const membershipAllowedList = React.useMemo(
+    () => (Array.isArray(membershipAllowedRaw) ? membershipAllowedRaw.map((item) => item) : []),
+    [membershipAllowedRaw],
+  );
 
   React.useEffect(() => {
     if (!membership) {
@@ -231,6 +275,12 @@ export default function PanelSelfServicePage(): JSX.Element {
       setInitialState(null);
       return;
     }
+    const allowedList = Array.isArray(membership.allowed_brands)
+      ? membership.allowed_brands
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => item.length > 0)
+      : [];
+    const nextAllowed = normalizeBrandList(allowedList, membership.brand_label || undefined);
     const next: EditState = {
       displayName: membership.display_name || '',
       brandLabel: membership.brand_label || '',
@@ -241,10 +291,12 @@ export default function PanelSelfServicePage(): JSX.Element {
       status: (membership.status || 'trial').toLowerCase(),
       paid: Boolean(membership.paid),
       adminNotes: membership.admin_notes || '',
+      allowedBrands: nextAllowed,
     };
-    setEditState(next);
-    setInitialState(next);
+    setEditState({ ...next, allowedBrands: [...next.allowedBrands] });
+    setInitialState({ ...next, allowedBrands: [...next.allowedBrands] });
     setSaveStatus(null);
+    setImpersonateStatus(null);
   }, [membership]);
 
   const hasChanges = React.useMemo(() => {
@@ -258,15 +310,70 @@ export default function PanelSelfServicePage(): JSX.Element {
       editState.searchCount !== initialState.searchCount ||
       editState.status !== initialState.status ||
       editState.paid !== initialState.paid ||
-      editState.adminNotes !== initialState.adminNotes
+      editState.adminNotes !== initialState.adminNotes ||
+      !arraysEqual(editState.allowedBrands, initialState.allowedBrands)
     );
   }, [editState, initialState]);
 
   const handleReset = React.useCallback(() => {
     if (!initialState) return;
-    setEditState({ ...initialState });
+    setEditState({ ...initialState, allowedBrands: [...initialState.allowedBrands] });
     setSaveStatus(null);
+    setImpersonateStatus(null);
   }, [initialState]);
+
+  const brandOptions = React.useMemo(() => {
+    const options: string[] = [];
+    const seen = new Set<string>();
+    const push = (value?: string | null) => {
+      if (!value) return;
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      options.push(trimmed);
+    };
+    for (const item of brandCatalog?.brands || []) {
+      if (item?.name) push(item.name);
+    }
+    membershipAllowedList.forEach(push);
+    push(membership?.brand_label || null);
+    if (editState?.allowedBrands) {
+      editState.allowedBrands.forEach(push);
+    }
+    if (editState?.brandLabel) {
+      push(editState.brandLabel);
+    }
+    return options.sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+  }, [brandCatalog?.brands, membershipAllowedList, membership?.brand_label, editState?.allowedBrands, editState?.brandLabel]);
+
+  const handleBrandLabelChange = React.useCallback((value: string) => {
+    setEditState((prev) => {
+      if (!prev) return prev;
+      const nextAllowed = normalizeBrandList(prev.allowedBrands, value);
+      return { ...prev, brandLabel: value, allowedBrands: nextAllowed };
+    });
+    setImpersonateStatus(null);
+  }, []);
+
+  const handleAllowedBrandToggle = React.useCallback((brand: string) => {
+    setEditState((prev) => {
+      if (!prev) return prev;
+      const normalized = brand.trim();
+      if (!normalized) return prev;
+      const exists = prev.allowedBrands.some((item) => item.toLowerCase() === normalized.toLowerCase());
+      let nextList: string[];
+      if (exists) {
+        nextList = prev.allowedBrands.filter((item) => item.toLowerCase() !== normalized.toLowerCase());
+      } else {
+        nextList = [...prev.allowedBrands, normalized];
+      }
+      nextList = normalizeBrandList(nextList, prev.brandLabel);
+      return { ...prev, allowedBrands: nextList };
+    });
+    setImpersonateStatus(null);
+  }, []);
 
   const handleSave = React.useCallback(async () => {
     if (!selectedId || !editState || !initialState) return;
@@ -288,6 +395,12 @@ export default function PanelSelfServicePage(): JSX.Element {
     }
     if (editState.adminNotes !== initialState.adminNotes) {
       payload.admin_notes = editState.adminNotes;
+    }
+
+    if (!arraysEqual(editState.allowedBrands, initialState.allowedBrands) ||
+      (editState.brandLabel !== initialState.brandLabel && editState.brandLabel)) {
+      const normalizedAllowed = normalizeBrandList(editState.allowedBrands, editState.brandLabel);
+      payload.allowed_brands = normalizedAllowed;
     }
     if (editState.status !== initialState.status) {
       payload.status = editState.status;
@@ -342,6 +455,102 @@ export default function PanelSelfServicePage(): JSX.Element {
       setSaving(false);
     }
   }, [editState, initialState, mutateDetail, mutateList, selectedId, hasChanges]);
+
+  const handleImpersonate = React.useCallback(async () => {
+    if (!selectedId) return;
+    setImpersonating(true);
+    setImpersonateStatus(null);
+    try {
+      const response = await endpoints.adminImpersonateSelfMembership(selectedId);
+      const sessionToken: string | undefined = response?.session || response?.session_token;
+      if (!sessionToken) {
+        throw new Error('No recibimos la sesión generada para impersonar.');
+      }
+      const impersonatedMembership = (response?.membership as SelfMembershipDetail['membership']) || membership;
+      const allowedBrandsFromResponse: string[] = Array.isArray(response?.allowed_brands)
+        ? (response.allowed_brands as string[])
+        : Array.isArray(impersonatedMembership?.allowed_brands)
+          ? (impersonatedMembership?.allowed_brands as string[])
+          : [];
+
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem('CORTEX_MEMBERSHIP_SESSION', sessionToken);
+          const statusValue = String(impersonatedMembership?.status || 'trial').toLowerCase();
+          window.localStorage.setItem('CORTEX_MEMBERSHIP_STATUS', statusValue);
+
+          const primaryBrand = (impersonatedMembership?.brand_label || allowedBrandsFromResponse[0] || impersonatedMembership?.display_name || '').trim();
+          if (primaryBrand) {
+            window.localStorage.setItem('CORTEX_MEMBERSHIP_BRAND', primaryBrand);
+            window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: primaryBrand }));
+          }
+
+          const allowedBrands = normalizeBrandList(allowedBrandsFromResponse, primaryBrand);
+
+          if (allowedBrands.length) {
+            window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(allowedBrands));
+            window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', allowedBrands[0]);
+          } else {
+            window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
+            window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+          }
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: allowedBrands }));
+
+          const dealerState = response?.dealer_state as Record<string, any> | undefined;
+          if (dealerState && typeof dealerState === 'object') {
+            if (dealerState.dealer_id) {
+              window.localStorage.setItem('CORTEX_DEALER_ID', String(dealerState.dealer_id));
+            }
+            if (dealerState.context) {
+              window.localStorage.setItem('CORTEX_DEALER_CONTEXT', JSON.stringify(dealerState.context));
+            }
+          }
+
+          if (impersonatedMembership?.phone) {
+            window.localStorage.setItem('CORTEX_MEMBERSHIP_PHONE', String(impersonatedMembership.phone));
+          }
+        } catch (storageError) {
+          console.warn('No se pudo actualizar el almacenamiento local para la sesión self-service.', storageError);
+        }
+      }
+
+      setImpersonateStatus({ type: 'success', message: 'Sesión cargada en este navegador. Se abrió una vista con el contexto del usuario.' });
+      await mutateDetail();
+      try {
+        window.open('/dealers', '_blank', 'noopener');
+      } catch (openError) {
+        console.warn('No se pudo abrir una nueva pestaña para la vista del usuario.', openError);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo generar la sesión de impersonación.';
+      setImpersonateStatus({ type: 'error', message });
+    } finally {
+      setImpersonating(false);
+    }
+  }, [membership, mutateDetail, selectedId]);
+
+  const handleDeleteMembership = React.useCallback(async () => {
+    if (!selectedId) return;
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm('¿Eliminar esta membresía y sus sesiones activas?');
+      if (!confirmed) return;
+    }
+    setDeleting(true);
+    setDeleteStatus(null);
+    try {
+      await endpoints.adminDeleteSelfMembership(selectedId);
+      setMemberships((prev) => prev.filter((item) => item.id !== selectedId));
+      setTotal((prev) => (prev > 0 ? prev - 1 : 0));
+      setSelectedId('');
+      setDeleteStatus({ type: 'success', message: 'Membresía eliminada correctamente.' });
+      await mutateList();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'No se pudo eliminar la membresía.';
+      setDeleteStatus({ type: 'error', message });
+    } finally {
+      setDeleting(false);
+    }
+  }, [mutateList, selectedId]);
 
   const usage = detail?.usage;
 
@@ -418,6 +627,9 @@ export default function PanelSelfServicePage(): JSX.Element {
                   const statusText = formatStatus(item.status);
                   const paidBadge = item.paid ? 'Pagada' : 'Gratuita';
                   const usageText = `${item.search_count ?? 0}/${item.free_limit ?? '—'} consultas`;
+                  const allowedPreview = Array.isArray(item.allowed_brands) && item.allowed_brands.length
+                    ? item.allowed_brands.join(', ')
+                    : '';
                   return (
                     <button
                       key={item.id}
@@ -441,6 +653,9 @@ export default function PanelSelfServicePage(): JSX.Element {
                         <span>Tipo: {paidBadge}</span>
                         <span>{usageText}</span>
                       </div>
+                      {allowedPreview ? (
+                        <div style={{ fontSize: 10, color: '#64748b' }}>Marcas: {allowedPreview}</div>
+                      ) : null}
                       <div style={{ fontSize: 10, color: '#94a3b8' }}>
                         Última sesión: {formatDateTime(item.last_session_at)}
                       </div>
@@ -474,6 +689,11 @@ export default function PanelSelfServicePage(): JSX.Element {
         </aside>
 
         <section style={{ border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff', padding: 20, display: 'grid', gap: 18 }}>
+          {deleteStatus ? (
+            <p style={{ fontSize: 12, color: deleteStatus.type === 'success' ? '#047857' : '#dc2626', margin: 0 }}>
+              {deleteStatus.message}
+            </p>
+          ) : null}
           {selectedId ? null : (
             <p style={{ fontSize: 14, color: '#64748b', margin: 0 }}>
               Selecciona un usuario self-service para ver su detalle y actualizar su configuración.
@@ -490,21 +710,68 @@ export default function PanelSelfServicePage(): JSX.Element {
                 <div style={{ fontSize: 20, fontWeight: 600, color: '#0f172a' }}>
                   {membership.display_name || membership.brand_label || formatPhone(membership.phone)}
                 </div>
-                <div style={{ fontSize: 12, color: '#475569', display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-                  <span>Teléfono: {formatPhone(membership.phone)}</span>
-                  <span>Estatus: {formatStatus(membership.status)}</span>
-                  <span>Tipo: {membership.paid ? 'Pagada' : 'Gratuita'}</span>
-                  <span>Alta: {formatDateTime(membership.created_at, false)}</span>
-                  <span>Actualización: {formatDateTime(membership.updated_at)}</span>
-                </div>
-              </header>
+              <div style={{ fontSize: 12, color: '#475569', display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                <span>Teléfono: {formatPhone(membership.phone)}</span>
+                <span>Estatus: {formatStatus(membership.status)}</span>
+                <span>Tipo: {membership.paid ? 'Pagada' : 'Gratuita'}</span>
+                <span>Alta: {formatDateTime(membership.created_at, false)}</span>
+                <span>Actualización: {formatDateTime(membership.updated_at)}</span>
+              </div>
+            </header>
 
-              {usage ? (
-                <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, background: '#f8fafc', display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12, color: '#334155' }}>
-                  <span><strong>Consultas:</strong> {usage.search_count ?? 0}</span>
-                  <span><strong>Límite:</strong> {usage.free_limit ?? '—'}</span>
-                  <span><strong>Restantes:</strong> {usage.remaining ?? '—'}</span>
-                  <span><strong>Última sesión:</strong> {formatDateTime(usage.last_session_at)}</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={handleImpersonate}
+                disabled={impersonating}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #4338ca',
+                  background: impersonating ? '#c7d2fe' : '#4338ca',
+                  color: '#fff',
+                  fontWeight: 600,
+                  cursor: impersonating ? 'default' : 'pointer',
+                }}
+              >
+                {impersonating ? 'Generando sesión…' : 'Impersonar en este navegador'}
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteMembership}
+                disabled={deleting}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #dc2626',
+                  background: deleting ? '#fecaca' : '#fff1f2',
+                  color: '#b91c1c',
+                  fontWeight: 600,
+                  cursor: deleting ? 'default' : 'pointer',
+                }}
+              >
+                {deleting ? 'Eliminando…' : 'Eliminar membresía'}
+              </button>
+              {impersonateStatus ? (
+                <span style={{ fontSize: 12, color: impersonateStatus.type === 'success' ? '#047857' : '#b91c1c' }}>
+                  {impersonateStatus.message}
+                </span>
+              ) : null}
+            </div>
+
+            {usage ? (
+              <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, background: '#f8fafc', display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12, color: '#334155' }}>
+                <span><strong>Consultas:</strong> {usage.search_count ?? 0}</span>
+                <span><strong>Límite:</strong> {usage.free_limit ?? '—'}</span>
+                <span><strong>Restantes:</strong> {usage.remaining ?? '—'}</span>
+                <span><strong>Última sesión:</strong> {formatDateTime(usage.last_session_at)}</span>
+              </div>
+            ) : null}
+              {membership?.allowed_brands && membership.allowed_brands.length ? (
+                <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, background: '#fff', display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 12, color: '#334155' }}>
+                  <span>
+                    <strong>Marcas permitidas:</strong> {membership.allowed_brands.join(', ')}
+                  </span>
                 </div>
               ) : null}
 
@@ -527,12 +794,19 @@ export default function PanelSelfServicePage(): JSX.Element {
                   </label>
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Marca visible
-                    <input
+                    <select
                       value={editState?.brandLabel ?? ''}
-                      onChange={(event) => setEditState((prev) => (prev ? { ...prev, brandLabel: event.target.value } : prev))}
-                      placeholder="Etiqueta de marca"
+                      onChange={(event) => handleBrandLabelChange(event.target.value)}
                       style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #cbd5e1' }}
-                    />
+                    >
+                      <option value="">Selecciona una marca…</option>
+                      {brandOptions.map((name) => (
+                        <option key={`visible-${name}`} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                    <span style={{ fontSize: 11, color: '#64748b' }}>Las opciones provienen del backend para evitar errores de captura.</span>
                   </label>
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Slug de marca
@@ -552,6 +826,31 @@ export default function PanelSelfServicePage(): JSX.Element {
                       style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #cbd5e1' }}
                     />
                   </label>
+                </div>
+
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>Marcas permitidas</span>
+                  <div style={{ display: 'grid', gap: 6, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', maxHeight: 220, overflowY: 'auto', padding: 8, border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff' }}>
+                    {brandOptions.map((name) => {
+                      const isChecked = !!editState?.allowedBrands.some((item) => item.toLowerCase() === name.toLowerCase());
+                      return (
+                        <label key={`allowed-${name}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleAllowedBrandToggle(name)}
+                          />
+                          {name}
+                        </label>
+                      );
+                    })}
+                    {!brandOptions.length ? (
+                      <span style={{ fontSize: 12, color: '#64748b' }}>No hay marcas disponibles desde el backend.</span>
+                    ) : null}
+                  </div>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                    Selecciona todas las marcas que este usuario puede usar. La marca visible permanecerá seleccionada automáticamente.
+                  </span>
                 </div>
 
                 <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>

@@ -47,6 +47,27 @@ export default function PanelOemPage(): React.JSX.Element {
   const [selectedOrgId, setSelectedOrgId] = React.useState<string>('');
   const selectedOrg = React.useMemo(() => organizations.find((org) => org.id === selectedOrgId) || null, [organizations, selectedOrgId]);
 
+  const handleOpenOemView = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    if (typeof window !== 'undefined') {
+      try {
+        const storage = window.localStorage;
+        storage.removeItem('CORTEX_DEALER_ID');
+        storage.removeItem('CORTEX_DEALER_CONTEXT');
+        storage.removeItem('CORTEX_ALLOWED_BRANDS');
+        storage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+        storage.removeItem('CORTEX_DEALER_PREVIEW');
+        storage.removeItem('CORTEX_SUPERADMIN_ORG_ID');
+      } catch {}
+      try {
+        window.location.assign('/ui');
+        return;
+      } catch {}
+    }
+    // Fallback en caso de no tener window disponible
+    window.open('/ui', '_self');
+  }, []);
+
   return (
     <main style={{ display: 'grid', gap: 24, padding: 24 }}>
       <section style={{ display: 'grid', gap: 12 }}>
@@ -60,6 +81,7 @@ export default function PanelOemPage(): React.JSX.Element {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           <a
             href="/ui"
+            onClick={handleOpenOemView}
             style={{ padding: '8px 14px', borderRadius: 10, border: '1px solid #2563eb', color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
           >
             Abrir vista OEM (sin filtro)

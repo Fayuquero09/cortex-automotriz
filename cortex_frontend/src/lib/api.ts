@@ -48,6 +48,10 @@ function withAuth(init: RequestInit = {}): RequestInit {
       if (adminUserId) headers.set('x-admin-user-id', adminUserId);
     } catch {}
     try {
+      const orgId = window.localStorage.getItem('CORTEX_SUPERADMIN_ORG_ID');
+      if (orgId) headers.set('x-organization-id', orgId);
+    } catch {}
+    try {
       const membershipSession = window.localStorage.getItem('CORTEX_MEMBERSHIP_SESSION');
       if (membershipSession) headers.set('x-membership-session', membershipSession);
     } catch {}
@@ -121,6 +125,18 @@ export const endpoints = {
   adminOrganization: (orgId: string) => apiGet(`/admin/organizations/${orgId}`),
   adminSelfMemberships: (params?: Record<string, any>) => apiGet('/admin/self_memberships', params),
   adminSelfMembership: (membershipId: string) => apiGet(`/admin/self_memberships/${membershipId}`),
+  adminImpersonateSelfMembership: (membershipId: string) =>
+    fetch(buildUrl(`/admin/self_memberships/${membershipId}/impersonate`), withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })).then(async (res) => {
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = data?.message || data?.detail || `Error ${res.status}`;
+        throw new Error(String(message));
+      }
+      return data;
+    }),
   adminUpdateOrganization: (orgId: string, body: Record<string, any>) =>
     fetch(buildUrl(`/admin/organizations/${orgId}`), withAuth({
       method: 'PATCH',
@@ -256,6 +272,14 @@ export const endpoints = {
       }
       return res.json();
     }),
+  adminDeleteUser: (userId: string) =>
+    fetch(buildUrl(`/admin/users/${userId}`), withAuth({ method: 'DELETE' })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return true;
+    }),
   adminUpdateSelfMembership: (membershipId: string, body: Record<string, any>) =>
     fetch(buildUrl(`/admin/self_memberships/${membershipId}`), withAuth({
       method: 'PATCH',
@@ -267,6 +291,14 @@ export const endpoints = {
         throw new Error(msg || `Error ${res.status}`);
       }
       return res.json();
+    }),
+  adminDeleteSelfMembership: (membershipId: string) =>
+    fetch(buildUrl(`/admin/self_memberships/${membershipId}`), withAuth({ method: 'DELETE' })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return true;
     }),
   adminUpdateOrganizationStatus: (orgId: string, body: Record<string, any>) =>
     fetch(buildUrl(`/admin/organizations/${orgId}/status`), withAuth({

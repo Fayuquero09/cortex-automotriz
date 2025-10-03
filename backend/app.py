@@ -789,6 +789,31 @@ def _normalize_address(value: Optional[str]) -> Optional[str]:
     return cleaned.lower()
 
 
+def _normalize_allowed_brand_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        tokens = value.replace(";", "\n").replace(",", "\n").splitlines()
+    elif isinstance(value, (list, tuple, set)):
+        tokens = list(value)
+    else:
+        tokens = []
+    result: List[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if not isinstance(token, str):
+            continue
+        cleaned = token.strip()
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(cleaned)
+    return result
+
+
 def _extract_dealer_id(request: Request, payload: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     header = request.headers.get("x-dealer-id") if request else None
     dealer_id = _normalize_uuid(header)
@@ -905,9 +930,16 @@ def _build_dealer_state(session_data: Mapping[str, Any]) -> Dict[str, Any]:
         profile.pop("__dirty__", None)
     contact = _safe_json_dict(profile.get("contact"))
     brand_label = session_data.get("brand_label") or session_data.get("brand_slug")
-    allowed_brands: list[str] = []
-    if brand_label:
-        allowed_brands.append(str(brand_label))
+    allowed_brands: list[str] = _normalize_allowed_brand_list(profile.get("allowed_brands") if isinstance(profile, Mapping) else None)
+    if not allowed_brands:
+        meta_allowed = session_data.get("metadata") if isinstance(session_data, Mapping) else None
+        if isinstance(meta_allowed, Mapping):
+            allowed_brands = _normalize_allowed_brand_list(meta_allowed.get("allowed_brands"))
+    if brand_label and str(brand_label).strip():
+        primary = str(brand_label).strip()
+        lowered = {item.lower() for item in allowed_brands}
+        if primary.lower() not in lowered:
+            allowed_brands.insert(0, primary)
     dealer_id = profile.get("id") or membership_id
     return {
         "membership_id": membership_id,
@@ -965,6 +997,160 @@ def _enforce_dealer_access(dealer_id: Optional[str]) -> None:
         raise HTTPException(status_code=403, detail="Acceso deshabilitado para este dealer (pausado)")
     if org_status == "paused":
         raise HTTPException(status_code=403, detail="Acceso deshabilitado: organización en pausa")
+
+
+def _resolve_org_context(
+    request: Optional[Request],
+    payload: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    info: Dict[str, Any] = {"dealer_id": None, "dealer_info": None, "organization_id": None}
+    dealer_id = _extract_dealer_id(request, payload)
+    info["dealer_id"] = dealer_id
+    if dealer_id and SUPABASE_DB_URL:
+        try:
+            with _open_supabase_conn() as conn:
+                dealer_info = _fetch_dealer_record(conn, dealer_id)
+            info["dealer_info"] = dealer_info
+            info["organization_id"] = dealer_info.get("organization_id")
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            try:
+                logger.warning("[openai] dealer lookup failed for %s: %s", dealer_id, exc)
+            except Exception:
+                pass
+    header_org = _normalize_uuid(request.headers.get("x-organization-id")) if request else None
+    if header_org and not info.get("organization_id"):
+        info["organization_id"] = header_org
+    if not info.get("organization_id") and payload and isinstance(payload, Mapping):
+        context = payload.get("context")
+        if isinstance(context, Mapping):
+            ctx_org = _normalize_uuid(context.get("organization_id") if isinstance(context.get("organization_id"), str) else None)
+            if ctx_org:
+                info["organization_id"] = ctx_org
+        if not info.get("organization_id"):
+            raw_org = payload.get("organization_id")
+            if isinstance(raw_org, str):
+                norm = _normalize_uuid(raw_org)
+                if norm:
+                    info["organization_id"] = norm
+    return info
+
+
+def _fetch_organization_metadata(org_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not org_id or not SUPABASE_DB_URL:
+        return None
+    try:
+        with _open_supabase_conn() as conn:
+            row = conn.execute(
+                "select id, name, metadata from cortex.organizations where id = %s::uuid",
+                (org_id,),
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            logger.warning("[openai] metadata lookup failed for %s: %s", org_id, exc)
+        except Exception:
+            pass
+        return None
+    if row is None:
+        return None
+    data = dict(row)
+    data["id"] = str(data.get("id") or org_id)
+    data["metadata"] = _safe_json_dict(data.get("metadata"))
+    data["name"] = data.get("name") or ""
+    return data
+
+
+def _resolve_openai_config(
+    request: Optional[Request],
+    payload: Optional[Mapping[str, Any]] = None,
+    *,
+    membership_ctx: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    default_model = os.getenv("OPENAI_MODEL", "gpt-4o")
+    cfg: Dict[str, Any] = {
+        "source": "default",
+        "api_key": None,
+        "model": default_model,
+        "organization_id": None,
+        "alias": None,
+    }
+
+    membership_token: Optional[str] = None
+    membership_data: Optional[Mapping[str, Any]] = None
+    if membership_ctx and isinstance(membership_ctx, Mapping):
+        token = membership_ctx.get("token")
+        if isinstance(token, str) and token.strip():
+            membership_token = token.strip()
+        data = membership_ctx.get("data")
+        if isinstance(data, Mapping):
+            membership_data = data
+    if membership_token is None:
+        raw = _extract_membership_session(request, payload)
+        if raw:
+            membership_token = raw
+            try:
+                membership_data = _require_membership_session(raw)
+            except Exception:
+                membership_data = None
+    if membership_token:
+        cfg["source"] = "membership"
+        cfg["membership_session"] = membership_token
+        membership_id = None
+        if membership_data and isinstance(membership_data, Mapping):
+            membership_id = membership_data.get("membership_id")
+        if membership_id:
+            cfg["membership_id"] = str(membership_id)
+        membership_key = (
+            os.getenv("OPENAI_API_KEY_MEMBERSHIP")
+            or os.getenv("OPENAI_API_KEY_SELF_SERVICE")
+            or os.getenv("OPENAI_API_KEY")
+        )
+        membership_model = os.getenv("OPENAI_MODEL_MEMBERSHIP") or default_model
+        cfg["api_key"] = membership_key
+        cfg["model"] = membership_model
+        alias = None
+        if membership_data and isinstance(membership_data, Mapping):
+            alias = membership_data.get("brand_label") or membership_data.get("display_name")
+        cfg["alias"] = alias or "self_service"
+        return cfg
+
+    context = _resolve_org_context(request, payload)
+    cfg.update({k: v for k, v in context.items() if k != "dealer_info"})
+    org_id = context.get("organization_id")
+    if org_id:
+        org_meta = _fetch_organization_metadata(org_id)
+        if org_meta:
+            cfg["source"] = "organization"
+            cfg["organization_id"] = org_meta.get("id")
+            cfg["organization_name"] = org_meta.get("name")
+            metadata = org_meta.get("metadata") if isinstance(org_meta.get("metadata"), dict) else {}
+            openai_node: Optional[Mapping[str, Any]] = None
+            if isinstance(metadata, dict):
+                node = metadata.get("openai")
+                if isinstance(node, Mapping):
+                    openai_node = node
+            key = None
+            model = None
+            alias = None
+            if openai_node:
+                key = openai_node.get("api_key") or openai_node.get("key")
+                model = openai_node.get("model")
+                alias = openai_node.get("alias")
+            else:
+                if isinstance(metadata, dict):
+                    key = metadata.get("openai_api_key") or metadata.get("openaiKey")
+                    model = metadata.get("openai_model")
+                    alias = metadata.get("openai_alias")
+            if key:
+                cfg["api_key"] = key
+            if model:
+                cfg["model"] = model
+            if alias or org_meta.get("name"):
+                cfg["alias"] = alias or org_meta.get("name")
+    if cfg.get("api_key") is None:
+        cfg["api_key"] = os.getenv("OPENAI_API_KEY")
+    return cfg
 
 
 def _fetch_dealer_record(conn: psycopg.Connection, dealer_id: str) -> Dict[str, Any]:
@@ -1547,6 +1733,7 @@ class SelfMembershipUpdate(BaseModel):
     dealer_profile: Optional[Dict[str, Any]] = None
     admin_notes: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    allowed_brands: Optional[List[str]] = None
 
 
 class DealerUserCreate(BaseModel):
@@ -2208,7 +2395,11 @@ def _load_verifier_prompt(lang: str) -> _Optional[str]:
                 return txt
     return None
 
-def _load_prompts_for_lang(lang: str, scope: str | None = None) -> tuple[_Optional[str], _Optional[str]]:
+def _load_prompts_for_lang(
+    lang: str,
+    scope: str | None = None,
+    profile: str | None = None,
+) -> tuple[_Optional[str], _Optional[str]]:
     """Return (system_prompt, user_template) from public/data for a given lang.
 
     Filenames expected:
@@ -2219,17 +2410,36 @@ def _load_prompts_for_lang(lang: str, scope: str | None = None) -> tuple[_Option
     if lang not in {"es","en","zh"}:
         return None, None
     scope = (scope or "exec").strip().lower()
+    scope = scope.strip().lower()
+
+    def _variant(name: str, key: str) -> str:
+        if not key:
+            return name
+        slug = _slugify(key)
+        if not slug:
+            return name
+        if "_v" in name:
+            return name.replace("_v", f"_{slug}_v", 1)
+        if name.endswith(".txt"):
+            return name[:-4] + f"_{slug}.txt"
+        return f"{name}_{slug}"
+
     if scope == "dealer_script":
-        name_pairs = [
+        base_pairs = [
             (f"prompt_dealer_script_{lang}_v1.txt", f"user_template_dealer_script_{lang}_v1.txt"),
         ]
     else:
-        name_pairs = [
-            # Preferir prompts estructurados (JSON) para generar acciones accionables
+        base_pairs = [
             (f"prompt_cortex_exec_{lang}_v1.txt", f"user_template_exec_{lang}_v1.txt"),
-            # Fallback a narrativa plana si no existen los anteriores
             (f"prompt_narrativa_comparativa_{lang}_v1.txt", f"user_template_narrativa_comparativa_{lang}_v1.txt"),
         ]
+
+    name_pairs: list[tuple[str, str]] = []
+    if profile:
+        for sys_name, usr_name in base_pairs:
+            name_pairs.append((_variant(sys_name, profile), _variant(usr_name, profile)))
+    name_pairs.extend(base_pairs)
+
     for sys_name, usr_name in name_pairs:
         for base in _prompt_search_dirs():
             p_sys = base / sys_name
@@ -3869,8 +4079,21 @@ def _fetch_admin_self_membership(
         return None
 
     membership: Dict[str, Any] = dict(row)
-    membership["metadata"] = _safe_json_dict(membership.get("metadata"))
-    membership["dealer_profile"] = _safe_json_dict(membership.get("dealer_profile"))
+    metadata = _safe_json_dict(membership.get("metadata"))
+    dealer_profile = _safe_json_dict(membership.get("dealer_profile"))
+    membership["metadata"] = metadata
+    membership["dealer_profile"] = dealer_profile
+
+    allowed = _normalize_allowed_brand_list(metadata.get("allowed_brands") if isinstance(metadata, Mapping) else None)
+    if not allowed:
+        allowed = _normalize_allowed_brand_list(dealer_profile.get("allowed_brands") if isinstance(dealer_profile, Mapping) else None)
+    brand_label = membership.get("brand_label")
+    if isinstance(brand_label, str) and brand_label.strip():
+        normalized = brand_label.strip()
+        allowed_lower = {item.lower() for item in allowed}
+        if normalized.lower() not in allowed_lower:
+            allowed.insert(0, normalized)
+    membership["allowed_brands"] = allowed
 
     sessions = conn.execute(
         """
@@ -3952,7 +4175,7 @@ def admin_list_self_memberships(
 
     where_clause = " where " + " and ".join(filters) if filters else ""
     list_sql = (
-        "select id, phone, display_name, brand_label, status, paid, free_limit, search_count, last_session_at, created_at, updated_at "
+        "select id, phone, display_name, brand_label, status, paid, free_limit, search_count, last_session_at, created_at, updated_at, metadata, dealer_profile "
         "from cortex.self_memberships"
         f"{where_clause}"
         " order by created_at desc "
@@ -3977,8 +4200,31 @@ def admin_list_self_memberships(
             total = int(count_row[0])
     else:
         total = len(rows)
+    items = _rows_to_json(rows)
+    for item in items:
+        metadata_obj = _safe_json_dict(item.get("metadata"))
+        profile_obj = _safe_json_dict(item.get("dealer_profile"))
+        allowed = []
+        meta_allowed = metadata_obj.get("allowed_brands") if isinstance(metadata_obj, Mapping) else None
+        if isinstance(meta_allowed, (list, tuple)):
+            allowed = _normalize_allowed_brand_list(list(meta_allowed))
+        if not allowed:
+            profile_allowed = profile_obj.get("allowed_brands") if isinstance(profile_obj, Mapping) else None
+            if isinstance(profile_allowed, (list, tuple)):
+                allowed = _normalize_allowed_brand_list(list(profile_allowed))
+        brand_label = item.get("brand_label")
+        if isinstance(brand_label, str) and brand_label.strip():
+            key = brand_label.strip().lower()
+            seen = {entry.lower() for entry in allowed}
+            if key not in seen:
+                allowed.insert(0, brand_label.strip())
+        if allowed:
+            item["allowed_brands"] = allowed
+        item.pop("metadata", None)
+        item.pop("dealer_profile", None)
+
     return {
-        "items": _rows_to_json(rows),
+        "items": items,
         "limit": limit,
         "offset": offset,
         "total": total,
@@ -4018,6 +4264,52 @@ def admin_update_self_membership(
 
     try:
         with _open_supabase_conn() as conn:
+            row = conn.execute(
+                "select metadata, dealer_profile from cortex.self_memberships where id = %s::uuid",
+                (membership_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Membresía no encontrada")
+
+            if isinstance(row, Mapping):
+                current_metadata = row.get("metadata")
+                current_profile = row.get("dealer_profile")
+            else:
+                current_metadata = row[0]
+                current_profile = row[1]
+
+            metadata_obj = _safe_json_dict(current_metadata)
+            profile_obj = _safe_json_dict(current_profile)
+            metadata_changed = False
+            profile_changed = False
+
+            metadata_input = data.pop("metadata", None) if "metadata" in data else None
+            if metadata_input is not None:
+                metadata_obj = _safe_json_dict(metadata_input)
+                metadata_changed = True
+
+            dealer_profile_input = data.pop("dealer_profile", None) if "dealer_profile" in data else None
+            if dealer_profile_input is not None:
+                profile_obj = _safe_json_dict(dealer_profile_input)
+                profile_changed = True
+
+            allowed_brands_input = data.pop("allowed_brands", None) if "allowed_brands" in data else None
+
+            if allowed_brands_input is not None:
+                prev_meta_allowed = metadata_obj.get("allowed_brands") if isinstance(metadata_obj, Mapping) else None
+                prev_profile_allowed = profile_obj.get("allowed_brands") if isinstance(profile_obj, Mapping) else None
+                new_allowed = _normalize_allowed_brand_list(allowed_brands_input)
+                if new_allowed:
+                    metadata_obj["allowed_brands"] = new_allowed
+                    profile_obj["allowed_brands"] = new_allowed
+                else:
+                    metadata_obj.pop("allowed_brands", None)
+                    profile_obj.pop("allowed_brands", None)
+                if metadata_obj.get("allowed_brands") != prev_meta_allowed:
+                    metadata_changed = True
+                if profile_obj.get("allowed_brands") != prev_profile_allowed:
+                    profile_changed = True
+
             with conn.cursor() as cur:
                 updates: List[str] = []
                 params: List[Any] = []
@@ -4093,11 +4385,6 @@ def admin_update_self_membership(
                     updates.append("paid_at = %s")
                     params.append(datetime.now(timezone.utc) if paid_value else None)
 
-                if "dealer_profile" in data:
-                    profile = _safe_json_dict(data.get("dealer_profile"))
-                    updates.append("dealer_profile = %s::jsonb")
-                    params.append(json.dumps(profile))
-
                 if "admin_notes" in data:
                     notes_raw = data.get("admin_notes")
                     notes_clean = notes_raw.strip() if isinstance(notes_raw, str) else None
@@ -4105,8 +4392,11 @@ def admin_update_self_membership(
                     updates.append("admin_notes = %s")
                     params.append(notes_clean)
 
-                if "metadata" in data:
-                    metadata_obj = _safe_json_dict(data.get("metadata"))
+                if profile_changed:
+                    updates.append("dealer_profile = %s::jsonb")
+                    params.append(json.dumps(profile_obj))
+
+                if metadata_changed:
                     updates.append("metadata = %s::jsonb")
                     params.append(json.dumps(metadata_obj))
 
@@ -4131,6 +4421,155 @@ def admin_update_self_membership(
     if detail is None:
         raise HTTPException(status_code=404, detail="Membresía no encontrada")
     return detail
+
+
+@app.delete("/admin/self_memberships/{membership_id}", status_code=204)
+def admin_delete_self_membership(membership_id: str, request: Request) -> Response:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    membership_uuid = _normalize_uuid(membership_id)
+    if not membership_uuid:
+        raise HTTPException(status_code=400, detail="membership_id inválido")
+
+    try:
+        with _open_supabase_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select 1 from cortex.self_memberships where id = %s::uuid",
+                    (membership_uuid,),
+                )
+                if cur.fetchone() is None:
+                    raise HTTPException(status_code=404, detail="Membresía no encontrada")
+
+                cur.execute(
+                    "delete from cortex.self_membership_sessions where membership_id = %s::uuid",
+                    (membership_uuid,),
+                )
+                cur.execute(
+                    "delete from cortex.self_memberships where id = %s::uuid",
+                    (membership_uuid,),
+                )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Membresía no encontrada")
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+    return Response(status_code=204)
+
+
+def _admin_issue_self_membership_session(membership_id: str) -> Dict[str, Any]:
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    try:
+        with _open_supabase_conn() as conn:
+            detail = _fetch_admin_self_membership(conn, membership_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Membresía no encontrada")
+
+    membership = detail.get("membership") if isinstance(detail, Mapping) else None
+    if not isinstance(membership, Mapping):
+        raise HTTPException(status_code=404, detail="Membresía no encontrada")
+
+    phone = str(membership.get("phone") or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="La membresía no tiene teléfono registrado")
+
+    now = datetime.now(timezone.utc)
+    expires_at = now + _MEMBERSHIP_SESSION_TTL
+    session_token = secrets.token_urlsafe(24)
+
+    try:
+        _record_self_membership_session(membership_id, session_token, expires_at)
+        _self_membership_update(
+            membership_id,
+            {
+                "last_session_token": session_token,
+                "last_session_at": now,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+    session_payload: Dict[str, Any] = {
+        "phone": phone,
+        "created_at": now,
+        "expires_at": expires_at,
+        "membership_id": membership.get("id") or membership_id,
+        "search_count": int(membership.get("search_count") or 0),
+        "free_limit": int(membership.get("free_limit") or _MEMBERSHIP_FREE_LIMIT),
+        "paid": bool(membership.get("paid")),
+        "status": str(membership.get("status") or "trial"),
+        "brand_slug": membership.get("brand_slug"),
+        "brand_label": membership.get("brand_label"),
+        "display_name": membership.get("display_name"),
+        "footer_note": membership.get("footer_note"),
+        "dealer_profile": _normalize_dealer_profile(membership),
+        "metadata": _safe_json_dict(membership.get("metadata")),
+    }
+
+    allowed_brands = []
+    raw_allowed = membership.get("allowed_brands")
+    if isinstance(raw_allowed, (list, tuple)):
+        allowed_brands = _normalize_allowed_brand_list(list(raw_allowed))
+    else:
+        meta_allowed = session_payload.get("metadata", {}).get("allowed_brands") if isinstance(session_payload.get("metadata"), Mapping) else None
+        if isinstance(meta_allowed, (list, tuple)):
+            allowed_brands = _normalize_allowed_brand_list(list(meta_allowed))
+    if session_payload.get("brand_label") and str(session_payload.get("brand_label")).strip():
+        primary = str(session_payload.get("brand_label")).strip()
+        lowered = {item.lower() for item in allowed_brands}
+        if primary.lower() not in lowered:
+            allowed_brands.insert(0, primary)
+    session_payload["allowed_brands"] = allowed_brands
+    membership = dict(membership)
+    membership["allowed_brands"] = allowed_brands
+
+    _MEMBERSHIP_SESSIONS[session_token] = session_payload
+    profile_obj = session_payload.get("dealer_profile") if isinstance(session_payload.get("dealer_profile"), Mapping) else {}
+    profile_view = {
+        "phone": session_payload.get("phone"),
+        "brand": session_payload.get("brand_slug") or session_payload.get("brand_label"),
+        "brand_label": session_payload.get("brand_label"),
+        "dealer_profile": profile_obj,
+    }
+    _MEMBERSHIP_PROFILES[session_token] = profile_view
+
+    dealer_state = _build_dealer_state(session_payload)
+
+    result = {
+        "ok": True,
+        "session": session_token,
+        "expires_at": expires_at.isoformat(),
+        "membership": membership,
+        "allowed_brands": allowed_brands,
+        "dealer_state": dealer_state,
+        "usage": {
+            "free_limit": session_payload["free_limit"],
+            "search_count": session_payload["search_count"],
+            "paid": session_payload["paid"],
+            "status": session_payload["status"],
+        },
+    }
+    return result
+
+
+@app.post("/admin/self_memberships/{membership_id}/impersonate")
+def admin_impersonate_self_membership(membership_id: str, request: Request) -> Dict[str, Any]:
+    _require_superadmin_token(request)
+    return _admin_issue_self_membership_session(membership_id)
 
 
 @app.patch("/admin/brands/{brand_id}")
@@ -4848,6 +5287,43 @@ def admin_update_user_features(user_id: str, payload: AdminUserFeaturesUpdate, r
         raise
     except Exception as exc:  # noqa: BLE001
         raise _supabase_http_exception(exc)
+
+
+@app.delete("/admin/users/{user_id}", status_code=204)
+def admin_delete_user(user_id: str, request: Request) -> Response:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    user_uuid = _normalize_uuid(user_id)
+    if not user_uuid:
+        raise HTTPException(status_code=400, detail="user_id inválido")
+
+    try:
+        with _open_supabase_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select organization_id from cortex.app_users where id = %s::uuid",
+                    (user_uuid,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+                cur.execute(
+                    "delete from cortex.app_users where id = %s::uuid",
+                    (user_uuid,),
+                )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Usuario no encontrado")
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+    _delete_supabase_user(user_uuid)
+    return Response(status_code=204)
 
 
 # ------------------------------ Basic config -----------------------------
@@ -7186,7 +7662,8 @@ def _compare_core(
     increment_usage: bool = True,
 ) -> Dict[str, Any]:
     usage_ctx = _membership_usage_precheck(request, payload) if increment_usage else None
-    _enforce_dealer_access(_extract_dealer_id(request, payload))
+    dealer_id = _extract_dealer_id(request, payload)
+    _enforce_dealer_access(dealer_id)
     own = payload.get("own") or {}
     competitors = payload.get("competitors") or []
     def to_num(x):
@@ -9786,15 +10263,56 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
     user_template_override = None
     lang_req = str(payload.get("prompt_lang") or "").strip().lower()
     scope_req = str(payload.get("prompt_scope") or payload.get("insights_scope") or payload.get("mode") or "").strip().lower()
+
+    prompt_profile: Optional[str] = None
+    prompt_profile_slug: Optional[str] = None
+    org_type: Optional[str] = None
+
+    try:
+        membership_token = _extract_membership_session(request, payload)
+    except Exception:
+        membership_token = None
+
+    if membership_token:
+        prompt_profile = "dealer_vendor"
+    else:
+        context = _resolve_org_context(request, payload)
+        org_id = context.get("organization_id")
+        org_meta = _fetch_organization_metadata(org_id)
+        if isinstance(org_meta, Mapping):
+            metadata = org_meta.get("metadata") if isinstance(org_meta.get("metadata"), Mapping) else {}
+            org_type = str(metadata.get("org_type") or "oem").strip().lower()
+            meta_profile = metadata.get("prompt_profile") or metadata.get("prompt_key")
+            if org_type == "grupo":
+                prompt_profile = str(meta_profile or "dealer_vendor")
+            else:
+                prompt_profile = str(meta_profile or _slugify(org_meta.get("name") or org_meta.get("id") or ""))
+        else:
+            org_type = None
+
+    if prompt_profile:
+        prompt_profile_slug = _slugify(prompt_profile)
+        if not prompt_profile_slug:
+            prompt_profile_slug = None
+
     if lang_req in {"es","en","zh"}:
-        sys_txt, usr_txt = _load_prompts_for_lang(lang_req, scope_req)
+        sys_txt, usr_txt = _load_prompts_for_lang(lang_req, scope_req, prompt_profile_slug)
         system_prompt_override = sys_txt or None
         user_template_override = usr_txt or None
 
     if system_prompt_override:
         system = system_prompt_override
     else:
-        system = (
+        vendor_system = (
+            "Actúa como asesor de ventas senior en piso. Tu objetivo es construir un guion claro y accionable para cerrar al cliente con el vehículo propio. "
+            "1) Arranca con una apertura que conecte con la necesidad del prospecto y resuma por qué este modelo es la mejor solución. "
+            "2) Contrasta contra los rivales relevantes enfocándote en los kilómetros que manejará el cliente, el equipamiento diferenciador, garantías, ADAS y costos totales. "
+            "3) Propón tácticas de demostración (test drive, activaciones, accesorios, bundles F&I) y cómo neutralizan objeciones típicas de precio, entrega o equipamiento. "
+            "4) Cierra con un llamado a la acción inmediato (agenda prueba, firma, apartado) y un plan de seguimiento multicanal. "
+            "Usa siempre voz de 'nosotros', evita describir gráficas o la fuente de datos y entrega recomendaciones concretas. "
+            "Devuelve JSON UTF-8 con dos claves: 'insights' (mensaje ejecutivo) y 'struct' (secciones con items) para renderizar en la interfaz."
+        )
+        oem_system = (
             "Actúa como estratega comercial senior de una OEM. Tu objetivo es entregar un diagnóstico de precio y un plan accionable que pueda ejecutar Marketing, F&I y la red sin cambios de producto ni de planta. "
             "1) Emite un juicio claro sobre si el MSRP/TX actual se sostiene frente a los rivales, usando relaciones como costo/HP, gap de TCO y brecha de equipamiento/ADAS. "
             "2) Recomienda un TX objetivo en dos variantes: (A) ajuste táctico en un rango estrecho o (B) mantener precio con un Value‑Pack (servicio 60k, seguro 1er año y, si aplica, tasa preferente). No propongas descuentos triviales. "
@@ -9802,6 +10320,10 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
             "4) Trabaja siempre desde la voz de 'nosotros'; no describas gráficas ni el origen de datos; convierte cifras en implicaciones. "
             "Devuelve JSON UTF‑8 con dos claves: 'insights' (texto ejecutivo) y 'struct' (secciones con items) para render en front."
         )
+        if (prompt_profile_slug == "dealer_vendor") or (scope_req == "dealer_script") or (org_type == "grupo") or membership_token:
+            system = vendor_system
+        else:
+            system = oem_system
 
     make_name = str(own.get("make") or own.get("marca") or own.get("brand") or "").strip().lower()
     if make_name == "gwm":
@@ -10690,14 +11212,37 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
 
     # 3) Caché por hash del payload (para ahorrar tokens)
     import os, json as _json
-    api_key = os.getenv("OPENAI_API_KEY")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o")
+    usage_ctx = _membership_usage_precheck(request, payload)
+    openai_cfg = _resolve_openai_config(request, payload, membership_ctx=usage_ctx)
+    model = openai_cfg.get("model") or os.getenv("OPENAI_MODEL", "gpt-4o")
+    api_key = openai_cfg.get("api_key")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="OpenAI API key no configurada para esta solicitud")
+    try:
+        audit(
+            "openai_source",
+            "/insights",
+            source=openai_cfg.get("source"),
+            organization_id=openai_cfg.get("organization_id"),
+            membership_id=openai_cfg.get("membership_id"),
+            alias=openai_cfg.get("alias"),
+        )
+    except Exception:
+        pass
     # Construir clave estable del análisis
     try:
         import hashlib as _hash
         # Permitir forzar regeneración desde el cliente: incluir 'refresh' en la clave
         refresh = payload.get("refresh") or payload.get("cache_bust")
-        cache_basis = {"own": own, "comps": comps_short, "refresh": refresh, "scope": scope_req}
+        cache_basis = {
+            "own": own,
+            "comps": comps_short,
+            "refresh": refresh,
+            "scope": scope_req,
+            "org": openai_cfg.get("organization_id"),
+            "membership": openai_cfg.get("membership_id"),
+            "prompt_profile": prompt_profile_slug,
+        }
         cache_key = _hash.sha256(
             _json.dumps(cache_basis, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
@@ -10712,6 +11257,7 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         if ent.get("ok") is True:
             res = dict(ent)
             res["compare"] = comp_json
+            _membership_usage_commit(usage_ctx, "insights")
             return res
 
     # Deterministic fallback (sin IA) para no dejar el bloque vacío
@@ -11647,10 +12193,21 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         # cachear
         if cache_key:
             cache[cache_key] = {k: v for k, v in res.items() if k != "compare"}
+        _membership_usage_commit(usage_ctx, "insights")
         return res
     except Exception:
         # Fallback en caso de error de red/parseo
-        return {"ok": True, "model": model, "insights": "", "insights_json": None, "insights_struct": _deterministic_struct(), "compare": comp_json, "used_fallback_struct": True}
+        fallback = {
+            "ok": True,
+            "model": model,
+            "insights": "",
+            "insights_json": None,
+            "insights_struct": _deterministic_struct(),
+            "compare": comp_json,
+            "used_fallback_struct": True,
+        }
+        _membership_usage_commit(usage_ctx, "insights")
+        return fallback
 
 
 # ------------------------------ Price Explain -----------------------------
