@@ -119,6 +119,8 @@ export const endpoints = {
   versionDiffs: (params?: Record<string, any>) => apiGet('/version_diffs', params),
   adminOverview: () => apiGet('/admin/overview'),
   adminOrganization: (orgId: string) => apiGet(`/admin/organizations/${orgId}`),
+  adminSelfMemberships: (params?: Record<string, any>) => apiGet('/admin/self_memberships', params),
+  adminSelfMembership: (membershipId: string) => apiGet(`/admin/self_memberships/${membershipId}`),
   adminUpdateOrganization: (orgId: string, body: Record<string, any>) =>
     fetch(buildUrl(`/admin/organizations/${orgId}`), withAuth({
       method: 'PATCH',
@@ -244,6 +246,18 @@ export const endpoints = {
     }),
   adminUpdateUser: (userId: string, body: Record<string, any>) =>
     fetch(buildUrl(`/admin/users/${userId}`), withAuth({
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })).then(async (res) => {
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || `Error ${res.status}`);
+      }
+      return res.json();
+    }),
+  adminUpdateSelfMembership: (membershipId: string, body: Record<string, any>) =>
+    fetch(buildUrl(`/admin/self_memberships/${membershipId}`), withAuth({
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

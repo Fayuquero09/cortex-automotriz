@@ -139,6 +139,20 @@ _MEMBERSHIP_OTPS: Dict[str, tuple[str, datetime]] = {}
 _MEMBERSHIP_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _MEMBERSHIP_PROFILES: Dict[str, Dict[str, Any]] = {}
 
+
+def _safe_json_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
 FEATURE_LEVELS: set[str] = {"none", "view", "edit"}
 MANAGEABLE_FEATURE_KEYS: tuple[str, ...] = (
     "compare",
@@ -227,6 +241,7 @@ def _create_membership_session(phone: str) -> str:
         "brand_label": membership.get("brand_label"),
         "display_name": membership.get("display_name"),
         "footer_note": membership.get("footer_note"),
+        "dealer_profile": _normalize_dealer_profile(membership),
     }
     _MEMBERSHIP_SESSIONS[session] = session_payload
 
@@ -236,6 +251,7 @@ def _create_membership_session(phone: str) -> str:
             "brand": session_payload.get("brand_slug") or session_payload.get("brand_label"),
             "pdf_display_name": session_payload.get("display_name"),
             "pdf_footer_note": session_payload.get("footer_note"),
+            "dealer_profile": session_payload.get("dealer_profile"),
         }
 
     return session
@@ -260,6 +276,7 @@ def _require_membership_session(session: str) -> Dict[str, Any]:
             "brand_label": record.get("brand_label"),
             "display_name": record.get("display_name"),
             "footer_note": record.get("footer_note"),
+            "dealer_profile": _normalize_dealer_profile(record),
         }
         _MEMBERSHIP_SESSIONS[session] = data
         if data.get("brand_slug") or data.get("display_name"):
@@ -268,6 +285,7 @@ def _require_membership_session(session: str) -> Dict[str, Any]:
                 "brand": data.get("brand_slug") or data.get("brand_label"),
                 "pdf_display_name": data.get("display_name"),
                 "pdf_footer_note": data.get("footer_note"),
+                "dealer_profile": data.get("dealer_profile"),
             }
         revoked_at = record.get("revoked_at")
         if revoked_at is not None:
@@ -301,6 +319,8 @@ def _require_membership_session(session: str) -> Dict[str, Any]:
         data["free_limit"] = _MEMBERSHIP_FREE_LIMIT
     if "paid" not in data:
         data["paid"] = False
+    if "dealer_profile" not in data:
+        data["dealer_profile"] = _normalize_dealer_profile(data)
     return data
 
 
@@ -461,6 +481,17 @@ def _ensure_self_membership(phone: str) -> Dict[str, Any]:
     membership = dict(row)
     membership.setdefault("free_limit", _MEMBERSHIP_FREE_LIMIT)
     membership.setdefault("search_count", 0)
+    dealer_profile = _normalize_dealer_profile(membership)
+    if dealer_profile.get("__dirty__") and membership.get("id"):
+        clean_profile = dict(dealer_profile)
+        clean_profile.pop("__dirty__", None)
+        try:
+            _self_membership_update(str(membership["id"]), {"dealer_profile": clean_profile})
+        except Exception:
+            pass
+        membership["dealer_profile"] = clean_profile
+    else:
+        membership["dealer_profile"] = dealer_profile
     return membership
 
 
@@ -483,6 +514,34 @@ def _self_membership_update(membership_id: str, updates: Dict[str, Any]) -> Opti
     except Exception:
         return None
     return dict(row) if row else None
+
+
+def _normalize_dealer_profile(membership: Mapping[str, Any]) -> Dict[str, Any]:
+    profile_raw = membership.get("dealer_profile")
+    profile = _safe_json_dict(profile_raw)
+    dirty = False
+    membership_id = str(membership.get("id")) if membership.get("id") else None
+    if not profile.get("id") and membership_id:
+        profile["id"] = f"dealer-{membership_id}"
+        dirty = True
+    if not profile.get("name"):
+        name = membership.get("display_name") or membership.get("brand_label") or membership.get("brand_slug") or f"Dealer {str(membership.get('phone') or '')[-4:]}"
+        profile["name"] = name
+        dirty = True
+    if not profile.get("location"):
+        profile.setdefault("location", "")
+    contact = _safe_json_dict(profile.get("contact"))
+    if not contact.get("name") and membership.get("display_name"):
+        contact["name"] = membership.get("display_name")
+        dirty = True
+    if not contact.get("phone") and membership.get("phone"):
+        contact["phone"] = str(membership.get("phone"))
+        dirty = True
+    profile["contact"] = contact
+    profile.setdefault("admin_user_id", f"self-{membership_id}" if membership_id else None)
+    if dirty:
+        profile["__dirty__"] = True
+    return profile
 
 
 def _record_self_membership_session(
@@ -546,6 +605,14 @@ def _fetch_self_membership_session(session_token: str) -> Optional[Dict[str, Any
             ).fetchone()
     except Exception:
         return None
+    return dict(row) if row else None
+
+
+def _fetch_self_membership(conn: psycopg.Connection, membership_id: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        "select * from cortex.self_memberships where id = %s::uuid",
+        (membership_id,),
+    ).fetchone()
     return dict(row) if row else None
 
 
@@ -827,6 +894,39 @@ def _membership_usage_commit(ctx: Optional[Dict[str, Any]], usage_key: str) -> N
     token = ctx.get("token") if isinstance(ctx, dict) else None
     if membership_id:
         _increment_self_membership_usage(str(membership_id), token if isinstance(token, str) else None)
+
+
+def _build_dealer_state(session_data: Mapping[str, Any]) -> Dict[str, Any]:
+    membership_id = str(session_data.get("membership_id") or "")
+    profile = _safe_json_dict(session_data.get("dealer_profile"))
+    profile = _normalize_dealer_profile({"dealer_profile": profile, "id": membership_id, "display_name": session_data.get("display_name"), "brand_label": session_data.get("brand_label"), "phone": session_data.get("phone")})
+    if "__dirty__" in profile:
+        profile = dict(profile)
+        profile.pop("__dirty__", None)
+    contact = _safe_json_dict(profile.get("contact"))
+    brand_label = session_data.get("brand_label") or session_data.get("brand_slug")
+    allowed_brands: list[str] = []
+    if brand_label:
+        allowed_brands.append(str(brand_label))
+    dealer_id = profile.get("id") or membership_id
+    return {
+        "membership_id": membership_id,
+        "dealer_id": dealer_id,
+        "brand_label": brand_label,
+        "brand_slug": session_data.get("brand_slug") or session_data.get("brand_label"),
+        "allowed_brands": allowed_brands,
+        "context": {
+            "id": dealer_id,
+            "name": profile.get("name") or (brand_label or "Dealer"),
+            "location": profile.get("location") or "",
+            "contactName": contact.get("name") or session_data.get("display_name") or "",
+            "contactPhone": contact.get("phone") or session_data.get("phone") or "",
+        },
+        "admin_user_id": profile.get("admin_user_id") or (f"self-{membership_id}" if membership_id else None),
+        "status": session_data.get("status"),
+        "paid": bool(session_data.get("paid")),
+        "phone": session_data.get("phone"),
+    }
 
 
 def _enforce_dealer_access(dealer_id: Optional[str]) -> None:
@@ -1433,6 +1533,20 @@ class MembershipCheckoutRequest(BaseModel):
 class MembershipCheckoutConfirm(BaseModel):
     session: str
     checkout_session_id: str
+
+
+class SelfMembershipUpdate(BaseModel):
+    brand_slug: Optional[str] = None
+    brand_label: Optional[str] = None
+    display_name: Optional[str] = None
+    footer_note: Optional[str] = None
+    status: Optional[str] = Field(default=None, pattern=r"^(trial|active|pending|blocked)$")
+    free_limit: Optional[int] = Field(default=None, ge=0)
+    paid: Optional[bool] = None
+    search_count: Optional[int] = Field(default=None, ge=0)
+    dealer_profile: Optional[Dict[str, Any]] = None
+    admin_notes: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class DealerUserCreate(BaseModel):
@@ -3431,6 +3545,7 @@ def membership_verify_code(payload: MembershipVerifyCode) -> Dict[str, Any]:
             _self_membership_update(str(membership_id), {"status": "trial"})
         except Exception:
             pass
+    dealer_state = _build_dealer_state(session_data)
     return {
         "ok": True,
         "session": session,
@@ -3439,6 +3554,7 @@ def membership_verify_code(payload: MembershipVerifyCode) -> Dict[str, Any]:
         "search_count": session_data.get("search_count", 0),
         "paid": bool(session_data.get("paid")),
         "status": session_data.get("status", "trial"),
+        "dealer_state": dealer_state,
     }
 
 
@@ -3526,6 +3642,16 @@ def membership_profile(payload: MembershipProfileInput) -> Dict[str, Any]:
     brand_label = brand
     footer_note = (payload.pdf_footer_note or "").strip() or None
     membership_id = session_data.get("membership_id")
+    dealer_profile = _safe_json_dict(session_data.get("dealer_profile"))
+    contact = _safe_json_dict(dealer_profile.get("contact"))
+    contact.setdefault("phone", session_data.get("phone"))
+    contact["name"] = display_name
+    dealer_profile["contact"] = contact
+    dealer_profile["name"] = display_name
+    dealer_profile["location"] = dealer_profile.get("location") or ""
+    dealer_profile["brand_label"] = brand_label
+    if membership_id and not dealer_profile.get("id"):
+        dealer_profile["id"] = f"dealer-{membership_id}"
     if membership_id:
         updates: Dict[str, Any] = {
             "brand_slug": brand_slug,
@@ -3533,6 +3659,7 @@ def membership_profile(payload: MembershipProfileInput) -> Dict[str, Any]:
             "display_name": display_name,
             "footer_note": footer_note,
             "status": "active" if session_data.get("paid") else "trial",
+            "dealer_profile": dealer_profile,
         }
         _self_membership_update(str(membership_id), updates)
     profile = {
@@ -3552,13 +3679,15 @@ def membership_profile(payload: MembershipProfileInput) -> Dict[str, Any]:
     session_data["pdf_footer_note"] = footer_note
     session_data["profile_saved_at"] = profile["saved_at"]
     session_data["status"] = "active" if session_data.get("paid") else "trial"
+    session_data["dealer_profile"] = dealer_profile
     usage = {
         "search_count": session_data.get("search_count", 0),
         "free_limit": session_data.get("free_limit", _MEMBERSHIP_FREE_LIMIT),
         "paid": bool(session_data.get("paid")),
         "status": session_data.get("status", "trial"),
     }
-    return {"ok": True, "profile": profile, "usage": usage}
+    dealer_state = _build_dealer_state(session_data)
+    return {"ok": True, "profile": profile, "usage": usage, "dealer_state": dealer_state}
 
 
 def _stripe_is_configured() -> bool:
@@ -3704,6 +3833,304 @@ def membership_checkout_confirm(payload: MembershipCheckoutConfirm) -> Dict[str,
         )
     session_data["status"] = "active"
     return {"ok": True, "paid": True, "usage": usage}
+
+
+def _fetch_admin_self_membership(
+    conn: psycopg.Connection, membership_id: str
+) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        """
+        select
+            id,
+            phone,
+            brand_slug,
+            brand_label,
+            display_name,
+            footer_note,
+            status,
+            free_limit,
+            search_count,
+            paid,
+            paid_at,
+            last_session_token,
+            last_session_at,
+            last_otp_at,
+            dealer_profile,
+            admin_notes,
+            metadata,
+            created_at,
+            updated_at
+        from cortex.self_memberships
+        where id = %s::uuid
+        """,
+        (membership_id,),
+    ).fetchone()
+    if row is None:
+        return None
+
+    membership: Dict[str, Any] = dict(row)
+    membership["metadata"] = _safe_json_dict(membership.get("metadata"))
+    membership["dealer_profile"] = _safe_json_dict(membership.get("dealer_profile"))
+
+    sessions = conn.execute(
+        """
+        select
+            id,
+            membership_id,
+            session_token,
+            issued_at,
+            expires_at,
+            last_used_at,
+            revoked_at,
+            user_agent,
+            ip_address
+        from cortex.self_membership_sessions
+        where membership_id = %s::uuid
+        order by issued_at desc
+        limit 25
+        """,
+        (membership_id,),
+    ).fetchall()
+
+    free_limit = int(membership.get("free_limit") or 0)
+    search_count = int(membership.get("search_count") or 0)
+    usage = {
+        "free_limit": free_limit,
+        "search_count": search_count,
+        "remaining": max(free_limit - search_count, 0) if free_limit else None,
+        "paid": bool(membership.get("paid")),
+        "status": membership.get("status"),
+        "last_session_at": membership.get("last_session_at"),
+    }
+
+    return {
+        "membership": jsonable_encoder(membership),
+        "sessions": _rows_to_json(sessions),
+        "usage": jsonable_encoder(usage),
+    }
+
+
+@app.get("/admin/self_memberships")
+def admin_list_self_memberships(
+    request: Request,
+    search: Optional[str] = Query(
+        default=None,
+        description="Filtra por teléfono, nombre mostrado o etiqueta de marca",
+    ),
+    status: Optional[str] = Query(
+        default=None,
+        description="Estatus exacto: trial, active, pending o blocked",
+    ),
+    paid: Optional[bool] = Query(
+        default=None, description="Filtra miembros con pago activo (true) o sin pago (false)"
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    filters: List[str] = []
+    params: List[Any] = []
+
+    if search:
+        token = f"%{search.strip()}%"
+        filters.append("(phone ilike %s or display_name ilike %s or brand_label ilike %s)")
+        params.extend([token, token, token])
+
+    if status:
+        normalized_status = status.strip().lower()
+        if normalized_status not in {"trial", "active", "pending", "blocked"}:
+            raise HTTPException(status_code=400, detail="Status inválido")
+        filters.append("status = %s")
+        params.append(normalized_status)
+
+    if paid is not None:
+        filters.append("paid = %s")
+        params.append(bool(paid))
+
+    where_clause = " where " + " and ".join(filters) if filters else ""
+    list_sql = (
+        "select id, phone, display_name, brand_label, status, paid, free_limit, search_count, last_session_at, created_at, updated_at "
+        "from cortex.self_memberships"
+        f"{where_clause}"
+        " order by created_at desc "
+        "limit %s offset %s"
+    )
+    count_sql = f"select count(*) from cortex.self_memberships{where_clause}"
+
+    try:
+        with _open_supabase_conn() as conn:
+            rows = conn.execute(list_sql, (*params, limit, offset)).fetchall()
+            count_row = conn.execute(count_sql, tuple(params)).fetchone()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+    total = 0
+    if count_row:
+        if isinstance(count_row, Mapping):
+            total = int(count_row.get("count") or 0)
+        else:
+            total = int(count_row[0])
+    else:
+        total = len(rows)
+    return {
+        "items": _rows_to_json(rows),
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+    }
+
+
+@app.get("/admin/self_memberships/{membership_id}")
+def admin_get_self_membership(membership_id: str, request: Request) -> Dict[str, Any]:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    try:
+        with _open_supabase_conn() as conn:
+            detail = _fetch_admin_self_membership(conn, membership_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Membresía no encontrada")
+    return detail
+
+
+@app.patch("/admin/self_memberships/{membership_id}")
+def admin_update_self_membership(
+    membership_id: str, payload: SelfMembershipUpdate, request: Request
+) -> Dict[str, Any]:
+    _require_superadmin_token(request)
+    if not SUPABASE_DB_URL:
+        raise HTTPException(status_code=503, detail="SUPABASE_DB_URL not configured")
+
+    data = payload.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(status_code=400, detail="No hay cambios solicitados")
+
+    try:
+        with _open_supabase_conn() as conn:
+            with conn.cursor() as cur:
+                updates: List[str] = []
+                params: List[Any] = []
+
+                if "display_name" in data:
+                    raw = data.get("display_name")
+                    value = raw.strip() if isinstance(raw, str) else None
+                    value = value or None
+                    updates.append("display_name = %s")
+                    params.append(value)
+
+                label_clean: Optional[str] = None
+                if "brand_label" in data:
+                    raw_label = data.get("brand_label")
+                    label_clean = raw_label.strip() if isinstance(raw_label, str) else None
+                    label_clean = label_clean or None
+                    updates.append("brand_label = %s")
+                    params.append(label_clean)
+
+                slug_should_update = False
+                slug_clean: Optional[str] = None
+                if "brand_slug" in data:
+                    raw_slug = data.get("brand_slug")
+                    slug_clean = raw_slug.strip() if isinstance(raw_slug, str) else None
+                    slug_clean = slug_clean or None
+                    slug_should_update = True
+                elif "brand_label" in data:
+                    slug_should_update = True
+                    slug_clean = _slugify(label_clean) if label_clean else None
+
+                if slug_should_update:
+                    updates.append("brand_slug = %s")
+                    params.append(slug_clean)
+
+                if "footer_note" in data:
+                    raw_footer = data.get("footer_note")
+                    footer_clean = raw_footer.strip() if isinstance(raw_footer, str) else None
+                    footer_clean = footer_clean or None
+                    updates.append("footer_note = %s")
+                    params.append(footer_clean)
+
+                if "status" in data:
+                    status_value = str(data.get("status") or "").strip().lower()
+                    if status_value not in {"trial", "active", "pending", "blocked"}:
+                        raise HTTPException(status_code=400, detail="Status inválido")
+                    updates.append("status = %s")
+                    params.append(status_value)
+
+                if "free_limit" in data:
+                    free_limit = data.get("free_limit")
+                    if free_limit is None:
+                        raise HTTPException(status_code=400, detail="free_limit no puede ser nulo")
+                    free_limit_int = int(free_limit)
+                    if free_limit_int < 0:
+                        raise HTTPException(status_code=400, detail="free_limit debe ser mayor o igual a cero")
+                    updates.append("free_limit = %s")
+                    params.append(free_limit_int)
+
+                if "search_count" in data:
+                    search_count = data.get("search_count")
+                    if search_count is None:
+                        raise HTTPException(status_code=400, detail="search_count no puede ser nulo")
+                    search_count_int = int(search_count)
+                    if search_count_int < 0:
+                        raise HTTPException(status_code=400, detail="search_count debe ser mayor o igual a cero")
+                    updates.append("search_count = %s")
+                    params.append(search_count_int)
+
+                if "paid" in data:
+                    paid_value = bool(data.get("paid"))
+                    updates.append("paid = %s")
+                    params.append(paid_value)
+                    updates.append("paid_at = %s")
+                    params.append(datetime.now(timezone.utc) if paid_value else None)
+
+                if "dealer_profile" in data:
+                    profile = _safe_json_dict(data.get("dealer_profile"))
+                    updates.append("dealer_profile = %s::jsonb")
+                    params.append(json.dumps(profile))
+
+                if "admin_notes" in data:
+                    notes_raw = data.get("admin_notes")
+                    notes_clean = notes_raw.strip() if isinstance(notes_raw, str) else None
+                    notes_clean = notes_clean or None
+                    updates.append("admin_notes = %s")
+                    params.append(notes_clean)
+
+                if "metadata" in data:
+                    metadata_obj = _safe_json_dict(data.get("metadata"))
+                    updates.append("metadata = %s::jsonb")
+                    params.append(json.dumps(metadata_obj))
+
+                if not updates:
+                    raise HTTPException(status_code=400, detail="No hay cambios para actualizar")
+
+                updates.append("updated_at = now()")
+                cur.execute(
+                    f"update cortex.self_memberships set {', '.join(updates)} where id = %s::uuid",
+                    (*params, membership_id),
+                )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Membresía no encontrada")
+            conn.commit()
+
+            detail = _fetch_admin_self_membership(conn, membership_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _supabase_http_exception(exc)
+
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Membresía no encontrada")
+    return detail
 
 
 @app.patch("/admin/brands/{brand_id}")

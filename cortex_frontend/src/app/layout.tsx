@@ -30,6 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                         <a className="app-link" href="/admin/control">Control</a>
                         <a className="app-link" href="/panel/oem">Panel OEM</a>
                         <a className="app-link" href="/panel/dealer">Panel Dealer</a>
+                        <a className="app-link" href="/panel/self-service">Panel Self-service</a>
                       </>
                     ) : (
                       <a className="app-link" href="/ui">Inicio</a>
@@ -41,7 +42,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     <a className="app-link" href="/admin/control">Control</a>
                     <a className="app-link" href="/panel/oem">Panel OEM</a>
                     <a className="app-link" href="/panel/dealer">Panel Dealer</a>
-                    <a className="app-link" href="/membership">Self-service</a>
+                    <a className="app-link" href="/panel/self-service">Panel Self-service</a>
+                    <a className="app-link" href="/membership">Membresía</a>
                     {showAdmin ? <a className="app-link" href="/admin">Superadmin</a> : null}
                     <LangSwitcher />
                   </>
