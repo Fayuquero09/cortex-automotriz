@@ -296,6 +296,7 @@ export default function ComparePanel() {
     climatizacion: 'Climatización',
     confort: 'Confort',
     seguridad: 'Seguridad',
+    adas: 'ADAS',
     motor: 'Motor',
     dimensiones: 'Dimensiones',
     transmision: 'Tracción / transmisión',
@@ -309,7 +310,8 @@ export default function ComparePanel() {
     audio_y_entretenimiento: ['equip_p_infotainment'],
     climatizacion: ['equip_p_comfort'],
     confort: ['equip_p_comfort'],
-    seguridad: ['equip_p_safety', 'equip_p_adas'],
+    seguridad: ['equip_p_safety'],
+    adas: ['equip_p_adas'],
     motor: ['equip_p_performance'],
     dimensiones: ['equip_p_utility'],
     transmision: ['equip_p_traction'],
@@ -1410,18 +1412,6 @@ export default function ComparePanel() {
   }, [chartRows]);
   const colorForVersion = (r: any) => versionColorMap[String(r?.version||'').toUpperCase()] || '#6b7280';
 
-  const legendItems = React.useMemo(() => {
-    const seen = new Set<string>();
-    const items: Array<{ label: string; isBase: boolean; color: string }> = [];
-    chartRows.forEach((r) => {
-      const label = vehLabel(r);
-      if (!label || seen.has(label)) return;
-      seen.add(label);
-      items.push({ label, isBase: !!(r as any).__isBase, color: colorForVersion(r) });
-    });
-    return items;
-  }, [chartRows, versionColorMap]);
-
   // Ventas mensuales 2025 (líneas) — depende de colorForVersion
   salesLineOption = React.useMemo(() => {
     const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -1944,6 +1934,72 @@ export default function ComparePanel() {
     } as any;
   }, [chartRows]);
 
+  const costPerHpBarOption = React.useMemo(() => {
+    if (!chartRows.length) return null;
+    const entries = chartRows.map((row: any) => {
+      const hp = Number(row?.caballos_fuerza ?? NaN);
+      const priceTx = Number(row?.precio_transaccion ?? NaN);
+      const priceMsrp = Number(row?.msrp ?? NaN);
+      const price = Number.isFinite(priceTx) ? priceTx : priceMsrp;
+      if (!Number.isFinite(hp) || hp <= 0 || !Number.isFinite(price) || price <= 0) return null;
+      const value = Number((price / hp).toFixed(0));
+      return {
+        label: vehLabel(row),
+        value,
+        base: !!row.__isBase,
+        color: colorForVersion(row),
+      };
+    }).filter(Boolean) as Array<{ label: string; value: number; base: boolean; color: string }>;
+    if (!entries.length) return null;
+    const maxVal = Math.max(...entries.map((entry) => entry.value));
+    return {
+      title: { text: 'Costo por HP (precio / HP)', left: 'center', top: 6 },
+      grid: { left: 140, right: 60, top: 60, bottom: 60, containLabel: true },
+      tooltip: {
+        trigger: 'item',
+        formatter: (p: any) => `${p.name}<br/>$ ${Intl.NumberFormat('es-MX').format(Number(p.value))} por HP`,
+      },
+      xAxis: { type: 'value', min: 0, max: Math.max(1000, Math.ceil(maxVal / 100) * 100), name: '$/HP', axisLabel: { formatter: (v:any) => `$ ${Intl.NumberFormat('es-MX').format(v)}` } },
+      yAxis: { type: 'category', data: entries.map((entry) => entry.label), axisLabel: { interval: 0 } },
+      series: [{
+        type: 'bar',
+        data: entries.map((entry) => ({ value: entry.value, name: entry.label, itemStyle: { color: entry.base ? '#2563eb' : entry.color } })),
+        label: { show: true, position: 'right', formatter: (p:any) => `$ ${Intl.NumberFormat('es-MX').format(Number(p.value))}` },
+      }],
+    } as any;
+  }, [chartRows, versionColorMap]);
+
+  const equipScoreBarOption = React.useMemo(() => {
+    if (!chartRows.length) return null;
+    const entries = chartRows.map((row: any) => {
+      const score = Number((row as any)?.equip_score ?? NaN);
+      if (!Number.isFinite(score)) return null;
+      return {
+        label: vehLabel(row),
+        value: Number(score.toFixed(1)),
+        base: !!row.__isBase,
+        color: colorForVersion(row),
+      };
+    }).filter(Boolean) as Array<{ label: string; value: number; base: boolean; color: string }>;
+    if (!entries.length) return null;
+    const maxVal = Math.max(...entries.map((entry) => entry.value));
+    return {
+      title: { text: 'Score de equipamiento (0-100)', left: 'center', top: 6 },
+      grid: { left: 140, right: 60, top: 60, bottom: 60, containLabel: true },
+      tooltip: {
+        trigger: 'item',
+        formatter: (p: any) => `${p.name}<br/>Score: ${Number(p.value).toFixed(1)}`,
+      },
+      xAxis: { type: 'value', min: 0, max: Math.max(50, Math.ceil(maxVal / 5) * 5), name: 'Score', axisLabel: { formatter: (v:any) => Number(v).toFixed(0) } },
+      yAxis: { type: 'category', data: entries.map((entry) => entry.label), axisLabel: { interval: 0 } },
+      series: [{
+        type: 'bar',
+        data: entries.map((entry) => ({ value: entry.value, name: entry.label, itemStyle: { color: entry.base ? '#1d4ed8' : entry.color } })),
+        label: { show: true, position: 'right', formatter: (p:any) => `${Number(p.value).toFixed(1)}` },
+      }],
+    } as any;
+  }, [chartRows, versionColorMap]);
+
   // MSRP vs HP (MSRP lleno vs TX hueco)
   const msrpVsHpWithLinesOption = React.useMemo(() => {
     const pts: any[] = [];
@@ -2077,11 +2133,11 @@ export default function ComparePanel() {
     } as any;
   }, [chartRows]);
 
-  // Seguridad (antes adopción de ADAS): usar pilar seguridad 0-100
-  const adasAdoptionOption = React.useMemo(() => {
+  // ADAS (0-100)
+  const adasScoreOption = React.useMemo(() => {
     if (!chartRows.length) return null;
     const list = chartRows.map((r:any) => {
-      const val = getPillarValue(r, 'seguridad');
+      const val = getPillarValue(r, 'adas');
       if (val == null) return null;
       return {
         label: vehLabel(r),
@@ -2093,11 +2149,11 @@ export default function ComparePanel() {
     if (!list.length) return null;
     const maxVal = Math.max(...list.map((d) => d.value), 0);
     return {
-      title: { text: `${PILLAR_LABELS['seguridad']} (0-100)`, left: 'center', top: 6 },
+      title: { text: `${PILLAR_LABELS['adas']} (0-100)`, left: 'center', top: 6 },
       grid: { left: 140, right: 40, top: 60, bottom: 60, containLabel: true },
       tooltip: {
         trigger: 'item',
-        formatter: (p: any) => `${p.name}<br/>${PILLAR_LABELS['seguridad']}: ${Number(p.value).toFixed(1)}`,
+        formatter: (p: any) => `${p.name}<br/>${PILLAR_LABELS['adas']}: ${Number(p.value).toFixed(1)}`,
       },
       xAxis: { type: 'value', min: 0, max: Math.max(50, Math.ceil(maxVal / 5) * 5), name: 'Score', axisLabel: { formatter: (v:any) => Number(v).toFixed(0) } },
       yAxis: { type: 'category', data: list.map((d) => d.label), axisLabel: { interval: 0 } },
@@ -2110,19 +2166,15 @@ export default function ComparePanel() {
   }, [chartRows, versionColorMap]);
 
   const preparedChartsCount = React.useMemo(() => {
-    const sources = [
-      scoreVsPriceOption,
-      msrpVsHpWithLinesOption,
+    const chartSources = [
+      adasScoreOption,
       hpVsPriceOption,
-      adasAdoptionOption,
-      deltaHpOption,
-      deltaLenOption,
-      deltaAccelOption,
+      costPerHpBarOption,
+      equipScoreBarOption,
       footprintOption,
-      salesLineOption,
     ];
-    return legendItems.length + sources.filter(Boolean).length;
-  }, [legendItems, scoreVsPriceOption, msrpVsHpWithLinesOption, hpVsPriceOption, adasAdoptionOption, deltaHpOption, deltaLenOption, deltaAccelOption, footprintOption, salesLineOption]);
+    return chartSources.filter(Boolean).length;
+  }, [adasScoreOption, hpVsPriceOption, costPerHpBarOption, equipScoreBarOption, footprintOption]);
 
   if (paywall) {
     const usedCount = typeof paywall.used === 'number' ? paywall.used : undefined;
@@ -2506,6 +2558,17 @@ export default function ComparePanel() {
           );
         })()}
 
+        <section style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#fff', display:'grid', gap:16 }}>
+          <div style={{ fontWeight:700 }}>Visualizaciones comparativas</div>
+          <div style={{ display:'grid', gap:16 }}>
+            {renderChart(adasScoreOption, 320, 'No encontramos datos de ADAS para estos vehículos.')}
+            {renderChart(hpVsPriceOption, 340, 'No pudimos graficar HP vs precio con la información disponible.')}
+            {renderChart(costPerHpBarOption, 320, 'No pudimos calcular el costo por HP.')}
+            {renderChart(equipScoreBarOption, 320, 'Sin datos de score de equipamiento.')}
+            {renderChart(footprintOption, 360, 'Faltan dimensiones de largo/ancho para los vehículos seleccionados.')}
+          </div>
+        </section>
+
         {preparedChartsCount === 0 ? (
           <div
             style={{
@@ -2518,7 +2581,7 @@ export default function ComparePanel() {
               lineHeight: 1.5,
             }}
           >
-            Las gráficas del panel OEM se deshabilitaron temporalmente mientras afinamos la cobertura de datos.
+            No contamos con datos suficientes para generar las gráficas comparativas.
           </div>
         ) : null}
 
