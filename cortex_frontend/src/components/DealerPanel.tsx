@@ -10,6 +10,15 @@ import { renderStruct } from '@/lib/insightsTemplates';
 import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
 import { energyConsumptionLabel } from '@/lib/consumption';
 import { VehicleThumb } from '@/components/VehicleThumb';
+import {
+  AdvantageMode,
+  AdvantageSection,
+  buildAdvantageOption,
+  cleanVehicleRow,
+  computeAdvantageSections,
+  num,
+  vehicleDisplayName,
+} from '@/lib/advantage';
 
 type Row = Record<string, any>;
 
@@ -17,27 +26,6 @@ const THUMB_WIDTH = 116;
 const THUMB_HEIGHT = 72;
 const RADAR_PILLARS = ['seguridad', 'confort', 'audio_y_entretenimiento', 'transmision', 'energia'] as const;
 const RADAR_MAX_SCORE = 100;
-const KPI_ADVANTAGE_FIELDS: Array<{ key: string; label: string; formatter?: (value: any) => string }> = [
-  { key: 'equip_score', label: 'Score de equipamiento', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
-  { key: 'infotainment_score', label: 'Infotenimiento', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
-  { key: 'convenience_score', label: 'Confort & conveniencia', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
-  { key: 'hvac_score', label: 'Climatización', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
-  { key: 'adas_score', label: 'ADAS', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
-  { key: 'safety_score', label: 'Seguridad', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
-  { key: 'warranty_score', label: 'Cobertura de garantía', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(1)} pts` : 'N/D' },
-  { key: 'traction_offroad_score', label: 'Capacidad off-road', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(0)} pts` : 'N/D' },
-  { key: 'lighting_score', label: 'Iluminación', formatter: (value) => (num(value) ?? null) != null ? `${Number(value).toFixed(0)} pts` : 'N/D' },
-];
-
-const vehicleDisplayName = (row: Row | null | undefined): string => {
-  if (!row) return '';
-  const brand = brandLabel(row);
-  const model = String(row?.model ?? '').trim();
-  const version = String(row?.version ?? '').trim();
-  const parts = [brand, model, version ? `– ${version}` : ''].filter(Boolean);
-  return parts.join(' ').replace(/\s+/g, ' ').trim();
-};
-
 type DealerContextInfo = {
   id?: string;
   name?: string;
@@ -73,25 +61,6 @@ type DealerPanelProps = {
   dealerUserEmail?: string;
   previewMode?: boolean;
 };
-
-type AdvantageRow = {
-  key: string;
-  label: string;
-  delta: number;
-  ownValue: string;
-  compValue: string;
-};
-
-type AdvantageSection = {
-  comp: Row;
-  rows: AdvantageRow[];
-};
-
-function num(x: any): number | null {
-  if (x === null || x === undefined || (typeof x === 'string' && x.trim() === '')) return null;
-  const v = Number(x);
-  return Number.isFinite(v) ? v : null;
-}
 
 const currencyFormatter = new Intl.NumberFormat('es-MX', {
   style: 'currency',
@@ -192,14 +161,6 @@ function DealerManualBlock({ onAdd, year, allowDifferentYears }: { onAdd: (r: Ro
   );
 }
 
-const cleanVehicleRow = (row: Row | null | undefined): Row => {
-  if (!row || typeof row !== 'object') return {};
-  const cleaned: Row = { ...row };
-  delete cleaned.__deltas;
-  delete cleaned.__diffs;
-  return cleaned;
-};
-
 const formatTemplateDate = (value?: string | null): string => {
   if (!value) return '';
   try {
@@ -247,7 +208,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
   const [templateSuccess, setTemplateSuccess] = React.useState('');
   const [templateSaving, setTemplateSaving] = React.useState(false);
   const [templateDeleting, setTemplateDeleting] = React.useState<string | null>(null);
-  const [advantageMode, setAdvantageMode] = React.useState<'upsides' | 'gaps'>('upsides');
+  const [advantageMode, setAdvantageMode] = React.useState<AdvantageMode>('upsides');
   const canUseTemplates = Boolean(dealerUserId && dealerUserId.trim());
   const {
     data: templateData,
@@ -647,87 +608,9 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
   const radarBenchmarkLabel = radarSummary?.benchmarkLabel ?? 'Benchmark segmento';
   const radarSegmentLabel = radarSummary?.segmentLabel && radarSummary.segmentLabel !== '-' ? radarSummary.segmentLabel : 'segmento seleccionado';
 
-  const formatKpiValue = React.useCallback((cfg: { formatter?: (value: any) => string }, value: any) => {
-    if (typeof cfg?.formatter === 'function') {
-      return cfg.formatter(value);
-    }
-    return fmtNum(value);
-  }, []);
-
-  const advantageData = React.useMemo<AdvantageSection[]>(() => {
-    if (!baseRow) return [];
-    return comps
-      .map((comp) => {
-        const rows: AdvantageRow[] = KPI_ADVANTAGE_FIELDS.map((cfg) => {
-          const deltaRaw = (comp as any)?.__deltas?.[cfg.key]?.delta;
-          const delta = typeof deltaRaw === 'number' ? deltaRaw : Number(deltaRaw);
-          if (!Number.isFinite(delta) || delta === 0) return null;
-          const ownIsBetter = delta < 0;
-          const shouldDisplay = advantageMode === 'upsides' ? ownIsBetter : !ownIsBetter;
-          if (!shouldDisplay) return null;
-          const ownValue = formatKpiValue(cfg, (baseRow as any)?.[cfg.key]);
-          const compValue = formatKpiValue(cfg, (comp as any)?.[cfg.key]);
-          return {
-            key: cfg.key,
-            label: cfg.label,
-            delta,
-            ownValue,
-            compValue,
-          };
-        }).filter((item): item is AdvantageRow => Boolean(item));
-        if (!rows.length) return null;
-        return { comp, rows } as AdvantageSection;
-      })
-      .filter((item): item is AdvantageSection => Boolean(item));
-  }, [baseRow, comps, advantageMode, formatKpiValue]);
-
-  const buildAdvantageOption = React.useCallback(
-    (rows: AdvantageRow[]): echarts.EChartsOption => {
-      const color = advantageMode === 'upsides' ? '#16a34a' : '#dc2626';
-      return {
-        color: [color],
-        grid: { left: 140, right: 24, top: 24, bottom: 36, containLabel: true },
-        tooltip: {
-          trigger: 'item',
-          backgroundColor: '#0f172a',
-          borderWidth: 0,
-          borderRadius: 10,
-          textStyle: { color: '#f8fafc' },
-          formatter: (params: any) => {
-            const data = params?.data || {};
-            const direction = data?.delta < 0 ? 'Nosotros' : 'Competidor';
-            const deltaText = `${data?.delta < 0 ? '-' : '+'}${Math.abs(Number(data?.delta || 0)).toFixed(1)}`;
-            const ownLine = `<span style="color:#38bdf8">Nosotros:</span> ${data?.ownValue ?? '-'}`;
-            const compLine = `<span style="color:#fbbf24">Competidor:</span> ${data?.compValue ?? '-'}`;
-            return `<strong>${data?.label || ''}</strong><br/>Δ (competidor - nosotros): ${deltaText}<br/>${ownLine}<br/>${compLine}`;
-          },
-        },
-        xAxis: {
-          type: 'value',
-          axisLabel: { color: '#475569' },
-          splitLine: { lineStyle: { color: '#e2e8f0' } },
-        },
-        yAxis: {
-          type: 'category',
-          data: rows.map((row) => row.label),
-          axisLabel: { color: '#1e293b', fontSize: 12 },
-        },
-      series: [
-        {
-          type: 'bar',
-          barWidth: 22,
-          data: rows.map((row) => ({
-            value: Number(Math.abs(row.delta).toFixed(2)),
-            delta: row.delta,
-            label: row.label,
-            ownValue: row.ownValue,
-            compValue: row.compValue,
-          })) as any,
-        },
-      ],
-    };
-  },
-    [advantageMode],
+  const advantageSections: AdvantageSection[] = React.useMemo(
+    () => computeAdvantageSections(baseRow, comps, advantageMode),
+    [baseRow, comps, advantageMode],
   );
 
   const salesChart = React.useMemo<
@@ -1398,9 +1281,9 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
               Brechas vs rivales
             </button>
           </div>
-          {advantageData.length ? (
+          {advantageSections.length ? (
             <div style={{ display:'grid', gap:12 }}>
-              {advantageData.map((section, idx) => {
+              {advantageSections.map((section, idx) => {
                 const name = vehicleDisplayName(section.comp) || brandLabel(section.comp) || `Competidor ${idx + 1}`;
                 const key = String((section.comp as any)?.vehicle_id || `${name}-${idx}`);
                 return (
@@ -1409,7 +1292,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
                     {EChart ? (
                       <EChart
                         echarts={echarts}
-                        option={buildAdvantageOption(section.rows)}
+                        option={buildAdvantageOption(section.rows, advantageMode)}
                         opts={{ renderer: 'svg' }}
                         style={{ height: Math.max(section.rows.length * 36, 180) }}
                       />

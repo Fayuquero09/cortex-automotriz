@@ -6,6 +6,17 @@ import { useAppState } from '@/lib/state';
 import dynamic from 'next/dynamic';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
 import { useBrandAssets } from '@/lib/useBrandAssets';
+import {
+  AdvantageMode,
+  AdvantageSection,
+  buildAdvantageOption,
+  cleanVehicleRow,
+  computeAdvantageSections,
+  keyForRow,
+  vehicleDisplayName,
+} from '@/lib/advantage';
+
+type Row = Record<string, any>;
 
 // Small info icon with tooltip
 function InfoIcon({ title }: { title: string }) {
@@ -30,6 +41,7 @@ export default function MarketPulse() {
   const { data: cfg } = useSWR<any>('config_dash', endpoints.config);
   const segKey = (own.make && own.model) ? `${own.make}|${own.model}|${own.year||''}` : '';
   const segKey2 = segKey; // preserve original semantics for baseRow fetch key
+  const [advantageMode, setAdvantageMode] = React.useState<AdvantageMode>('upsides');
   const brandCandidates = React.useMemo(() => {
     if (!hasBrandContext) return [];
     const out: string[] = [];
@@ -168,6 +180,95 @@ export default function MarketPulse() {
     (seasonOption as any).series.some((s: any) => Array.isArray(s?.data) && s.data.length)
   );
 
+  const autoKey = baseRow ? ['oem_auto_comp', keyForRow(baseRow)] : null;
+  const { data: autoData, error: autoError, isValidating: autoLoading } = useSWR<any>(
+    autoKey,
+    async () => {
+      if (!baseRow) return [];
+      const payload: Record<string, any> = {
+        own: {
+          make: own.make,
+          model: own.model,
+          ano: own.year,
+          precio_transaccion: baseRow?.precio_transaccion,
+          msrp: baseRow?.msrp,
+          longitud_mm: baseRow?.longitud_mm,
+          equip_score: baseRow?.equip_score,
+          segment: baseRow?.segmento_ventas ?? baseRow?.body_style,
+          segmento_ventas: baseRow?.segmento_ventas,
+          body_style: baseRow?.body_style,
+          categoria_combustible_final: baseRow?.categoria_combustible_final,
+          tipo_de_combustible_original: baseRow?.tipo_de_combustible_original,
+        },
+        k: 4,
+        same_segment: true,
+        same_propulsion: true,
+        include_same_brand: false,
+        include_different_years: false,
+      };
+      return endpoints.autoCompetitors(payload);
+    },
+  );
+
+  const autoItemsRaw: Row[] = React.useMemo(() => {
+    if (!baseRow) return [];
+    const source = Array.isArray(autoData)
+      ? autoData as Row[]
+      : Array.isArray(autoData?.items)
+        ? (autoData.items as Row[])
+        : [];
+    const seen = new Set<string>();
+    const baseKey = keyForRow(baseRow);
+    const rows: Row[] = [];
+    for (const entry of source) {
+      const row = entry && typeof entry === 'object' && 'item' in entry ? (entry as any).item : entry;
+      if (!row) continue;
+      const key = keyForRow(row);
+      if (!key || key === baseKey || seen.has(key)) continue;
+      seen.add(key);
+      rows.push(row as Row);
+      if (rows.length >= 4) break;
+    }
+    return rows;
+  }, [autoData, baseRow]);
+
+  const autoSignature = React.useMemo(() => autoItemsRaw.map((row) => keyForRow(row)).join('|'), [autoItemsRaw]);
+
+  const compareKey = baseRow && autoItemsRaw.length ? ['oem_compare', keyForRow(baseRow), autoSignature] : null;
+  const { data: compareData, error: compareError, isValidating: compareLoading } = useSWR<any>(
+    compareKey,
+    async () => {
+      if (!baseRow) return null;
+      return endpoints.compare({
+        own: cleanVehicleRow(baseRow),
+        competitors: autoItemsRaw.map((item) => cleanVehicleRow(item)),
+      });
+    },
+  );
+
+  const advantageComps: Row[] = React.useMemo(() => {
+    if (!compareData?.competitors) return [];
+    return (compareData.competitors as any[]).map((entry) => ({
+      ...(entry?.item || {}),
+      __deltas: entry?.deltas || {},
+      __diffs: entry?.diffs || {},
+    }));
+  }, [compareData]);
+
+  const advantageSections: AdvantageSection[] = React.useMemo(
+    () => computeAdvantageSections(baseRow, advantageComps, advantageMode),
+    [baseRow, advantageComps, advantageMode],
+  );
+
+  const limitedAdvantageSections = React.useMemo(
+    () => advantageSections.slice(0, 3),
+    [advantageSections],
+  );
+
+  const advantageLoading = Boolean((autoKey && autoLoading) || (compareKey && compareLoading));
+  const advantageError = autoError || compareError;
+  const advantageNotice = (autoData as any)?.notice || (compareData as any)?.notice || '';
+
 
   return (
     <section style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff' }}>
@@ -239,6 +340,76 @@ export default function MarketPulse() {
           </div>
         )}
       </div>
+      {baseRow ? (
+        <div style={{ border:'1px solid #e2e8f0', borderRadius:10, padding:12, marginTop:12 }}>
+          <div style={{ paddingBottom:8, borderBottom:'1px solid #e2e8f0', marginBottom:12, background:'#fafafa', fontWeight:600 }}>
+            Ventajas vs brechas (equipamiento & prestaciones)
+          </div>
+          <div className="no-print" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }}>
+            <button
+              type="button"
+              onClick={() => setAdvantageMode('upsides')}
+              style={{
+                padding:'6px 12px',
+                borderRadius:8,
+                border: advantageMode === 'upsides' ? '1px solid #16a34a' : '1px solid #cbd5e1',
+                background: advantageMode === 'upsides' ? '#dcfce7' : '#ffffff',
+                color: advantageMode === 'upsides' ? '#166534' : '#0f172a',
+                cursor:'pointer',
+                fontSize:12,
+                fontWeight:600,
+              }}
+            >
+              Nuestras ventajas
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdvantageMode('gaps')}
+              style={{
+                padding:'6px 12px',
+                borderRadius:8,
+                border: advantageMode === 'gaps' ? '1px solid #dc2626' : '1px solid #cbd5e1',
+                background: advantageMode === 'gaps' ? '#fee2e2' : '#ffffff',
+                color: advantageMode === 'gaps' ? '#991b1b' : '#0f172a',
+                cursor:'pointer',
+                fontSize:12,
+                fontWeight:600,
+              }}
+            >
+              Brechas vs rivales
+            </button>
+          </div>
+          {advantageLoading ? (
+            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Calculando comparativa automática…</div>
+          ) : advantageError ? (
+            <div style={{ color:'#dc2626', fontSize:12, padding:12 }}>
+              No pudimos calcular ventajas/brechas: {String((advantageError as any)?.message || advantageError)}
+            </div>
+          ) : limitedAdvantageSections.length ? (
+            <div style={{ display:'grid', gap:12 }}>
+              {limitedAdvantageSections.map((section, idx) => {
+                const name = vehicleDisplayName(section.comp) || `Competidor ${idx + 1}`;
+                const key = String((section.comp as any)?.vehicle_id || `${name}-${idx}`);
+                return (
+                  <div key={key} style={{ border:'1px solid #f1f5f9', borderRadius:10, padding:12, background:'#fff' }}>
+                    <div style={{ fontWeight:600, marginBottom:8 }}>{name}</div>
+                    {EChart ? (
+                      <EChart
+                        option={buildAdvantageOption(section.rows, advantageMode)}
+                        style={{ height: Math.max(section.rows.length * 32, 180) }}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>
+              {advantageNotice || 'No encontramos diferencias claras con los competidores del segmento.'}
+            </div>
+          )}
+        </div>
+      ) : null}
       {hasSelection ? (
         <div style={{ marginTop:12 }}>
           <div style={{ fontSize:12, color:'#64748b', margin:'0 4px 6px' }}>Tabla del segmento — {String(segName).toUpperCase()}</div>
