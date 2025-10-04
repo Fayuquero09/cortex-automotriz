@@ -22,10 +22,17 @@ export default function MarketPulse() {
   React.useEffect(() => {
     setHydrated(true);
   }, []);
+
+  const allowedBrands = React.useMemo(() => {
+    const list = Array.isArray(brandAssets.allowed) ? brandAssets.allowed : [];
+    return list.map((item) => String(item || '').trim()).filter((item) => item.length > 0);
+  }, [brandAssets.allowed]);
+  const hasBrandContext = hydrated && allowedBrands.length > 0;
   const { data: cfg } = useSWR<any>('config_dash', endpoints.config);
   const segKey = (own.make && own.model) ? `${own.make}|${own.model}|${own.year||''}` : '';
   const segKey2 = segKey; // preserve original semantics for baseRow fetch key
   const brandCandidates = React.useMemo(() => {
+    if (!hasBrandContext) return [];
     const out: string[] = [];
     const push = (value?: string | null) => {
       if (!value) return;
@@ -36,31 +43,33 @@ export default function MarketPulse() {
     };
     push(own.make);
     push(brandAssets.primary);
-    brandAssets.allowed.forEach(push);
+    allowedBrands.forEach(push);
     return out;
-  }, [brandAssets.allowed, brandAssets.primary, own.make]);
+  }, [allowedBrands, brandAssets.primary, hasBrandContext, own.make]);
 
-  const brandDisplayName = brandCandidates[0] || '';
+  const brandDisplayName = hasBrandContext ? (brandCandidates[0] || '') : '';
   const brandLogoUrl = React.useMemo(() => {
-    if (!hydrated) return '';
+    if (!hydrated || !hasBrandContext) return '';
     for (const candidate of brandCandidates) {
       const resolved = brandAssets.resolveLogo(candidate);
       if (resolved) return resolved;
     }
     return '';
-  }, [brandAssets.resolveLogo, brandCandidates, hydrated]);
+  }, [brandAssets.resolveLogo, brandCandidates, hasBrandContext, hydrated]);
 
-  const showBrandBanner = hydrated && Boolean(brandDisplayName || brandLogoUrl);
-
-  const brandSalesKey = hydrated && brandDisplayName ? ['brand_sales_totals', brandDisplayName] : null;
+  const brandSalesKey = hasBrandContext && hydrated && brandDisplayName
+    ? ['brand_sales_totals', brandDisplayName]
+    : null;
   const { data: brandSalesData, error: brandSalesError } = useSWR<any>(
     brandSalesKey,
     async ([, make]) => endpoints.brandSalesMonthly(make, [2025, 2024]),
   );
   const brandSalesLoading = Boolean(brandSalesKey) && !brandSalesData && !brandSalesError;
 
+  const showBrandBanner = hasBrandContext && hydrated && Boolean(brandLogoUrl || brandSalesData || brandSalesLoading);
+
   const brandSalesOption = React.useMemo(() => {
-    if (!hydrated) return null;
+    if (!hydrated || !hasBrandContext) return null;
     const months = Array.isArray(brandSalesData?.months) && brandSalesData.months.length === 12
       ? brandSalesData.months
       : ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -99,7 +108,7 @@ export default function MarketPulse() {
         symbolSize: 6,
       })),
     } as any;
-  }, [brandSalesData, hydrated]);
+  }, [brandSalesData, hasBrandContext, hydrated]);
 
   const { data: baseRow } = useSWR<any>(segKey2 ? ['dash_base', segKey2] : null, async () => {
     const p: any = { make: own.make, model: own.model };

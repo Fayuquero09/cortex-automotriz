@@ -11,6 +11,11 @@ export default function PrintHeader(){
   React.useEffect(() => {
     setHydrated(true);
   }, []);
+  const allowedBrands = React.useMemo(() => {
+    const list = Array.isArray(brandAssets.allowed) ? brandAssets.allowed : [];
+    return list.map((item) => String(item || '').trim()).filter((item) => item.length > 0);
+  }, [brandAssets.allowed]);
+  const hasBrandContext = hydrated && allowedBrands.length > 0;
   const [printed, setPrinted] = React.useState('');
   React.useEffect(() => {
     try {
@@ -34,6 +39,7 @@ export default function PrintHeader(){
     try { const s = cfg?.industry_last_updated; return s ? new Date(s).toLocaleString('es-MX', { dateStyle:'medium', timeStyle:'short' }) : ''; } catch { return ''; }
   })();
   const brandCandidates = React.useMemo(() => {
+    if (!hasBrandContext) return [];
     const out: string[] = [];
     const push = (value?: string | null) => {
       if (!value) return;
@@ -42,20 +48,20 @@ export default function PrintHeader(){
       const exists = out.some((item) => item.toLowerCase() === label.toLowerCase());
       if (!exists) out.push(label);
     };
+    allowedBrands.forEach(push);
     push(brandAssets.primary);
-    brandAssets.allowed.forEach(push);
     return out;
-  }, [brandAssets.allowed, brandAssets.primary]);
+  }, [allowedBrands, brandAssets.primary, hasBrandContext]);
 
-  const brandDisplayName = hydrated ? (brandCandidates[0] || '') : '';
+  const brandDisplayName = (hydrated && hasBrandContext) ? (brandCandidates[0] || '') : '';
   const brandLogoUrl = React.useMemo(() => {
-    if (!hydrated) return '';
+    if (!hydrated || !hasBrandContext) return '';
     for (const candidate of brandCandidates) {
       const resolved = brandAssets.resolveLogo(candidate);
       if (resolved) return resolved;
     }
     return '';
-  }, [brandAssets.resolveLogo, brandCandidates, hydrated]);
+  }, [brandAssets.resolveLogo, brandCandidates, hasBrandContext, hydrated]);
   const printedLabel = printed || '—';
   // Visible solo al imprimir mediante clase global .print-only
   return (

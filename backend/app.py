@@ -2461,6 +2461,7 @@ _ALIASES: Optional[Dict[str, Any]] = None
 _ALIASES_MTIME: Optional[float] = None
 _BRAND_SALES_CACHE: Dict[int, Dict[str, list[int]]] = {}
 _BRAND_SALES_CACHE_MTIME: Dict[int, float] = {}
+_BRAND_SALES_CACHE_ALIAS_MTIME: Dict[int, float] = {}
 
 def _load_aliases() -> Dict[str, Any]:
     """Load alias mappings from data/aliases/alias_names.csv.
@@ -2582,8 +2583,14 @@ def _brand_sales_monthly(year: int) -> Dict[str, list[int]]:
             return _brand_sales_monthly(2025)
         return {}
     mtime = path.stat().st_mtime
+    aliases = _load_aliases()
+    alias_mtime = _ALIASES_MTIME or -1
     cached = _BRAND_SALES_CACHE.get(year)
-    if cached is not None and _BRAND_SALES_CACHE_MTIME.get(year) == mtime:
+    if (
+        cached is not None
+        and _BRAND_SALES_CACHE_MTIME.get(year) == mtime
+        and _BRAND_SALES_CACHE_ALIAS_MTIME.get(year) == alias_mtime
+    ):
         return cached
     try:
         import pandas as _pd  # type: ignore
@@ -2612,10 +2619,12 @@ def _brand_sales_monthly(year: int) -> Dict[str, list[int]]:
                     bucket[idx] += val
         _BRAND_SALES_CACHE[year] = totals
         _BRAND_SALES_CACHE_MTIME[year] = mtime
+        _BRAND_SALES_CACHE_ALIAS_MTIME[year] = alias_mtime
         return totals
     except Exception:
         _BRAND_SALES_CACHE[year] = {}
         _BRAND_SALES_CACHE_MTIME[year] = mtime
+        _BRAND_SALES_CACHE_ALIAS_MTIME[year] = alias_mtime
         return {}
 
 
