@@ -26,7 +26,7 @@ function InfoIcon({ title }: { title: string }) {
 }
 
 export default function MarketPulse() {
-  const { own } = useAppState();
+  const { own, comparison } = useAppState();
   const brandAssets = useBrandAssets();
   const [hydrated, setHydrated] = React.useState(false);
   React.useEffect(() => {
@@ -180,94 +180,37 @@ export default function MarketPulse() {
     (seasonOption as any).series.some((s: any) => Array.isArray(s?.data) && s.data.length)
   );
 
-  const autoKey = baseRow ? ['oem_auto_comp', keyForRow(baseRow)] : null;
-  const { data: autoData, error: autoError, isValidating: autoLoading } = useSWR<any>(
-    autoKey,
-    async () => {
-      if (!baseRow) return [];
-      const payload: Record<string, any> = {
-        own: {
-          make: own.make,
-          model: own.model,
-          ano: own.year,
-          precio_transaccion: baseRow?.precio_transaccion,
-          msrp: baseRow?.msrp,
-          longitud_mm: baseRow?.longitud_mm,
-          equip_score: baseRow?.equip_score,
-          segment: baseRow?.segmento_ventas ?? baseRow?.body_style,
-          segmento_ventas: baseRow?.segmento_ventas,
-          body_style: baseRow?.body_style,
-          categoria_combustible_final: baseRow?.categoria_combustible_final,
-          tipo_de_combustible_original: baseRow?.tipo_de_combustible_original,
-        },
-        k: 4,
-        same_segment: true,
-        same_propulsion: true,
-        include_same_brand: false,
-        include_different_years: false,
-      };
-      return endpoints.autoCompetitors(payload);
-    },
-  );
+  const sharedComparison = React.useMemo(() => {
+    if (!baseRow) return null;
+    const sharedBase = comparison?.base;
+    if (!sharedBase) return null;
+    if (keyForRow(sharedBase) !== keyForRow(baseRow)) return null;
+    const list = Array.isArray(comparison?.competitors) ? comparison.competitors : [];
+    return list.length ? list.map((entry) => ({ ...entry })) : null;
+  }, [comparison, baseRow]);
 
-  const autoItemsRaw: Row[] = React.useMemo(() => {
-    if (!baseRow) return [];
-    const source = Array.isArray(autoData)
-      ? autoData as Row[]
-      : Array.isArray(autoData?.items)
-        ? (autoData.items as Row[])
-        : [];
-    const seen = new Set<string>();
-    const baseKey = keyForRow(baseRow);
-    const rows: Row[] = [];
-    for (const entry of source) {
-      const row = entry && typeof entry === 'object' && 'item' in entry ? (entry as any).item : entry;
-      if (!row) continue;
-      const key = keyForRow(row);
-      if (!key || key === baseKey || seen.has(key)) continue;
-      seen.add(key);
-      rows.push(row as Row);
-      if (rows.length >= 4) break;
-    }
-    return rows;
-  }, [autoData, baseRow]);
-
-  const autoSignature = React.useMemo(() => autoItemsRaw.map((row) => keyForRow(row)).join('|'), [autoItemsRaw]);
-
-  const compareKey = baseRow && autoItemsRaw.length ? ['oem_compare', keyForRow(baseRow), autoSignature] : null;
-  const { data: compareData, error: compareError, isValidating: compareLoading } = useSWR<any>(
-    compareKey,
-    async () => {
-      if (!baseRow) return null;
-      return endpoints.compare({
-        own: cleanVehicleRow(baseRow),
-        competitors: autoItemsRaw.map((item) => cleanVehicleRow(item)),
-      });
-    },
-  );
-
-  const advantageComps: Row[] = React.useMemo(() => {
-    if (!compareData?.competitors) return [];
-    return (compareData.competitors as any[]).map((entry) => ({
-      ...(entry?.item || {}),
-      __deltas: entry?.deltas || {},
-      __diffs: entry?.diffs || {},
+  const advantageSections: AdvantageSection[] = React.useMemo(() => {
+    const comps = (sharedComparison || []).map((entry) => ({
+      ...entry,
+      __deltas: entry?.__deltas || {},
+      __diffs: entry?.__diffs || {},
     }));
-  }, [compareData]);
-
-  const advantageSections: AdvantageSection[] = React.useMemo(
-    () => computeAdvantageSections(baseRow, advantageComps, advantageMode),
-    [baseRow, advantageComps, advantageMode],
-  );
+    return computeAdvantageSections(baseRow, comps, advantageMode);
+  }, [sharedComparison, baseRow, advantageMode]);
 
   const limitedAdvantageSections = React.useMemo(
     () => advantageSections.slice(0, 3),
     [advantageSections],
   );
 
-  const advantageLoading = Boolean((autoKey && autoLoading) || (compareKey && compareLoading));
-  const advantageError = autoError || compareError;
-  const advantageNotice = (autoData as any)?.notice || (compareData as any)?.notice || '';
+  const advantageNotice = React.useMemo(() => {
+    if (!baseRow) return 'Selecciona un vehículo propio para visualizar comparativos.';
+    if (!sharedComparison) return 'Selecciona competidores en el panel de comparación para ver esta gráfica.';
+    if (!advantageSections.length) return 'No encontramos diferencias claras con los competidores seleccionados.';
+    return '';
+  }, [baseRow, sharedComparison, advantageSections]);
+
+  const showAdvantageChart = Boolean(sharedComparison && advantageSections.length);
 
 
   return (
@@ -340,6 +283,13 @@ export default function MarketPulse() {
           </div>
         )}
       </div>
+
+      {hasSelection ? (
+        <div style={{ marginTop:12 }}>
+          <div style={{ fontSize:12, color:'#64748b', margin:'0 4px 6px' }}>Tabla del segmento — {String(segName).toUpperCase()}</div>
+          <SegmentTable stats={stats} />
+        </div>
+      ) : null}
       {baseRow ? (
         <div style={{ border:'1px solid #e2e8f0', borderRadius:10, padding:12, marginTop:12 }}>
           <div style={{ paddingBottom:8, borderBottom:'1px solid #e2e8f0', marginBottom:12, background:'#fafafa', fontWeight:600 }}>
@@ -379,13 +329,7 @@ export default function MarketPulse() {
               Brechas vs rivales
             </button>
           </div>
-          {advantageLoading ? (
-            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Calculando comparativa automática…</div>
-          ) : advantageError ? (
-            <div style={{ color:'#dc2626', fontSize:12, padding:12 }}>
-              No pudimos calcular ventajas/brechas: {String((advantageError as any)?.message || advantageError)}
-            </div>
-          ) : limitedAdvantageSections.length ? (
+          {showAdvantageChart ? (
             <div style={{ display:'grid', gap:12 }}>
               {limitedAdvantageSections.map((section, idx) => {
                 const name = vehicleDisplayName(section.comp) || `Competidor ${idx + 1}`;
@@ -405,17 +349,12 @@ export default function MarketPulse() {
             </div>
           ) : (
             <div style={{ color:'#64748b', fontSize:12, padding:12 }}>
-              {advantageNotice || 'No encontramos diferencias claras con los competidores del segmento.'}
+              {advantageNotice || 'Selecciona competidores en el comparador para ver esta gráfica.'}
             </div>
           )}
         </div>
       ) : null}
-      {hasSelection ? (
-        <div style={{ marginTop:12 }}>
-          <div style={{ fontSize:12, color:'#64748b', margin:'0 4px 6px' }}>Tabla del segmento — {String(segName).toUpperCase()}</div>
-          <SegmentTable stats={stats} />
-        </div>
-      ) : null}
+
       <div style={{ marginTop:10, fontSize:12, color:'#64748b', lineHeight:1.4 }}>
         Cobertura: años modelo 2024–2026. La tendencia muestra unidades mensuales del segmento seleccionado (2025 vs 2024).
         Fuentes: INEGI, AMDA/JATO y estimaciones propias para marcas que no reportan a INEGI.

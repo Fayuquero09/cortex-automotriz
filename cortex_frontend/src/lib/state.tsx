@@ -24,6 +24,11 @@ export type AppState = {
   triggerAutoGen: () => void;
   autoGenerate: boolean;
   setAutoGenerate: (v: boolean) => void;
+  comparison: {
+    base: Record<string, any> | null;
+    competitors: Array<Record<string, any>>;
+  };
+  setComparison: (payload: { base: Record<string, any> | null; competitors: Array<Record<string, any>> }) => void;
 };
 
 const defaultFilters: FiltersState = {
@@ -45,6 +50,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [filters, _setFilters] = React.useState<FiltersState>(defaultFilters);
   const [autoGenSeq, setAutoGenSeq] = React.useState<number>(0);
   const [autoGenerate, setAutoGenerate] = React.useState<boolean>(false);
+  const [comparison, _setComparison] = React.useState<{ base: Record<string, any> | null; competitors: Array<Record<string, any>> }>({ base: null, competitors: [] });
   const previewHandledRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -146,9 +152,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     _setOwn((prev) => (typeof value === 'function' ? (value as (p: OwnState) => OwnState)(prev) : value));
     // No persistimos selección de vehículo propio para comenzar siempre en blanco
   };
+  const setComparison = React.useCallback((payload: { base: Record<string, any> | null; competitors: Array<Record<string, any>> }) => {
+    _setComparison(payload);
+  }, []);
 
   return (
-    <Ctx.Provider value={{ own, setOwn, filters, setFilters, autoGenSeq, triggerAutoGen: () => setAutoGenSeq(s => s + 1), autoGenerate, setAutoGenerate: (v:boolean) => { setAutoGenerate(v); try{ localStorage.setItem('CORTEX_AUTO_GEN', v?'1':'0'); }catch{} } }}>
+    <Ctx.Provider value={{
+      own,
+      setOwn,
+      filters,
+      setFilters,
+      autoGenSeq,
+      triggerAutoGen: () => setAutoGenSeq((s) => s + 1),
+      autoGenerate,
+      setAutoGenerate: (v: boolean) => {
+        setAutoGenerate(v);
+        try { localStorage.setItem('CORTEX_AUTO_GEN', v ? '1' : '0'); } catch {}
+      },
+      comparison,
+      setComparison,
+    }}>
       {children}
     </Ctx.Provider>
   );

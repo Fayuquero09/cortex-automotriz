@@ -171,7 +171,7 @@ const formatTemplateDate = (value?: string | null): string => {
 };
 
 export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId, dealerUserEmail, previewMode }: DealerPanelProps = {}) {
-  const { own, setOwn } = useAppState();
+  const { own, setOwn, setComparison } = useAppState();
   const { data: cfg } = useSWR<any>('cfg', () => endpoints.config());
   const fuelPrices = cfg?.fuel_prices || {};
   const blocked = previewMode ? false : Boolean(dealerStatus?.blocked);
@@ -360,6 +360,17 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
   });
   const baseRow = (compared?.own || ownRow) as Row | null;
   const comps = ((compared?.competitors || []) as any[]).map(c => ({ ...c.item, __deltas: c.deltas || {}, __diffs: c.diffs || {} }));
+
+  const comparisonPayload = React.useMemo(() => {
+    if (!baseRow) {
+      return { base: null as Row | null, competitors: [] as Row[] };
+    }
+    return { base: baseRow as Row, competitors: comps as Row[] };
+  }, [baseRow, comps]);
+
+  React.useEffect(() => {
+    setComparison(comparisonPayload);
+  }, [comparisonPayload, setComparison]);
 
   function fuelLabel(row: any): string {
     const label = fuelCategory(row).label;

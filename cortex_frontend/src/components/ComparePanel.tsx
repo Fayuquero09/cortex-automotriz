@@ -245,7 +245,7 @@ type PaywallState = {
 
 export default function ComparePanel() {
   const { t } = useI18n() as any;
-  const { own, filters, autoGenSeq, autoGenerate, triggerAutoGen } = useAppState();
+  const { own, filters, autoGenSeq, autoGenerate, triggerAutoGen, setComparison } = useAppState();
   const ready = !!own.model && !!own.make && !!own.year;
   const { data: cfg } = useSWR<any>('cfg', () => endpoints.config());
   const fuelPrices = cfg?.fuel_prices || {};
@@ -1068,6 +1068,17 @@ export default function ComparePanel() {
     };
   }), [compared]);
   const comps = React.useMemo(() => rawComps.filter((r:any) => !dismissedKeys.has(keyForRow(r))), [rawComps, dismissedKeys, keyForRow]);
+
+  const comparisonPayload = React.useMemo(() => {
+    if (!baseRow) {
+      return { base: null as Row | null, competitors: [] as Row[] };
+    }
+    return { base: baseRow as Row, competitors: comps as Row[] };
+  }, [baseRow, comps]);
+
+  React.useEffect(() => {
+    setComparison(comparisonPayload);
+  }, [comparisonPayload, setComparison]);
 
   const generateInsights = React.useCallback(async () => {
     if (!baseRow) {
