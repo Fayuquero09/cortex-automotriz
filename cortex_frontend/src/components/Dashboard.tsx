@@ -212,17 +212,38 @@ export default function MarketPulse() {
     if (!seriesList.length) return null;
     const map = new Map(seriesList.map((item) => [item.id, item]));
 
-    const ownValues = RADAR_PILLARS.map(({ key }) => toScore((baseRow as any)?.[key]));
-    const bodyValues = RADAR_PILLARS.map(({ key }) => toScore(map.get('body_style')?.values?.[key]));
-    const marketValues = RADAR_PILLARS.map(({ key }) => toScore(map.get('overall')?.values?.[key]));
+    const resolveLabel = (key: string) => RADAR_PILLARS.find((pillar) => pillar.key === key)?.label || key;
+
+    const pillars = Array.isArray(bodyStyleData?.pillars)
+      ? bodyStyleData.pillars
+          .map((item: any) => ({ key: String(item?.key || ''), label: String(item?.label || '') }))
+          .filter((item: any) => item.key && RADAR_PILLARS.some((pillar) => pillar.key === item.key))
+      : RADAR_PILLARS;
+
+    const enrichPillars = pillars
+      .map(({ key, label }) => {
+        const own = toScore((baseRow as any)?.[key]);
+        const body = toScore(map.get('body_style')?.values?.[key]);
+        const market = toScore(map.get('overall')?.values?.[key]);
+        const others = map.has('other_styles') ? toScore(map.get('other_styles')?.values?.[key]) : 0;
+        return {
+          key,
+          label: label || resolveLabel(key),
+          values: { own, body, market, others },
+        };
+      })
+      .filter(({ values }) => [values.own, values.body, values.market, values.others].some((value) => value > 0));
+
+    if (!enrichPillars.length) return null;
+
+    const ownValues = enrichPillars.map(({ values }) => values.own);
+    const bodyValues = enrichPillars.map(({ values }) => values.body);
+    const marketValues = enrichPillars.map(({ values }) => values.market);
     const otherValues = map.has('other_styles')
-      ? RADAR_PILLARS.map(({ key }) => toScore(map.get('other_styles')?.values?.[key]))
+      ? enrichPillars.map(({ values }) => values.others)
       : null;
 
-    const hasData = (arr?: number[] | null) => Array.isArray(arr) && arr.some((value) => value > 0);
-    if (![ownValues, bodyValues, marketValues, otherValues].some(hasData)) return null;
-
-    const indicator = RADAR_PILLARS.map(({ label }) => ({ name: label, max: 100 }));
+    const indicator = enrichPillars.map(({ label }) => ({ name: label, max: 100 }));
 
     const radarData: Array<{ value: number[]; name: string; areaStyle?: any; lineStyle?: any; symbolSize?: number }> = [];
     radarData.push({ name: 'Propio', value: ownValues, areaStyle: { opacity: 0.2 }, lineStyle: { width: 3 }, symbolSize: 5 });
