@@ -121,6 +121,10 @@ export const endpoints = {
     return data;
   },
   versionDiffs: (params?: Record<string, any>) => apiGet('/version_diffs', params),
+  brandSalesMonthly: (make: string, years?: number[]) => apiGet('/sales/brand_monthly', {
+    make,
+    years: Array.isArray(years) && years.length ? years.join(',') : undefined,
+  }),
   adminOverview: () => apiGet('/admin/overview'),
   adminOrganization: (orgId: string) => apiGet(`/admin/organizations/${orgId}`),
   adminSelfMemberships: (params?: Record<string, any>) => apiGet('/admin/self_memberships', params),

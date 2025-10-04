@@ -2459,6 +2459,8 @@ _OPTIONS_IDX_MTIMES: Dict[str, float] = {}
 # Aliases (canonicalization) cache
 _ALIASES: Optional[Dict[str, Any]] = None
 _ALIASES_MTIME: Optional[float] = None
+_BRAND_SALES_CACHE: Dict[int, Dict[str, list[int]]] = {}
+_BRAND_SALES_CACHE_MTIME: Dict[int, float] = {}
 
 def _load_aliases() -> Dict[str, Any]:
     """Load alias mappings from data/aliases/alias_names.csv.
@@ -2498,6 +2500,20 @@ def _load_aliases() -> Dict[str, Any]:
         pass
     _ALIASES, _ALIASES_MTIME = aliases, mt
     return aliases
+
+def _slugify_token(value: Optional[str]) -> str:
+    try:
+        import re as _re
+        import unicodedata as _ud
+        s = str(value or "").strip().lower()
+        if not s:
+            return ""
+        s = _ud.normalize("NFKD", s)
+        s = "".join(ch for ch in s if _ud.category(ch) != "Mn")
+        s = _re.sub(r"[^a-z0-9]+", "-", s)
+        return s.strip("-")
+    except Exception:
+        return str(value or "").strip().lower()
 
 def _canon_make(v: Optional[str]) -> Optional[str]:
     if v is None:
@@ -2557,6 +2573,50 @@ def _compact_key(s: str) -> str:
 
 
 _VEH_JSON_ENTRIES: Optional[list[dict[str, Any]]] = None
+
+def _brand_sales_monthly(year: int) -> Dict[str, list[int]]:
+    path = ROOT / "data" / "enriched" / f"sales_ytd_{year}.csv"
+    if not path.exists():
+        # fallback to 2025 if the requested year is missing
+        if year != 2025:
+            return _brand_sales_monthly(2025)
+        return {}
+    mtime = path.stat().st_mtime
+    cached = _BRAND_SALES_CACHE.get(year)
+    if cached is not None and _BRAND_SALES_CACHE_MTIME.get(year) == mtime:
+        return cached
+    try:
+        import pandas as _pd  # type: ignore
+        df = _pd.read_csv(path, low_memory=False)
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        month_cols = [f"ventas_{year}_{m:02d}" for m in range(1, 13)]
+        available_cols = [col for col in month_cols if col in df.columns]
+        if not available_cols:
+            _BRAND_SALES_CACHE[year] = {}
+            _BRAND_SALES_CACHE_MTIME[year] = mtime
+            return {}
+        df["__mk_raw"] = df.get("make", _pd.Series(dtype=str)).astype(str).str.strip()
+        df["__mk"] = df["__mk_raw"].map(lambda v: (_canon_make(v) or str(v or "").strip().upper()))
+        totals: Dict[str, list[int]] = {}
+        for _, row in df.iterrows():
+            mk = str(row.get("__mk") or "").strip().upper()
+            if not mk:
+                continue
+            bucket = totals.setdefault(mk, [0] * 12)
+            for idx, col in enumerate(month_cols):
+                try:
+                    val = int(float(row.get(col) or 0)) if col in df.columns else 0
+                except Exception:
+                    val = 0
+                if idx < len(bucket):
+                    bucket[idx] += val
+        _BRAND_SALES_CACHE[year] = totals
+        _BRAND_SALES_CACHE_MTIME[year] = mtime
+        return totals
+    except Exception:
+        _BRAND_SALES_CACHE[year] = {}
+        _BRAND_SALES_CACHE_MTIME[year] = mtime
+        return {}
 
 
 def _load_vehicle_json_entries() -> list[dict[str, Any]]:
@@ -13398,6 +13458,76 @@ def dashboard(segment: Optional[str] = Query(None)) -> Dict[str, Any]:
         "with_bonus_by_year": with_bonus_by_year,
         "versions_by_year": versions_by_year,
     }
+
+
+@app.get("/sales/brand_monthly")
+def sales_brand_monthly(
+    make: str = Query(..., description="Nombre de la marca tal como aparece en el panel"),
+    years: str = Query("2025,2024", description="Lista de años separados por coma (por defecto 2025 y 2024)"),
+) -> Dict[str, Any]:
+    label_raw = str(make or "").strip()
+    if not label_raw:
+        raise HTTPException(status_code=400, detail="Debes indicar la marca")
+    canon = _canon_make(label_raw) or label_raw.strip().upper()
+    years_list: list[int] = []
+    for token in str(years or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            years_list.append(int(token))
+        except Exception:
+            continue
+    if not years_list:
+        years_list = [2025, 2024]
+
+    def _resolve_series(year: int) -> Dict[str, Any]:
+        totals_map = _brand_sales_monthly(year)
+        if not totals_map:
+            return {"year": year, "monthly": [0] * 12, "total": 0, "last_month": None}
+
+        def _pick_key() -> Optional[str]:
+            direct = totals_map.get(canon)
+            if direct is not None:
+                return canon
+            alt = label_raw.strip().upper()
+            if alt and alt in totals_map:
+                return alt
+            slug_targets = {_slugify_token(canon), _slugify_token(label_raw)}
+            for key in totals_map:
+                if _slugify_token(key) in slug_targets:
+                    return key
+            return None
+
+        key = _pick_key()
+        monthly = totals_map.get(key or canon, [0] * 12)
+        if len(monthly) < 12:
+            monthly = (monthly + [0] * 12)[:12]
+        total_units = int(sum(monthly)) if monthly else 0
+        last_month = None
+        for idx in range(len(monthly) - 1, -1, -1):
+            if monthly[idx] > 0:
+                last_month = idx + 1
+                break
+        return {
+            "year": year,
+            "monthly": [int(v) for v in monthly[:12]],
+            "total": total_units,
+            "last_month": last_month,
+        }
+
+    months_labels = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+    series = [_resolve_series(year) for year in years_list]
+    has_any = any(entry.get("total", 0) > 0 for entry in series)
+    payload = {
+        "make": canon,
+        "requested": label_raw,
+        "series": series,
+        "months": months_labels,
+    }
+    if not has_any:
+        payload["warning"] = "No hay ventas registradas para la marca en los años solicitados."
+    return payload
 
 
 # ------------------------------- WebSocket --------------------------------

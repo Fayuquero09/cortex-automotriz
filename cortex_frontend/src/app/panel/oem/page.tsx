@@ -25,7 +25,7 @@ interface OrganizationDetail {
     id: string;
     name: string;
   };
-  brands: Array<{ id: string; name: string; slug?: string | null }>;
+  brands: Array<{ id: string; name: string; slug?: string | null; logo_url?: string | null }>;
   dealers?: Array<{
     id: string;
     name?: string | null;
@@ -91,6 +91,24 @@ export default function PanelOemPage(): React.JSX.Element {
     return map;
   }, [orgDetail?.brands]);
 
+  const brandMetaByName = React.useMemo(() => {
+    const map = new Map<string, { name: string; slug?: string; logo_url?: string }>();
+    for (const brand of orgDetail?.brands || []) {
+      const name = String(brand?.name || '').trim();
+      const slug = String(brand?.slug || '').trim();
+      const logo = String((brand as any)?.logo_url || '').trim();
+      if (!name && !slug) continue;
+      const meta = {
+        name: name || slug,
+        slug: slug || undefined,
+        logo_url: logo || undefined,
+      };
+      if (name) map.set(name.toLowerCase(), meta);
+      if (slug) map.set(slug.toLowerCase(), meta);
+    }
+    return map;
+  }, [orgDetail?.brands]);
+
   const brandStats = React.useMemo(() => {
     const stats = new Map<string, { name: string; total: number }>();
     for (const name of selectedOrgBrands) {
@@ -115,6 +133,10 @@ export default function PanelOemPage(): React.JSX.Element {
     try {
       window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
       window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: [] }));
+      window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+      window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+      window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+      window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
     } catch {}
   }, []);
 
@@ -139,15 +161,50 @@ export default function PanelOemPage(): React.JSX.Element {
           try { storage.removeItem(key); } catch {}
         });
         storage.setItem('CORTEX_SUPERADMIN_ORG_ID', org.id);
-        storage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
-        window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
-        if (brandList.length) {
-          storage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(brandList));
-          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: brandList }));
+
+        const metaList: Array<{ name: string; slug?: string; logo_url?: string }> = [];
+        const seen = new Set<string>();
+        const normalizedBrands = brandList
+          .map((label) => String(label || '').trim())
+          .filter((label) => label.length > 0);
+        normalizedBrands.forEach((label) => {
+          const lookup = brandMetaByName.get(label.toLowerCase());
+          const meta = lookup || { name: label };
+          const key = (meta.name || label).toLowerCase();
+          if (seen.has(key)) return;
+          seen.add(key);
+          metaList.push({
+            name: meta.name || label,
+            slug: meta.slug,
+            logo_url: meta.logo_url,
+          });
+        });
+
+        if (metaList.length) {
+          storage.setItem('CORTEX_ALLOWED_BRAND_META', JSON.stringify(metaList));
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: metaList }));
+        } else {
+          storage.removeItem('CORTEX_ALLOWED_BRAND_META');
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+        }
+
+        if (normalizedBrands.length) {
+          storage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(normalizedBrands));
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: normalizedBrands }));
         } else {
           storage.removeItem('CORTEX_ALLOWED_BRANDS');
           window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: [] }));
         }
+
+        const primaryBrand = normalizedBrands[0] || '';
+        if (primaryBrand) {
+          storage.setItem('CORTEX_DEALER_ALLOWED_BRAND', primaryBrand);
+          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: primaryBrand }));
+        } else {
+          storage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
+        }
+
         const targetUrl = new URL('/ui', window.location.origin);
         targetUrl.searchParams.set('org', org.id);
         if (target === '_self') {
@@ -157,7 +214,7 @@ export default function PanelOemPage(): React.JSX.Element {
         }
       } catch {}
     },
-    [resetAllowedBrands],
+    [brandMetaByName, resetAllowedBrands],
   );
 
   const handleOpenOemPanel = React.useCallback(
@@ -181,13 +238,16 @@ export default function PanelOemPage(): React.JSX.Element {
     [openOemPanel],
   );
 
-  const lastOpenedOrgRef = React.useRef('');
+  const lastOpenedOrgSignatureRef = React.useRef('');
   React.useEffect(() => {
     if (!selectedOrg || !selectedOrgId) return;
-    if (lastOpenedOrgRef.current === selectedOrgId) return;
-    lastOpenedOrgRef.current = selectedOrgId;
+    if (!orgDetail) return;
+    const brandSignature = selectedOrgBrands.map((name) => name.toLowerCase()).join('|');
+    const signature = `${selectedOrgId}::${brandSignature}`;
+    if (lastOpenedOrgSignatureRef.current === signature) return;
+    lastOpenedOrgSignatureRef.current = signature;
     openOemPanel(selectedOrg, selectedOrgBrands, '_self');
-  }, [openOemPanel, selectedOrg, selectedOrgBrands, selectedOrgId]);
+  }, [openOemPanel, orgDetail, selectedOrg, selectedOrgBrands, selectedOrgId]);
 
   const renderDealerLocation = (metadata?: Record<string, any> | null) => {
     const location = metadata?.location || {};

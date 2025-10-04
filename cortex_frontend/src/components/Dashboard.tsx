@@ -6,6 +6,7 @@ import { useAppState } from '@/lib/state';
 import dynamic from 'next/dynamic';
 import * as echarts from 'echarts';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
+import { useBrandAssets } from '@/lib/useBrandAssets';
 
 // Small info icon with tooltip
 function InfoIcon({ title }: { title: string }) {
@@ -16,9 +17,90 @@ function InfoIcon({ title }: { title: string }) {
 
 export default function MarketPulse() {
   const { own } = useAppState();
+  const brandAssets = useBrandAssets();
+  const [hydrated, setHydrated] = React.useState(false);
+  React.useEffect(() => {
+    setHydrated(true);
+  }, []);
   const { data: cfg } = useSWR<any>('config_dash', endpoints.config);
   const segKey = (own.make && own.model) ? `${own.make}|${own.model}|${own.year||''}` : '';
   const segKey2 = segKey; // preserve original semantics for baseRow fetch key
+  const brandCandidates = React.useMemo(() => {
+    const out: string[] = [];
+    const push = (value?: string | null) => {
+      if (!value) return;
+      const label = String(value).trim();
+      if (!label) return;
+      const exists = out.some((item) => item.toLowerCase() === label.toLowerCase());
+      if (!exists) out.push(label);
+    };
+    push(own.make);
+    push(brandAssets.primary);
+    brandAssets.allowed.forEach(push);
+    return out;
+  }, [brandAssets.allowed, brandAssets.primary, own.make]);
+
+  const brandDisplayName = brandCandidates[0] || '';
+  const brandLogoUrl = React.useMemo(() => {
+    if (!hydrated) return '';
+    for (const candidate of brandCandidates) {
+      const resolved = brandAssets.resolveLogo(candidate);
+      if (resolved) return resolved;
+    }
+    return '';
+  }, [brandAssets.resolveLogo, brandCandidates, hydrated]);
+
+  const showBrandBanner = hydrated && Boolean(brandDisplayName || brandLogoUrl);
+
+  const brandSalesKey = hydrated && brandDisplayName ? ['brand_sales_totals', brandDisplayName] : null;
+  const { data: brandSalesData, error: brandSalesError } = useSWR<any>(
+    brandSalesKey,
+    async ([, make]) => endpoints.brandSalesMonthly(make, [2025, 2024]),
+  );
+  const brandSalesLoading = Boolean(brandSalesKey) && !brandSalesData && !brandSalesError;
+
+  const brandSalesOption = React.useMemo(() => {
+    if (!hydrated) return null;
+    const months = Array.isArray(brandSalesData?.months) && brandSalesData.months.length === 12
+      ? brandSalesData.months
+      : ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    const rawSeries = Array.isArray(brandSalesData?.series) ? brandSalesData.series : [];
+    if (!rawSeries.length) return null;
+    const palette = ['#2563eb', '#94a3b8', '#f97316', '#10b981'];
+    const series = rawSeries
+      .map((entry: any, idx: number) => {
+        const data = Array.isArray(entry?.monthly)
+          ? entry.monthly.map((value: any) => (Number.isFinite(Number(value)) ? Number(value) : 0))
+          : Array(12).fill(0);
+        return {
+          label: String(entry?.year || ''),
+          color: palette[idx % palette.length],
+          data,
+        };
+      })
+      .filter((entry) => entry.data.some((value) => value > 0));
+    if (!series.length) return null;
+    return {
+      grid: { left: 60, right: 16, top: 30, bottom: 30, containLabel: true },
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: (value: number) => Intl.NumberFormat('es-MX').format(Math.round(value)),
+      },
+      legend: { top: 0, left: 'center', data: series.map((entry) => entry.label) },
+      xAxis: { type: 'category', data: months },
+      yAxis: { type: 'value', min: 0, name: 'Unidades' },
+      series: series.map((entry, idx) => ({
+        name: entry.label,
+        type: 'line',
+        smooth: true,
+        data: entry.data,
+        itemStyle: { color: entry.color },
+        lineStyle: { color: entry.color, width: idx === 0 ? 3 : 2 },
+        symbolSize: 6,
+      })),
+    } as any;
+  }, [brandSalesData, hydrated]);
+
   const { data: baseRow } = useSWR<any>(segKey2 ? ['dash_base', segKey2] : null, async () => {
     const p: any = { make: own.make, model: own.model };
     if (own.year) p.year = own.year as any;
@@ -69,9 +151,44 @@ export default function MarketPulse() {
       ]
     } as any;
   }, [season25, season24, hasSelection, segName]);
+  const seasonSeriesCount = Array.isArray((seasonOption as any)?.series) ? (seasonOption as any).series.length : 0;
+  const hasSeasonData = Boolean(
+    hasSelection &&
+    Array.isArray((seasonOption as any)?.series) &&
+    ((seasonOption as any)?.xAxis?.data?.length || 0) > 0 &&
+    (seasonOption as any).series.some((s: any) => Array.isArray(s?.data) && s.data.length)
+  );
 
   return (
     <section style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff' }}>
+      {showBrandBanner && (brandLogoUrl || brandSalesOption || brandSalesLoading) ? (
+        <div style={{ display:'flex', alignItems:'center', gap:16, marginBottom:12, padding:'12px 16px', border:'1px solid #e2e8f0', borderRadius:10, background:'#f8fafc' }}>
+          {brandLogoUrl ? (
+            <img
+              src={brandLogoUrl}
+              alt={brandDisplayName || 'Marca propia'}
+              style={{ height:48, width:'auto', maxWidth:220, objectFit:'contain' }}
+              loading="lazy"
+              onError={(event) => {
+                try {
+                  event.currentTarget.style.display = 'none';
+                } catch {}
+              }}
+            />
+          ) : null}
+          <div style={{ flex:1, minHeight: brandSalesOption ? 160 : undefined }}>
+            {brandSalesLoading ? (
+              <div style={{ fontSize:12, color:'#64748b' }}>Cargando ventas 2024–2025…</div>
+            ) : brandSalesError ? (
+              <div style={{ fontSize:12, color:'#dc2626' }}>No pudimos cargar las ventas de la marca.</div>
+            ) : brandSalesOption ? (
+              <EChart option={brandSalesOption} style={{ height:160 }} />
+            ) : (
+              <div style={{ fontSize:12, color:'#64748b' }}>{brandSalesData?.warning || 'No hay ventas registradas 2024–2025 para esta marca.'}</div>
+            )}
+          </div>
+        </div>
+      ) : null}
       <div style={{ fontWeight:700, marginBottom:8, display:'flex', alignItems:'center' }}>
         <span>Pulso del mercado (Model Years 2024–2026)</span>
         <InfoIcon title={'Visión general del catálogo: marcas, modelos, versiones únicas y cuántas tienen bono (TX>0 y TX<MSRP). Abajo: tendencia de ventas mensuales por segmento (2025 vs 2024).'} />
@@ -102,9 +219,15 @@ export default function MarketPulse() {
           </div>
           <InfoIcon title={'Eje X: meses (ene–dic). Eje Y: unidades. Se grafica el segmento del vehículo seleccionado.'} />
         </div>
-        <div style={{ border:'1px dashed #e2e8f0', borderRadius:10, padding:'10px 12px', fontSize:12, color:'#64748b' }}>
-          Las gráficas del panel OEM se deshabilitaron temporalmente mientras estabilizamos los datos de ventas (series disponibles: {Array.isArray(seasonOption?.series) ? seasonOption.series.length : 0}).
-        </div>
+        {hasSeasonData ? (
+          <div style={{ border:'1px solid #e2e8f0', borderRadius:10, padding:6 }}>
+            <EChart option={seasonOption} style={{ height:260 }} />
+          </div>
+        ) : (
+          <div style={{ border:'1px dashed #e2e8f0', borderRadius:10, padding:'10px 12px', fontSize:12, color:'#64748b' }}>
+            Las gráficas del panel OEM se deshabilitaron temporalmente mientras estabilizamos los datos de ventas (series disponibles: {seasonSeriesCount}).
+          </div>
+        )}
       </div>
       {hasSelection ? (
         <div style={{ marginTop:12 }}>

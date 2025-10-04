@@ -234,6 +234,8 @@ export default function PanelDealerPage(): React.JSX.Element {
       } else {
         window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
       }
+      window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+      window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
       window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: unique }));
     } catch {}
   }, []);

@@ -490,9 +490,13 @@ export default function PanelSelfServicePage(): JSX.Element {
           if (allowedBrands.length) {
             window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(allowedBrands));
             window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', allowedBrands[0]);
+            window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+            window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
           } else {
             window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
             window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+            window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+            window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
           }
           window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: allowedBrands }));
 

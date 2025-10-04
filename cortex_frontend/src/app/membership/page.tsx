@@ -30,6 +30,59 @@ export default function MembershipPage() {
   const [debugCode, setDebugCode] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
 
+  const applyDealerState = React.useCallback(
+    (
+      state?: { dealer_id?: string; brand_label?: string; allowed_brands?: string[]; context?: Record<string, any> },
+      fallbackBrand?: string,
+    ) => {
+      if (typeof window === 'undefined' || !state) return;
+      try {
+        const allowedRaw = Array.isArray(state.allowed_brands) ? state.allowed_brands : [];
+        const normalizedAllowed = allowedRaw
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => item.length > 0);
+        const primaryBrand = (state.brand_label || fallbackBrand || '').trim();
+        const allowedSet = new Set(normalizedAllowed.map((item) => item.toLowerCase()));
+        if (primaryBrand && !allowedSet.has(primaryBrand.toLowerCase())) {
+          normalizedAllowed.unshift(primaryBrand);
+        }
+
+        if (normalizedAllowed.length) {
+          window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(normalizedAllowed));
+          window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', normalizedAllowed[0]);
+          window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: normalizedAllowed }));
+        } else {
+          window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
+          window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+          window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: [] }));
+        }
+
+        if (primaryBrand) {
+          window.localStorage.setItem('CORTEX_MEMBERSHIP_BRAND', primaryBrand);
+          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: primaryBrand }));
+        } else {
+          window.localStorage.removeItem('CORTEX_MEMBERSHIP_BRAND');
+          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: '' }));
+        }
+
+        if (state.dealer_id) {
+          window.localStorage.setItem('CORTEX_DEALER_ID', state.dealer_id);
+        }
+
+        if (state.context) {
+          window.localStorage.setItem('CORTEX_DEALER_CONTEXT', JSON.stringify(state.context));
+        }
+      } catch {
+        /* ignore storage errors */
+      }
+    },
+    [],
+  );
+
   const currentStepIndex = (() => {
     switch (step) {
       case 'phone':
@@ -79,6 +132,7 @@ export default function MembershipPage() {
           } else {
             window.localStorage.setItem('CORTEX_MEMBERSHIP_STATUS', 'free');
           }
+          applyDealerState(payload?.dealer_state as any);
         } catch {}
       }
       setSessionToken(payload.session);
@@ -128,24 +182,13 @@ export default function MembershipPage() {
         pdf_display_name: displayName,
         pdf_footer_note: footerNote || undefined,
       };
-      await endpoints.membershipSaveProfile(body);
+      const response = await endpoints.membershipSaveProfile(body);
       const selectedOption = brands.find((b) => (b.slug || b.name) === selectedBrand) || null;
       const brandLabel = (selectedOption?.name || selectedBrand || '').trim();
       if (typeof window !== 'undefined') {
         try {
-          const list = brandLabel ? [brandLabel] : [];
-          if (list.length) {
-            window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(list));
-            window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', brandLabel);
-            window.localStorage.setItem('CORTEX_MEMBERSHIP_BRAND', brandLabel);
-          } else {
-            window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
-            window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
-            window.localStorage.removeItem('CORTEX_MEMBERSHIP_BRAND');
-          }
           window.localStorage.setItem('CORTEX_MEMBERSHIP_STATUS', 'active');
-          window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: list }));
-          window.dispatchEvent(new CustomEvent('cortex:dealer_brand', { detail: brandLabel }));
+          applyDealerState(response?.dealer_state as any, brandLabel);
         } catch {
           /* ignore storage errors */
         }
@@ -372,9 +415,9 @@ export default function MembershipPage() {
               type="button"
               onClick={() => {
                 try {
-                  window.location.href = '/ui';
+                  window.location.href = '/dealers';
                 } catch {
-                  router.push('/ui');
+                  router.push('/dealers');
                 }
               }}
               style={{

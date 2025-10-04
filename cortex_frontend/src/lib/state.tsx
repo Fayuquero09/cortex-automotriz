@@ -13,9 +13,11 @@ export type FiltersState = {
   minMatchPct: number | '';
 };
 
+export type OwnState = { make: string; model: string; year: number | ''; version: string };
+
 export type AppState = {
-  own: { make: string; model: string; year: number | ''; version: string };
-  setOwn: (v: { make: string; model: string; year: number | ''; version: string }) => void;
+  own: OwnState;
+  setOwn: (v: OwnState | ((prev: OwnState) => OwnState)) => void;
   filters: FiltersState;
   setFilters: (f: FiltersState) => void;
   autoGenSeq: number;
@@ -39,10 +41,11 @@ const defaultFilters: FiltersState = {
 const Ctx = React.createContext<AppState | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [own, _setOwn] = React.useState<{ make: string; model: string; year: number | ''; version: string }>({ make: '', model: '', year: '', version: '' });
+  const [own, _setOwn] = React.useState<OwnState>({ make: '', model: '', year: '', version: '' });
   const [filters, _setFilters] = React.useState<FiltersState>(defaultFilters);
   const [autoGenSeq, setAutoGenSeq] = React.useState<number>(0);
   const [autoGenerate, setAutoGenerate] = React.useState<boolean>(false);
+  const previewHandledRef = React.useRef(false);
 
   React.useEffect(() => {
     try {
@@ -111,12 +114,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  React.useEffect(() => {
+    if (previewHandledRef.current) return;
+    if (typeof window === 'undefined') return;
+    const parseFlag = (value: string | null) => {
+      if (!value) return false;
+      const normalized = value.trim().toLowerCase();
+      return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'preview';
+    };
+    let preview = false;
+    try {
+      preview = parseFlag(localStorage.getItem('CORTEX_DEALER_PREVIEW'));
+      if (!preview) {
+        const params = new URLSearchParams(window.location.search);
+        preview = parseFlag(params.get('preview'));
+      }
+    } catch {}
+    previewHandledRef.current = true;
+    if (!preview) return;
+    if (filters.includeDifferentYears) return;
+    const nextFilters: FiltersState = { ...filters, includeDifferentYears: true };
+    _setFilters(nextFilters);
+    try { localStorage.setItem('CORTEX_FILTERS', JSON.stringify(nextFilters)); } catch {}
+  }, [filters]);
+
   const setFilters = (f: FiltersState) => {
     _setFilters(f);
     try { localStorage.setItem("CORTEX_FILTERS", JSON.stringify(f)); } catch {}
   };
-  const setOwn = (v: { make: string; model: string; year: number | ''; version: string }) => {
-    _setOwn(v);
+  const setOwn = (value: OwnState | ((prev: OwnState) => OwnState)) => {
+    _setOwn((prev) => (typeof value === 'function' ? (value as (p: OwnState) => OwnState)(prev) : value));
     // No persistimos selección de vehículo propio para comenzar siempre en blanco
   };
 
