@@ -125,6 +125,10 @@ export const endpoints = {
     make,
     years: Array.isArray(years) && years.length ? years.join(',') : undefined,
   }),
+  bodyStylePillars: (bodyStyle: string, years?: number[]) => apiGet('/analytics/body_style_pillars', {
+    body_style: bodyStyle,
+    years: Array.isArray(years) && years.length ? years.join(',') : undefined,
+  }),
   adminOverview: () => apiGet('/admin/overview'),
   adminOrganization: (orgId: string) => apiGet(`/admin/organizations/${orgId}`),
   adminSelfMemberships: (params?: Record<string, any>) => apiGet('/admin/self_memberships', params),

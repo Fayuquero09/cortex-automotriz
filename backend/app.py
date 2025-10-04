@@ -2502,6 +2502,25 @@ def _load_aliases() -> Dict[str, Any]:
     _ALIASES, _ALIASES_MTIME = aliases, mt
     return aliases
 
+
+def _normalize_body_style_label(value: Optional[str]) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    if any(token in lowered for token in ("pick", "cab", "chasis", "camioneta")):
+        return "Pickup"
+    if any(token in lowered for token in ("todo terreno", "suv", "crossover", "sport utility")):
+        return "SUV'S"
+    if "van" in lowered:
+        return "Van"
+    if any(token in lowered for token in ("hatch", "hb")):
+        return "Hatchback"
+    if any(token in lowered for token in ("sedan", "sedán", "saloon", "berlina")):
+        return "Sedán"
+    return raw.strip()
+
+
 def _slugify_token(value: Optional[str]) -> str:
     try:
         import re as _re
@@ -13537,6 +13556,96 @@ def sales_brand_monthly(
     if not has_any:
         payload["warning"] = "No hay ventas registradas para la marca en los años solicitados."
     return payload
+
+
+_PILLAR_KEYS = [
+    ("equip_score", "Score total"),
+    ("equip_p_adas", "ADAS"),
+    ("equip_p_safety", "Seguridad"),
+    ("equip_p_comfort", "Confort"),
+    ("equip_p_infotainment", "Infotenimiento"),
+    ("equip_p_traction", "Tracción"),
+    ("equip_p_utility", "Utility"),
+    ("equip_p_performance", "Performance"),
+    ("equip_p_efficiency", "Eficiencia"),
+    ("equip_p_electrification", "Electrificación"),
+    ("warranty_score", "Garantía"),
+]
+
+
+@app.get("/analytics/body_style_pillars")
+def analytics_body_style_pillars(
+    body_style: str = Query(..., description="Body style o segmento (por ejemplo SUV'S, Pickup, Sedán)"),
+    years: str = Query("2024,2025,2026", description="Años modelo permitidos"),
+) -> Dict[str, Any]:
+    label_requested = str(body_style or "").strip()
+    if not label_requested:
+        raise HTTPException(status_code=400, detail="Debes indicar body_style")
+
+    df = _load_catalog().copy()
+    try:
+        if "ano" in df.columns:
+            requested_years = {
+                int(token.strip())
+                for token in str(years or "").split(",")
+                if token.strip().isdigit()
+            } or set(ALLOWED_YEARS)
+            df = df[df["ano"].isin(requested_years)]
+    except Exception:
+        df = df[df.get("ano").isin(list(ALLOWED_YEARS))] if "ano" in df.columns else df
+
+    if df.empty:
+        raise HTTPException(status_code=404, detail="No hay catálogo disponible")
+
+    df["__body_style"] = df.get("segmento_ventas").fillna(df.get("body_style")).map(_normalize_body_style_label)
+    target_label = _normalize_body_style_label(label_requested)
+    if not target_label:
+        raise HTTPException(status_code=400, detail="Body style inválido")
+
+    same_style = df[df["__body_style"] == target_label]
+    if same_style.empty:
+        raise HTTPException(status_code=404, detail="No encontramos registros para ese body style")
+
+    def _avg(series: Any) -> Optional[float]:
+        try:
+            import pandas as _pd  # type: ignore
+            numeric = _pd.to_numeric(series, errors="coerce")
+            if numeric.notna().sum() == 0:
+                return None
+            return float(round(numeric.mean(), 2))
+        except Exception:
+            return None
+
+    def _collect(subset) -> Dict[str, Optional[float]]:
+        result: Dict[str, Optional[float]] = {}
+        for key, _ in _PILLAR_KEYS:
+            if key not in subset.columns:
+                result[key] = None
+                continue
+            result[key] = _avg(subset[key])
+        return result
+
+    overall = _collect(df)
+    body = _collect(same_style)
+
+    excluded = df[df["__body_style"] != target_label]
+    rest = _collect(excluded) if not excluded.empty else None
+
+    series: List[Dict[str, Any]] = [
+        {"id": "body_style", "label": target_label, "values": body},
+        {"id": "overall", "label": "Mercado total", "values": overall},
+    ]
+    if rest:
+        series.append({"id": "other_styles", "label": "Otros body styles", "values": rest})
+
+    return {
+        "body_style": target_label,
+        "requested": label_requested,
+        "count": int(len(same_style)),
+        "total_market": int(len(df)),
+        "pillars": [{"key": key, "label": label} for key, label in _PILLAR_KEYS],
+        "series": series,
+    }
 
 
 # ------------------------------- WebSocket --------------------------------

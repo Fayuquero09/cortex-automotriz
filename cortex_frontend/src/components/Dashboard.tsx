@@ -4,9 +4,22 @@ import useSWR from 'swr';
 import { endpoints } from '@/lib/api';
 import { useAppState } from '@/lib/state';
 import dynamic from 'next/dynamic';
-import * as echarts from 'echarts';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
 import { useBrandAssets } from '@/lib/useBrandAssets';
+
+const RADAR_PILLARS = [
+  { key: 'equip_score', label: 'Score total' },
+  { key: 'equip_p_adas', label: 'ADAS' },
+  { key: 'equip_p_safety', label: 'Seguridad' },
+  { key: 'equip_p_comfort', label: 'Confort' },
+  { key: 'equip_p_infotainment', label: 'Infotenimiento' },
+  { key: 'equip_p_traction', label: 'Tracción' },
+  { key: 'equip_p_utility', label: 'Utility' },
+  { key: 'equip_p_performance', label: 'Performance' },
+  { key: 'equip_p_efficiency', label: 'Eficiencia' },
+  { key: 'equip_p_electrification', label: 'Electrificación' },
+  { key: 'warranty_score', label: 'Garantía' },
+];
 
 // Small info icon with tooltip
 function InfoIcon({ title }: { title: string }) {
@@ -116,6 +129,18 @@ export default function MarketPulse() {
     const res = await endpoints.catalog({ ...p, limit: 1, format: 'obj' });
     return (res?.items && res.items[0]) || null;
   });
+
+  const bodyStyleRaw = React.useMemo(
+    () => String(baseRow?.segmento_ventas || baseRow?.body_style || '').trim(),
+    [baseRow?.segmento_ventas, baseRow?.body_style],
+  );
+  const bodyStyleLabel = React.useMemo(() => (bodyStyleRaw ? normalizeSegTitle(bodyStyleRaw) : ''), [bodyStyleRaw]);
+  const bodyStyleKey = bodyStyleLabel ? ['body_style_radar', bodyStyleLabel] : null;
+  const { data: bodyStyleData, error: bodyStyleError } = useSWR<any>(
+    bodyStyleKey,
+    async ([, style]) => endpoints.bodyStylePillars(style),
+  );
+  const bodyStyleLoading = Boolean(bodyStyleKey) && !bodyStyleData && !bodyStyleError;
   const { data: stats } = useSWR<any>(['dashboard', segKey, baseRow?.segmento_ventas || baseRow?.body_style || ''], () => {
     const seg = (baseRow?.segmento_ventas || baseRow?.body_style || '').toString().trim();
     const segName2 = (!seg || /^nan$/i.test(seg)) ? '' : seg;
@@ -167,6 +192,67 @@ export default function MarketPulse() {
     ((seasonOption as any)?.xAxis?.data?.length || 0) > 0 &&
     (seasonOption as any).series.some((s: any) => Array.isArray(s?.data) && s.data.length)
   );
+
+  const bodyStyleRadarOption = React.useMemo(() => {
+    if (!bodyStyleData || !baseRow) return null;
+    const toScore = (value: any): number => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return 0;
+      const bounded = Math.max(0, Math.min(100, num));
+      return Number(bounded.toFixed(1));
+    };
+
+    const seriesList: Array<{ id: string; label: string; values: Record<string, any> | null }> = Array.isArray(bodyStyleData?.series)
+      ? bodyStyleData.series.map((entry: any) => ({
+          id: String(entry?.id || ''),
+          label: String(entry?.label || ''),
+          values: entry?.values && typeof entry.values === 'object' ? entry.values : null,
+        }))
+      : [];
+    if (!seriesList.length) return null;
+    const map = new Map(seriesList.map((item) => [item.id, item]));
+
+    const ownValues = RADAR_PILLARS.map(({ key }) => toScore((baseRow as any)?.[key]));
+    const bodyValues = RADAR_PILLARS.map(({ key }) => toScore(map.get('body_style')?.values?.[key]));
+    const marketValues = RADAR_PILLARS.map(({ key }) => toScore(map.get('overall')?.values?.[key]));
+    const otherValues = map.has('other_styles')
+      ? RADAR_PILLARS.map(({ key }) => toScore(map.get('other_styles')?.values?.[key]))
+      : null;
+
+    const hasData = (arr?: number[] | null) => Array.isArray(arr) && arr.some((value) => value > 0);
+    if (![ownValues, bodyValues, marketValues, otherValues].some(hasData)) return null;
+
+    const indicator = RADAR_PILLARS.map(({ label }) => ({ name: label, max: 100 }));
+
+    const radarData: Array<{ value: number[]; name: string; areaStyle?: any; lineStyle?: any; symbolSize?: number }> = [];
+    radarData.push({ name: 'Propio', value: ownValues, areaStyle: { opacity: 0.2 }, lineStyle: { width: 3 }, symbolSize: 5 });
+    radarData.push({ name: `Promedio ${bodyStyleLabel || 'body style'}`, value: bodyValues, areaStyle: { opacity: 0.12 }, symbolSize: 4 });
+    radarData.push({ name: 'Mercado total', value: marketValues, areaStyle: { opacity: 0.06 }, symbolSize: 4 });
+    if (otherValues) {
+      radarData.push({ name: 'Otros body styles', value: otherValues, areaStyle: { opacity: 0.04 }, symbolSize: 3 });
+    }
+
+    return {
+      tooltip: { trigger: 'item' },
+      legend: { top: 0, left: 'center', data: radarData.map((entry) => entry.name) },
+      radar: {
+        indicator,
+        radius: '65%',
+        splitNumber: 4,
+        axisName: { color: '#0f172a', fontSize: 12 },
+        splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.5)' } },
+        splitArea: { areaStyle: { color: ['rgba(148, 163, 184, 0.06)', 'rgba(148, 163, 184, 0.12)'] } },
+        axisLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.4)' } },
+      },
+      series: [
+        {
+          type: 'radar',
+          data: radarData,
+          emphasis: { focus: 'series' },
+        },
+      ],
+    } as any;
+  }, [baseRow, bodyStyleData, bodyStyleLabel]);
 
   return (
     <section style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff' }}>
@@ -221,6 +307,16 @@ export default function MarketPulse() {
           <StatCard label="Score segmento" value={Number(segmentScore.toFixed(1))} sub={segName ? segName.toUpperCase() : undefined} />
         ) : null}
       </div>
+      {bodyStyleLoading ? (
+        <div style={{ marginTop:12, fontSize:12, color:'#64748b' }}>Cargando pilares de equipamiento para {bodyStyleLabel || 'este body style'}…</div>
+      ) : bodyStyleError ? (
+        <div style={{ marginTop:12, fontSize:12, color:'#dc2626' }}>No pudimos obtener los pilares del body style.</div>
+      ) : bodyStyleRadarOption ? (
+        <section style={{ marginTop:12, border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff' }}>
+          <div style={{ fontWeight:700, marginBottom:8 }}>{`Pilares de equipamiento — ${bodyStyleLabel || 'Body style'}`}</div>
+          <EChart option={bodyStyleRadarOption} style={{ height:360 }} />
+        </section>
+      ) : null}
       <div style={{ marginTop:12 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', margin:'0 4px 6px' }}>
           <div style={{ fontSize:12, color:'#64748b' }}>

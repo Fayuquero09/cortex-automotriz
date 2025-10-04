@@ -1,0 +1,14 @@
+scope,from_name,to_name,make,model,notes
+# Ejemplos:
+# make,GM,GMC,,,
+# model,Territory,TERRITORY,FORD,,
+# version,Signature 2WD,SIGNATURE 2WD,MAZDA,CX-5,
+make,GREAT WALL,GWM,,,
+make,GREAT WALL MOTOR,GWM,,,
+make,FORD MOTOR,FORD,,,
+make,CHERY,CHIREY,,,
+model,HAVAL JOLION,HAVAL JOLION,GWM,,
+model,TERRITORY,TERRITORY,FORD,,
+model,TIGGO 4 PRO,TIGGO 4,CHIREY,,
+model,TIGGO 7 PRO,TIGGO 7,CHIREY,,
+model,TIGGO 8 PRO,TIGGO 8,CHIREY,,
