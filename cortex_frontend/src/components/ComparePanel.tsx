@@ -1,6 +1,5 @@
 "use client";
 import React from 'react';
-import Image from 'next/image';
 import dynamic from 'next/dynamic';
 import * as echarts from 'echarts';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -11,54 +10,13 @@ import { useI18n } from '@/lib/i18n';
 import { endpoints } from '@/lib/api';
 import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
 import { energyConsumptionLabel, isElectric, kmlFromRow, kwhPer100FromRow, parseNumberLike } from '@/lib/consumption';
-import { vehicleImageSrc } from '@/lib/media';
+import { VehicleThumb } from '@/components/VehicleThumb';
 import { renderStruct } from '@/lib/insightsTemplates';
 
 type Row = Record<string, any>;
 
 const THUMB_WIDTH = 116;
 const THUMB_HEIGHT = 72;
-
-function vehicleThumb(row: Row | null | undefined): React.ReactNode {
-  const src = vehicleImageSrc(row);
-  const label = vehicleLabel(row) || 'Vehículo';
-  const baseStyle: React.CSSProperties = {
-    width: THUMB_WIDTH,
-    height: THUMB_HEIGHT,
-    borderRadius: 10,
-    border: '1px solid #e2e8f0',
-    background: '#f8fafc',
-  };
-
-  if (src) {
-    return (
-      <Image
-        src={src}
-        alt={label}
-        width={THUMB_WIDTH}
-        height={THUMB_HEIGHT}
-        loading="lazy"
-        style={{ ...baseStyle, objectFit: 'cover', display: 'block' }}
-      />
-    );
-  }
-
-  return (
-    <div
-      style={{
-        ...baseStyle,
-        borderStyle: 'dashed',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#94a3b8',
-        fontSize: 11,
-      }}
-    >
-      Sin foto
-    </div>
-  );
-}
 
 type ManualBlockProps = {
   manModel: string;
@@ -2137,7 +2095,9 @@ export default function ComparePanel() {
   const adasScoreOption = React.useMemo(() => {
     if (!chartRows.length) return null;
     const list = chartRows.map((r:any) => {
-      const val = getPillarValue(r, 'adas');
+      const direct = num((r as any)?.adas_score);
+      const fallback = getPillarValue(r, 'adas');
+      const val = direct != null ? direct : fallback;
       if (val == null) return null;
       return {
         label: vehLabel(r),
@@ -2392,7 +2352,7 @@ export default function ComparePanel() {
           {/* Fila base (vehículo propio) */}
           {baseRow && (<tr>
             <td style={{ padding:'8px', borderBottom:'1px solid #f1f5f9', width: THUMB_WIDTH + 24 }}>
-              {vehicleThumb(baseRow)}
+              <VehicleThumb row={baseRow} width={THUMB_WIDTH} height={THUMB_HEIGHT} />
             </td>
             <td style={{ padding:'12px 12px 12px 6px', borderBottom:'1px solid #f1f5f9', minWidth: 320, maxWidth: 520, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'break-word' }}>
               <div style={{ display:'grid', gap:8, lineHeight:1.4 }}>
@@ -2447,7 +2407,7 @@ export default function ComparePanel() {
             return (
               <tr key={i} style={{ background: rowBg, ...hoverStyle(i) }} onMouseEnter={()=>setHoverRow(i)} onMouseLeave={()=>setHoverRow(null)}>
                 <td style={{ padding:'8px', borderBottom:'1px solid #f1f5f9', width: THUMB_WIDTH + 24 }}>
-                  {vehicleThumb(r)}
+                  <VehicleThumb row={r} width={THUMB_WIDTH} height={THUMB_HEIGHT} />
                 </td>
                 <td style={{ padding:'12px 12px 12px 6px', borderBottom:'1px solid #f1f5f9', minWidth: 320, maxWidth: 520, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'break-word' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>

@@ -1,6 +1,5 @@
 "use client";
 import React from 'react';
-import Image from 'next/image';
 import dynamic from 'next/dynamic';
 import * as echarts from 'echarts';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -9,8 +8,8 @@ import { useAppState } from '@/lib/state';
 import { endpoints } from '@/lib/api';
 import { renderStruct } from '@/lib/insightsTemplates';
 import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
-import { vehicleImageSrc } from '@/lib/media';
 import { energyConsumptionLabel } from '@/lib/consumption';
+import { VehicleThumb } from '@/components/VehicleThumb';
 
 type Row = Record<string, any>;
 
@@ -38,47 +37,6 @@ const vehicleDisplayName = (row: Row | null | undefined): string => {
   const parts = [brand, model, version ? `– ${version}` : ''].filter(Boolean);
   return parts.join(' ').replace(/\s+/g, ' ').trim();
 };
-
-function vehicleThumb(row: Row | null | undefined): React.ReactNode {
-  const src = vehicleImageSrc(row);
-  const label = vehicleLabel(row) || 'Vehículo';
-  const baseStyle: React.CSSProperties = {
-    width: THUMB_WIDTH,
-    height: THUMB_HEIGHT,
-    borderRadius: 10,
-    border: '1px solid #e2e8f0',
-    background: '#f8fafc',
-  };
-
-  if (src) {
-    return (
-      <Image
-        src={src}
-        alt={label}
-        width={THUMB_WIDTH}
-        height={THUMB_HEIGHT}
-        loading="lazy"
-        style={{ ...baseStyle, objectFit: 'cover', display: 'block' }}
-      />
-    );
-  }
-
-  return (
-    <div
-      style={{
-        ...baseStyle,
-        borderStyle: 'dashed',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#94a3b8',
-        fontSize: 11,
-      }}
-    >
-      Sin foto
-    </div>
-  );
-}
 
 type DealerContextInfo = {
   id?: string;
@@ -1263,7 +1221,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
                 <td></td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 260, maxWidth: 360, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'anywhere' }}>
                   <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(160px, 1fr)`, gap:8, alignItems:'flex-start' }}>
-                    <div>{vehicleThumb(baseRow)}</div>
+                    <div><VehicleThumb row={baseRow} width={THUMB_WIDTH} height={THUMB_HEIGHT} /></div>
                     <div>
                       <div style={{ fontWeight:700 }}>{brandLabel(baseRow)} {String(baseRow.model||'')}</div>
                       <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
@@ -1303,7 +1261,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
                     </td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 260, maxWidth: 360, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'anywhere' }}>
                       <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(160px, 1fr)`, gap:8, alignItems:'flex-start' }}>
-                        <div>{vehicleThumb(r)}</div>
+                        <div><VehicleThumb row={r} width={THUMB_WIDTH} height={THUMB_HEIGHT} /></div>
                         <div>
                           <div style={{ fontWeight:600 }}>{brandLabel(r)} {String(r.model||'')}</div>
                           <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano||''}</div>
