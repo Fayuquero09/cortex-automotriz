@@ -90,6 +90,8 @@ const EMPTY_EDIT_FORM: EditFormState = {
   promptProfile: '',
 };
 
+type OemUserRole = 'superadmin_oem' | 'oem_admin' | 'oem_viewer';
+
 const PRESETS: Array<{ label: string; description: string; package: OrgPackage; orgType: OrgType }> = [
   {
     label: 'OEM / Marca',
@@ -133,6 +135,24 @@ const humanizeSlug = (slug: string): string => {
   if (!words) return '';
   if (words.length <= 4) return words.toUpperCase();
   return words;
+};
+
+const catalogBrandLabel = (item: any): string => {
+  const direct = String(item?.name || '').trim();
+  if (direct) return direct;
+  const metadata = (item?.metadata || {}) as Record<string, any>;
+  const metaLabelCandidates = [
+    metadata.brand_label,
+    metadata.display_name,
+    metadata.label,
+    metadata.name,
+  ];
+  for (const candidate of metaLabelCandidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  const slugLabel = String(item?.slug || '').trim();
+  if (slugLabel) return humanizeSlug(slugLabel);
+  return '';
 };
 
 function persistAllowedBrands(brands: string[]): void {
@@ -197,7 +217,12 @@ export default function AdminControlPage(): JSX.Element {
   const [brandForm, setBrandForm] = React.useState({ brandId: '', dealerLimit: '' });
   const [brandFormStatus, setBrandFormStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [brandFormLoading, setBrandFormLoading] = React.useState(false);
-  const [userForm, setUserForm] = React.useState({ email: '', role: 'superadmin_oem', dealerAdmin: true });
+  const [userForm, setUserForm] = React.useState<{ email: string; name: string; phone: string; uiRole: OemUserRole }>({
+    email: '',
+    name: '',
+    phone: '',
+    uiRole: 'oem_admin',
+  });
   const [userFormStatus, setUserFormStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [userFormLoading, setUserFormLoading] = React.useState(false);
   const [deleteUserStatus, setDeleteUserStatus] = React.useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -229,13 +254,13 @@ export default function AdminControlPage(): JSX.Element {
     const seen = new Set<string>();
     const options: Array<{ id: string; name: string }> = [];
     for (const item of catalog) {
-      const rawName = String(item?.name || '').trim();
-      if (!rawName || !isCatalogBrand(rawName)) continue;
-      const key = rawName.toLowerCase();
+      const label = catalogBrandLabel(item);
+      if (!label || !isCatalogBrand(label)) continue;
+      const key = label.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       const rawId = item?.id ? String(item.id) : key;
-      options.push({ id: rawId, name: rawName });
+      options.push({ id: rawId, name: label });
     }
     return options.sort((a, b) => a.name.localeCompare(b.name, 'es'));
   }, [brandCatalog?.brands]);
@@ -306,7 +331,7 @@ export default function AdminControlPage(): JSX.Element {
       setBrandFormStatus(null);
       setUserFormStatus(null);
       setBrandForm({ brandId: '', dealerLimit: '' });
-      setUserForm({ email: '', role: 'superadmin_oem', dealerAdmin: true });
+      setUserForm({ email: '', name: '', phone: '', uiRole: 'oem_admin' });
       setDeleteUserStatus(null);
       setDeletingUserId('');
       setDealerForm({
@@ -539,24 +564,67 @@ export default function AdminControlPage(): JSX.Element {
     }
   }, [editingDetail?.organization, editingOrgId, mutate, mutateEditingDetail]);
 
+  const orgDomain = React.useMemo(() => {
+    const meta = editingDetail?.organization?.metadata;
+    if (meta && typeof meta === 'object' && meta) {
+      const domain = String((meta as Record<string, any>).superadmin_domain || '').trim().toLowerCase();
+      if (domain) return domain;
+    }
+    const superUser = (editingDetail?.users || []).find((user) => {
+      const email = String(user?.email || '');
+      return user?.role === 'superadmin_oem' && email.includes('@');
+    });
+    const inferred = superUser?.email?.split('@')[1]?.trim().toLowerCase();
+    return inferred || '';
+  }, [editingDetail?.organization?.metadata, editingDetail?.users]);
+
   const handleCreateUser = React.useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       if (!editingOrgId) return;
-      const email = userForm.email.trim();
-      if (!email) {
+
+      const emailRaw = userForm.email.trim();
+      if (!emailRaw) {
         setUserFormStatus({ type: 'error', message: 'Ingresa el correo del usuario.' });
         return;
       }
+      if (!emailRaw.includes('@')) {
+        setUserFormStatus({ type: 'error', message: 'El correo debe incluir “@”.' });
+        return;
+      }
+      const email = emailRaw.toLowerCase();
+      const domainPart = email.split('@')[1]?.trim().toLowerCase();
+      if (orgDomain && domainPart !== orgDomain) {
+        setUserFormStatus({ type: 'error', message: `El correo debe terminar en @${orgDomain}.` });
+        return;
+      }
+
+      const roleMap = (uiRole: typeof userForm.uiRole) => {
+        switch (uiRole) {
+          case 'superadmin_oem':
+            return { role: 'superadmin_oem', dealerAdmin: true };
+          case 'oem_admin':
+            return { role: 'oem_user', dealerAdmin: true };
+          default:
+            return { role: 'oem_user', dealerAdmin: false };
+        }
+      };
+
+      const { role, dealerAdmin } = roleMap(userForm.uiRole);
+      const name = userForm.name.trim();
+      const phone = userForm.phone.trim();
+
       setUserFormLoading(true);
       setUserFormStatus(null);
       try {
         await endpoints.adminCreateOrgUser(editingOrgId, {
           email,
-          role: userForm.role,
-          dealer_admin: userForm.dealerAdmin,
+          role,
+          dealer_admin: dealerAdmin,
+          name: name || undefined,
+          phone: phone || undefined,
         });
-        setUserForm({ email: '', role: userForm.role, dealerAdmin: true });
+        setUserForm({ email: '', name: '', phone: '', uiRole: userForm.uiRole });
         setUserFormStatus({ type: 'success', message: 'Usuario creado correctamente.' });
         await Promise.all([mutateEditingDetail(), mutate()]);
       } catch (err) {
@@ -566,7 +634,7 @@ export default function AdminControlPage(): JSX.Element {
         setUserFormLoading(false);
       }
     },
-    [editingOrgId, mutate, mutateEditingDetail, userForm],
+    [editingOrgId, mutate, mutateEditingDetail, orgDomain, userForm],
   );
 
   const handleDeleteUser = React.useCallback(
@@ -714,36 +782,6 @@ export default function AdminControlPage(): JSX.Element {
       }
     },
     [brandMap, dealerMap, editingDetail?.users, editingOrgId],
-  );
-
-  const handleOpenOemPanel = React.useCallback(
-    (orgId: string, orgName: string) => {
-      if (typeof window === 'undefined') return;
-      try {
-        persistAllowedBrands([]);
-        const storage = window.localStorage;
-        const cleanupKeys = [
-          'CORTEX_DEALER_ID',
-          'CORTEX_DEALER_CONTEXT',
-          'CORTEX_DEALER_ALLOWED_BRAND',
-          'CORTEX_ALLOWED_BRANDS',
-          'CORTEX_DEALER_PREVIEW',
-          'CORTEX_MEMBERSHIP_SESSION',
-          'CORTEX_MEMBERSHIP_STATUS',
-          'CORTEX_MEMBERSHIP_BRAND',
-          'CORTEX_MEMBERSHIP_PHONE',
-        ];
-        cleanupKeys.forEach((key) => {
-          try { storage.removeItem(key); } catch {}
-        });
-        window.localStorage.setItem('CORTEX_SUPERADMIN_ORG_ID', orgId);
-        window.open(`/panel/oem?org=${orgId}`, '_blank', 'noopener');
-        setPanelNotice({ type: 'success', message: `Se abrió el panel OEM como ${orgName}.` });
-      } catch {
-        setPanelNotice({ type: 'error', message: 'No se pudo abrir el panel OEM en este navegador.' });
-      }
-    },
-    [],
   );
 
   const handleDeleteOrganization = React.useCallback(async () => {
@@ -1468,11 +1506,17 @@ export default function AdminControlPage(): JSX.Element {
                       {editingDetail.users?.length ? (
                         editingDetail.users.map((user) => {
                           const dealer = user.dealer_location_id ? dealerMap.get(user.dealer_location_id) : null;
+                          const featureFlags = (user.feature_flags || {}) as Record<string, any>;
+                          const dealerAdminFlag = featureFlags?.dealer_admin;
+                          const isDealerAdmin = dealerAdminFlag === true
+                            || dealerAdminFlag === 'all'
+                            || dealerAdminFlag === 'full'
+                            || dealerAdminFlag === 'admin';
                           const roleLabel = user.role === 'superadmin_oem'
                             ? 'Superadmin OEM'
-                            : user.role === 'oem_user'
-                              ? 'Usuario OEM'
-                              : user.role || '—';
+                            : isDealerAdmin
+                              ? 'Administrador OEM'
+                              : 'Usuario OEM';
                           const assignment = dealer
                             ? `Dealer: ${dealer.name || dealer.id}`
                             : user.brand_id
@@ -1518,58 +1562,88 @@ export default function AdminControlPage(): JSX.Element {
                 {deleteUserStatus ? (
                   <p style={{ fontSize: 12, color: deleteUserStatus.type === 'success' ? '#047857' : '#dc2626' }}>{deleteUserStatus.message}</p>
                 ) : null}
-                <form onSubmit={handleCreateUser} style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                  <input
-                    value={userForm.email}
-                    onChange={(event) => {
-                      setUserForm((prev) => ({ ...prev, email: event.target.value }));
-                      setUserFormStatus(null);
-                    }}
-                    placeholder="correo@compania.com"
-                    style={{ minWidth: 220, padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5', fontFamily: 'monospace' }}
-                  />
-                  <select
-                    value={userForm.role}
-                    onChange={(event) => {
-                      setUserForm((prev) => ({ ...prev, role: event.target.value }));
-                      setUserFormStatus(null);
-                    }}
-                    style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
-                  >
-                    <option value="superadmin_oem">Superadmin OEM</option>
-                    <option value="oem_user">Usuario OEM</option>
-                  </select>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                    <input
-                      type="checkbox"
-                      checked={userForm.dealerAdmin}
-                      onChange={(event) => {
-                        setUserForm((prev) => ({ ...prev, dealerAdmin: event.target.checked }));
-                        setUserFormStatus(null);
+                <form onSubmit={handleCreateUser} style={{ display: 'grid', gap: 10 }} suppressHydrationWarning>
+                  <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Correo corporativo
+                      <input
+                        value={userForm.email}
+                        onChange={(event) => {
+                          setUserForm((prev) => ({ ...prev, email: event.target.value }));
+                          setUserFormStatus(null);
+                        }}
+                        placeholder={orgDomain ? `usuario@${orgDomain}` : 'usuario@empresa.com'}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5', fontFamily: 'monospace' }}
+                      />
+                      {orgDomain ? (
+                        <span style={{ fontSize: 11, color: '#64748b' }}>Debe terminar en @{orgDomain}</span>
+                      ) : (
+                        <span style={{ fontSize: 11, color: '#64748b' }}>Usa el dominio corporativo de la OEM.</span>
+                      )}
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Nombre completo (opcional)
+                      <input
+                        value={userForm.name}
+                        onChange={(event) => {
+                          setUserForm((prev) => ({ ...prev, name: event.target.value }));
+                          setUserFormStatus(null);
+                        }}
+                        placeholder="Nombre y apellidos"
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Teléfono de contacto (opcional)
+                      <input
+                        value={userForm.phone}
+                        onChange={(event) => {
+                          setUserForm((prev) => ({ ...prev, phone: event.target.value }));
+                          setUserFormStatus(null);
+                        }}
+                        placeholder="+52 ..."
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                      Rol
+                      <select
+                        value={userForm.uiRole}
+                        onChange={(event) => {
+                          const value = event.target.value as typeof userForm.uiRole;
+                          setUserForm((prev) => ({ ...prev, uiRole: value }));
+                          setUserFormStatus(null);
+                        }}
+                        style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #cbd5f5' }}
+                      >
+                        <option value="superadmin_oem">Superadmin OEM · control total</option>
+                        <option value="oem_admin">Administrador OEM · gestiona dealers</option>
+                        <option value="oem_viewer">Usuario OEM · solo consulta</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    <button
+                      type="submit"
+                      disabled={userFormLoading}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        border: '1px solid #2563eb',
+                        background: userFormLoading ? '#cbd5f5' : '#2563eb',
+                        color: '#fff',
+                        fontWeight: 600,
+                        cursor: userFormLoading ? 'default' : 'pointer',
                       }}
-                    />
-                    Acceso a panel dealer
-                  </label>
-                  <button
-                    type="submit"
-                    disabled={userFormLoading}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 6,
-                      border: '1px solid #2563eb',
-                      background: userFormLoading ? '#cbd5f5' : '#2563eb',
-                      color: '#fff',
-                      fontWeight: 600,
-                      cursor: userFormLoading ? 'default' : 'pointer',
-                    }}
-                  >
-                    {userFormLoading ? 'Creando…' : 'Crear usuario'}
-                  </button>
-                  {userFormStatus ? (
-                    <span style={{ fontSize: 12, color: userFormStatus.type === 'success' ? '#047857' : '#dc2626' }}>
-                      {userFormStatus.message}
-                    </span>
-                  ) : null}
+                    >
+                      {userFormLoading ? 'Creando…' : 'Crear usuario'}
+                    </button>
+                    {userFormStatus ? (
+                      <span style={{ fontSize: 12, color: userFormStatus.type === 'success' ? '#047857' : '#dc2626' }}>
+                        {userFormStatus.message}
+                      </span>
+                    ) : null}
+                  </div>
                 </form>
               </div>
 
@@ -1858,7 +1932,6 @@ export default function AdminControlPage(): JSX.Element {
                           <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #e2e8f0' }}>Paquete</th>
                           <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #e2e8f0' }}>Creación</th>
                           <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #e2e8f0' }}>Acciones</th>
-                          <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #e2e8f0' }}>Acceso</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1883,25 +1956,6 @@ export default function AdminControlPage(): JSX.Element {
                               >
                                 {editingOrgId === org.id ? 'Editar (abierto)' : 'Editar'}
                               </button>
-                            </td>
-                            <td style={{ padding: '8px 10px' }}>
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                <a
-                                  href={`/panel/dealer?org=${org.id}`}
-                                  style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #2563eb', color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
-                                >
-                                  Panel dealer
-                                </a>
-                                {group === 'oem' ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenOemPanel(org.id, org.name)}
-                                    style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #0e7490', background: '#0e7490', color: '#fff', fontWeight: 600, cursor: 'pointer' }}
-                                  >
-                                    Panel OEM
-                                  </button>
-                                ) : null}
-                              </div>
                             </td>
                           </tr>
                         ))}

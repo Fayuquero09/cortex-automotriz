@@ -27,6 +27,20 @@ function normalizeCandidate(raw: unknown): string | null {
   const withForwardSlashes = value.replace(/\\+/g, '/');
 
   if (/^https?:\/\//i.test(value)) {
+    try {
+      const url = new URL(withForwardSlashes);
+      const hostname = url.hostname.toLowerCase();
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        const idx = url.pathname.toUpperCase().indexOf('SSCMEX/');
+        if (idx >= 0) {
+          const suffix = url.pathname.slice(idx).replace(/^\/+/, '');
+          if (USE_SSCMEX_PROXY) {
+            return `/${suffix}`;
+          }
+          return `${SSCMEX_REMOTE_BASE}/${suffix}`;
+        }
+      }
+    } catch {}
     if (USE_SSCMEX_PROXY) {
       const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
       if (idx >= 0) {

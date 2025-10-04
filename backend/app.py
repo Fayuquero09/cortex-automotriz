@@ -1690,6 +1690,9 @@ class AdminOrganizationUserCreate(BaseModel):
     email: EmailStr
     role: Literal["oem_user", "superadmin_oem"] = "oem_user"
     name: Optional[str] = None
+    phone: Optional[str] = None
+    features: Optional[Dict[str, Literal["none", "view", "edit"]]] = None
+    dealer_admin: Optional[bool] = None
 
 
 class MembershipSendCode(BaseModel):

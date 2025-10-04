@@ -171,6 +171,21 @@ export default function PanelDealerPage(): React.JSX.Element {
     return map;
   }, [orgDetail?.brands]);
 
+  const clearMembershipContext = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const keys = [
+      'CORTEX_MEMBERSHIP_SESSION',
+      'CORTEX_MEMBERSHIP_STATUS',
+      'CORTEX_MEMBERSHIP_BRAND',
+      'CORTEX_MEMBERSHIP_PHONE',
+    ];
+    keys.forEach((key) => {
+      try {
+        window.localStorage.removeItem(key);
+      } catch {}
+    });
+  }, []);
+
   const availableBrandOptions = React.useMemo(() => {
     const catalog = brandCatalog?.brands || [];
     const assigned = new Set<string>();
@@ -277,6 +292,7 @@ export default function PanelDealerPage(): React.JSX.Element {
     }
     if (typeof window === 'undefined') return;
     try {
+      clearMembershipContext();
       applyAllowedBrands(organizationBrands);
       window.localStorage.setItem('CORTEX_SUPERADMIN_ORG_ID', orgDetail.organization.id);
       const url = new URL('/ui', window.location.origin);
@@ -286,7 +302,7 @@ export default function PanelDealerPage(): React.JSX.Element {
     } catch {
       setImpersonationNotice({ type: 'error', message: 'No se pudo impersonar la organización en este navegador.' });
     }
-  }, [applyAllowedBrands, orgDetail?.organization, organizationBrands]);
+  }, [applyAllowedBrands, clearMembershipContext, orgDetail?.organization, organizationBrands]);
 
   const handleImpersonateUser = React.useCallback(() => {
     if (!selectedUser || typeof window === 'undefined') {
@@ -294,6 +310,7 @@ export default function PanelDealerPage(): React.JSX.Element {
       return;
     }
     try {
+      clearMembershipContext();
       const trimmedEmail = selectedUser.email?.trim() ?? '';
       window.localStorage.setItem('CORTEX_SUPERADMIN_USER_ID', selectedUser.id);
       if (trimmedEmail) {
@@ -369,7 +386,7 @@ export default function PanelDealerPage(): React.JSX.Element {
     } catch {
       setImpersonationNotice({ type: 'error', message: 'No se pudo impersonar al usuario en este navegador.' });
     }
-  }, [applyAllowedBrands, brandMap, dealerMap, organizationBrands, selectedUser]);
+  }, [applyAllowedBrands, brandMap, clearMembershipContext, dealerMap, organizationBrands, selectedUser]);
 
   const handleBrandLimitInput = React.useCallback(
     (brandId: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -654,14 +671,10 @@ export default function PanelDealerPage(): React.JSX.Element {
                     placeholder="Nombre visible"
                   />
                 </div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={editAllowDealers}
-                    onChange={(event) => setEditAllowDealers(event.target.checked)}
-                  />
-                  Permitir que la organización cree dealers
-                </label>
+                <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontWeight: 600 }}>Creación de dealers:</span>
+                  <span>{editAllowDealers ? 'Activada (configurable desde Control)' : 'Deshabilitada (ajusta desde Control)'}</span>
+                </div>
                 <div style={{ display: 'grid', gap: 4 }}>
                   <label style={{ fontWeight: 600 }}>Límite de dealers permitidos</label>
                   <input
