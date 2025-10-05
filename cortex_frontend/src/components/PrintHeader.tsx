@@ -3,10 +3,13 @@ import React from 'react';
 import useSWR from 'swr';
 import { endpoints } from '@/lib/api';
 import { useBrandAssets } from '@/lib/useBrandAssets';
+import { useAppState } from '@/lib/state';
 
 export default function PrintHeader(){
   const { data: cfg } = useSWR<any>('config_print_header', endpoints.config);
   const brandAssets = useBrandAssets();
+  const { comparison } = useAppState();
+  const baseRow = comparison?.base || null;
   const [hydrated, setHydrated] = React.useState(false);
   React.useEffect(() => {
     setHydrated(true);
@@ -38,8 +41,8 @@ export default function PrintHeader(){
   const updIndustry = (()=>{
     try { const s = cfg?.industry_last_updated; return s ? new Date(s).toLocaleString('es-MX', { dateStyle:'medium', timeStyle:'short' }) : ''; } catch { return ''; }
   })();
-  const brandCandidates = React.useMemo(() => {
-    if (!hasBrandContext) return [];
+  const baseBrandHints = React.useMemo(() => {
+    if (!baseRow) return [];
     const out: string[] = [];
     const push = (value?: string | null) => {
       if (!value) return;
@@ -48,20 +51,61 @@ export default function PrintHeader(){
       const exists = out.some((item) => item.toLowerCase() === label.toLowerCase());
       if (!exists) out.push(label);
     };
-    allowedBrands.forEach(push);
-    push(brandAssets.primary);
+    push((baseRow as any)?.brand_label);
+    push((baseRow as any)?.brand);
+    push((baseRow as any)?.brand_name);
+    push((baseRow as any)?.brandSlug);
+    push((baseRow as any)?.brand_slug);
+    push((baseRow as any)?.make);
+    push((baseRow as any)?.marca);
+    push((baseRow as any)?.organization_name);
     return out;
-  }, [allowedBrands, brandAssets.primary, hasBrandContext]);
+  }, [baseRow]);
 
-  const brandDisplayName = (hydrated && hasBrandContext) ? (brandCandidates[0] || '') : '';
+  const brandCandidates = React.useMemo(() => {
+    const out: string[] = [];
+    const push = (value?: string | null) => {
+      if (!value) return;
+      const label = String(value).trim();
+      if (!label) return;
+      const exists = out.some((item) => item.toLowerCase() === label.toLowerCase());
+      if (!exists) out.push(label);
+    };
+    baseBrandHints.forEach(push);
+    if (hasBrandContext) {
+      allowedBrands.forEach(push);
+      push(brandAssets.primary);
+    }
+    return out;
+  }, [allowedBrands, baseBrandHints, brandAssets.primary, hasBrandContext]);
+
+  const ownLogoDirect = React.useMemo(() => {
+    if (!baseRow) return '';
+    const candidates = [
+      (baseRow as any)?.brand_logo_url,
+      (baseRow as any)?.logo_url,
+      (baseRow as any)?.own_logo_url,
+      (baseRow as any)?.logo,
+      (baseRow as any)?.primary_logo_url,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+    return '';
+  }, [baseRow]);
+
+  const brandDisplayName = hydrated ? (brandCandidates[0] || '') : '';
   const brandLogoUrl = React.useMemo(() => {
-    if (!hydrated || !hasBrandContext) return '';
+    if (!hydrated) return '';
+    if (ownLogoDirect) return ownLogoDirect;
     for (const candidate of brandCandidates) {
       const resolved = brandAssets.resolveLogo(candidate);
       if (resolved) return resolved;
     }
     return '';
-  }, [brandAssets.resolveLogo, brandCandidates, hasBrandContext, hydrated]);
+  }, [brandAssets.resolveLogo, brandCandidates, hydrated, ownLogoDirect]);
   const printedLabel = printed || '—';
   // Visible solo al imprimir mediante clase global .print-only
   return (

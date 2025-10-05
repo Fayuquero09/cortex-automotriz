@@ -5,16 +5,6 @@ import { endpoints } from '@/lib/api';
 import { useAppState } from '@/lib/state';
 import dynamic from 'next/dynamic';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
-import { useBrandAssets } from '@/lib/useBrandAssets';
-import {
-  AdvantageMode,
-  AdvantageSection,
-  buildAdvantageOption,
-  cleanVehicleRow,
-  computeAdvantageSections,
-  keyForRow,
-  vehicleDisplayName,
-} from '@/lib/advantage';
 
 type Row = Record<string, any>;
 
@@ -26,101 +16,10 @@ function InfoIcon({ title }: { title: string }) {
 }
 
 export default function MarketPulse() {
-  const { own, comparison } = useAppState();
-  const brandAssets = useBrandAssets();
-  const [hydrated, setHydrated] = React.useState(false);
-  React.useEffect(() => {
-    setHydrated(true);
-  }, []);
-
-  const allowedBrands = React.useMemo(() => {
-    const list = Array.isArray(brandAssets.allowed) ? brandAssets.allowed : [];
-    return list.map((item) => String(item || '').trim()).filter((item) => item.length > 0);
-  }, [brandAssets.allowed]);
-  const hasBrandContext = hydrated && allowedBrands.length > 0;
+  const { own } = useAppState();
   const { data: cfg } = useSWR<any>('config_dash', endpoints.config);
   const segKey = (own.make && own.model) ? `${own.make}|${own.model}|${own.year||''}` : '';
   const segKey2 = segKey; // preserve original semantics for baseRow fetch key
-  const [advantageMode, setAdvantageMode] = React.useState<AdvantageMode>('upsides');
-  const brandCandidates = React.useMemo(() => {
-    if (!hasBrandContext) return [];
-    const out: string[] = [];
-    const push = (value?: string | null) => {
-      if (!value) return;
-      const label = String(value).trim();
-      if (!label) return;
-      const exists = out.some((item) => item.toLowerCase() === label.toLowerCase());
-      if (!exists) out.push(label);
-    };
-    push(own.make);
-    push(brandAssets.primary);
-    allowedBrands.forEach(push);
-    return out;
-  }, [allowedBrands, brandAssets.primary, hasBrandContext, own.make]);
-
-  const brandDisplayName = hasBrandContext ? (brandCandidates[0] || '') : '';
-  const brandLogoUrl = React.useMemo(() => {
-    if (!hydrated || !hasBrandContext) return '';
-    for (const candidate of brandCandidates) {
-      const resolved = brandAssets.resolveLogo(candidate);
-      if (resolved) return resolved;
-    }
-    return '';
-  }, [brandAssets.resolveLogo, brandCandidates, hasBrandContext, hydrated]);
-
-  const brandSalesKey = hasBrandContext && hydrated && brandDisplayName
-    ? ['brand_sales_totals', brandDisplayName]
-    : null;
-  const { data: brandSalesData, error: brandSalesError } = useSWR<any>(
-    brandSalesKey,
-    async ([, make]) => endpoints.brandSalesMonthly(make, [2025, 2024]),
-  );
-  const brandSalesLoading = Boolean(brandSalesKey) && !brandSalesData && !brandSalesError;
-
-  const showBrandBanner = hasBrandContext && hydrated && Boolean(brandLogoUrl || brandSalesData || brandSalesLoading);
-
-  const brandSalesOption = React.useMemo(() => {
-    if (!hydrated || !hasBrandContext) return null;
-    const months = Array.isArray(brandSalesData?.months) && brandSalesData.months.length === 12
-      ? brandSalesData.months
-      : ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-    const rawSeries = Array.isArray(brandSalesData?.series) ? brandSalesData.series : [];
-    if (!rawSeries.length) return null;
-    const palette = ['#2563eb', '#94a3b8', '#f97316', '#10b981'];
-    const series = rawSeries
-      .map((entry: any, idx: number) => {
-        const data = Array.isArray(entry?.monthly)
-          ? entry.monthly.map((value: any) => (Number.isFinite(Number(value)) ? Number(value) : 0))
-          : Array(12).fill(0);
-        return {
-          label: String(entry?.year || ''),
-          color: palette[idx % palette.length],
-          data,
-        };
-      })
-      .filter((entry) => entry.data.some((value) => value > 0));
-    if (!series.length) return null;
-    return {
-      grid: { left: 60, right: 16, top: 30, bottom: 30, containLabel: true },
-      tooltip: {
-        trigger: 'axis',
-        valueFormatter: (value: number) => Intl.NumberFormat('es-MX').format(Math.round(value)),
-      },
-      legend: { top: 0, left: 'center', data: series.map((entry) => entry.label) },
-      xAxis: { type: 'category', data: months },
-      yAxis: { type: 'value', min: 0, name: 'Unidades' },
-      series: series.map((entry, idx) => ({
-        name: entry.label,
-        type: 'line',
-        smooth: true,
-        data: entry.data,
-        itemStyle: { color: entry.color },
-        lineStyle: { color: entry.color, width: idx === 0 ? 3 : 2 },
-        symbolSize: 6,
-      })),
-    } as any;
-  }, [brandSalesData, hasBrandContext, hydrated]);
-
   const { data: baseRow } = useSWR<any>(segKey2 ? ['dash_base', segKey2] : null, async () => {
     const p: any = { make: own.make, model: own.model };
     if (own.year) p.year = own.year as any;
@@ -180,69 +79,8 @@ export default function MarketPulse() {
     (seasonOption as any).series.some((s: any) => Array.isArray(s?.data) && s.data.length)
   );
 
-  const sharedComparison = React.useMemo(() => {
-    if (!baseRow) return null;
-    const sharedBase = comparison?.base;
-    if (!sharedBase) return null;
-    if (keyForRow(sharedBase) !== keyForRow(baseRow)) return null;
-    const list = Array.isArray(comparison?.competitors) ? comparison.competitors : [];
-    return list.length ? list.map((entry) => ({ ...entry })) : null;
-  }, [comparison, baseRow]);
-
-  const advantageSections: AdvantageSection[] = React.useMemo(() => {
-    const comps = (sharedComparison || []).map((entry) => ({
-      ...entry,
-      __deltas: entry?.__deltas || {},
-      __diffs: entry?.__diffs || {},
-    }));
-    return computeAdvantageSections(baseRow, comps, advantageMode);
-  }, [sharedComparison, baseRow, advantageMode]);
-
-  const limitedAdvantageSections = React.useMemo(
-    () => advantageSections.slice(0, 3),
-    [advantageSections],
-  );
-
-  const advantageNotice = React.useMemo(() => {
-    if (!baseRow) return 'Selecciona un vehículo propio para visualizar comparativos.';
-    if (!sharedComparison) return 'Selecciona competidores en el panel de comparación para ver esta gráfica.';
-    if (!advantageSections.length) return 'No encontramos diferencias claras con los competidores seleccionados.';
-    return '';
-  }, [baseRow, sharedComparison, advantageSections]);
-
-  const showAdvantageChart = Boolean(sharedComparison && advantageSections.length);
-
-
   return (
     <section style={{ border:'1px solid #e5e7eb', borderRadius:12, padding:12, background:'#fff' }}>
-      {showBrandBanner && (brandLogoUrl || brandSalesOption || brandSalesLoading) ? (
-        <div style={{ display:'flex', alignItems:'center', gap:16, marginBottom:12, padding:'12px 16px', border:'1px solid #e2e8f0', borderRadius:10, background:'#f8fafc' }}>
-          {brandLogoUrl ? (
-            <img
-              src={brandLogoUrl}
-              alt={brandDisplayName || 'Marca propia'}
-              style={{ height:48, width:'auto', maxWidth:220, objectFit:'contain' }}
-              loading="lazy"
-              onError={(event) => {
-                try {
-                  event.currentTarget.style.display = 'none';
-                } catch {}
-              }}
-            />
-          ) : null}
-          <div style={{ flex:1, minHeight: brandSalesOption ? 160 : undefined }}>
-            {brandSalesLoading ? (
-              <div style={{ fontSize:12, color:'#64748b' }}>Cargando ventas 2024–2025…</div>
-            ) : brandSalesError ? (
-              <div style={{ fontSize:12, color:'#dc2626' }}>No pudimos cargar las ventas de la marca.</div>
-            ) : brandSalesOption ? (
-              <EChart option={brandSalesOption} style={{ height:160 }} />
-            ) : (
-              <div style={{ fontSize:12, color:'#64748b' }}>{brandSalesData?.warning || 'No hay ventas registradas 2024–2025 para esta marca.'}</div>
-            )}
-          </div>
-        </div>
-      ) : null}
       <div style={{ fontWeight:700, marginBottom:8, display:'flex', alignItems:'center' }}>
         <span>Pulso del mercado (Model Years 2024–2026)</span>
         <InfoIcon title={'Visión general del catálogo: marcas, modelos, versiones únicas y cuántas tienen bono (TX>0 y TX<MSRP). Abajo: tendencia de ventas mensuales por segmento (2025 vs 2024).'} />
@@ -290,71 +128,6 @@ export default function MarketPulse() {
           <SegmentTable stats={stats} />
         </div>
       ) : null}
-      {baseRow ? (
-        <div style={{ border:'1px solid #e2e8f0', borderRadius:10, padding:12, marginTop:12 }}>
-          <div style={{ paddingBottom:8, borderBottom:'1px solid #e2e8f0', marginBottom:12, background:'#fafafa', fontWeight:600 }}>
-            Ventajas vs brechas (equipamiento & prestaciones)
-          </div>
-          <div className="no-print" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }}>
-            <button
-              type="button"
-              onClick={() => setAdvantageMode('upsides')}
-              style={{
-                padding:'6px 12px',
-                borderRadius:8,
-                border: advantageMode === 'upsides' ? '1px solid #16a34a' : '1px solid #cbd5e1',
-                background: advantageMode === 'upsides' ? '#dcfce7' : '#ffffff',
-                color: advantageMode === 'upsides' ? '#166534' : '#0f172a',
-                cursor:'pointer',
-                fontSize:12,
-                fontWeight:600,
-              }}
-            >
-              Nuestras ventajas
-            </button>
-            <button
-              type="button"
-              onClick={() => setAdvantageMode('gaps')}
-              style={{
-                padding:'6px 12px',
-                borderRadius:8,
-                border: advantageMode === 'gaps' ? '1px solid #dc2626' : '1px solid #cbd5e1',
-                background: advantageMode === 'gaps' ? '#fee2e2' : '#ffffff',
-                color: advantageMode === 'gaps' ? '#991b1b' : '#0f172a',
-                cursor:'pointer',
-                fontSize:12,
-                fontWeight:600,
-              }}
-            >
-              Brechas vs rivales
-            </button>
-          </div>
-          {showAdvantageChart ? (
-            <div style={{ display:'grid', gap:12 }}>
-              {limitedAdvantageSections.map((section, idx) => {
-                const name = vehicleDisplayName(section.comp) || `Competidor ${idx + 1}`;
-                const key = String((section.comp as any)?.vehicle_id || `${name}-${idx}`);
-                return (
-                  <div key={key} style={{ border:'1px solid #f1f5f9', borderRadius:10, padding:12, background:'#fff' }}>
-                    <div style={{ fontWeight:600, marginBottom:8 }}>{name}</div>
-                    {EChart ? (
-                      <EChart
-                        option={buildAdvantageOption(section.rows, advantageMode)}
-                        style={{ height: Math.max(section.rows.length * 32, 180) }}
-                      />
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>
-              {advantageNotice || 'Selecciona competidores en el comparador para ver esta gráfica.'}
-            </div>
-          )}
-        </div>
-      ) : null}
-
       <div style={{ marginTop:10, fontSize:12, color:'#64748b', lineHeight:1.4 }}>
         Cobertura: años modelo 2024–2026. La tendencia muestra unidades mensuales del segmento seleccionado (2025 vs 2024).
         Fuentes: INEGI, AMDA/JATO y estimaciones propias para marcas que no reportan a INEGI.

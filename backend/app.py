@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+CORTEX_FRONTEND_PUBLIC = ROOT / "cortex_frontend" / "public"
+PUBLIC_LOGOS_DIR = CORTEX_FRONTEND_PUBLIC / "logos"
+
 import json
 from datetime import datetime, timedelta, timezone
 import re
@@ -757,6 +760,33 @@ def _slugify(text: str) -> str:
     return s or "brand"
 
 
+def _static_logo_url_for_slug(slug: str) -> Optional[str]:
+    if not slug:
+        return None
+    candidates = (
+        f"{slug}-logo.png",
+        f"{slug}.png",
+        f"{slug}-logo.svg",
+        f"{slug}.svg",
+        f"{slug}-logo.webp",
+        f"{slug}.webp",
+    )
+    for name in candidates:
+        path = PUBLIC_LOGOS_DIR / name
+        try:
+            if path.exists():
+                return f"/logos/{name}"
+        except Exception:
+            continue
+    return None
+
+
+def _static_logo_url_for_label(label: str) -> Optional[str]:
+    if not label:
+        return None
+    return _static_logo_url_for_slug(_slugify(label))
+
+
 def _ensure_unique_brand_slug(conn: psycopg.Connection, org_id: str, base: str) -> str:
     slug = base
     counter = 1
@@ -812,6 +842,110 @@ def _normalize_allowed_brand_list(value: Any) -> List[str]:
         seen.add(key)
         result.append(cleaned)
     return result
+
+
+def _resolve_brand_meta_with_logo(
+    labels: Sequence[str],
+    profile: Optional[Mapping[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    if not labels:
+        return []
+
+    def _register(source: Any, url: Any, store: Dict[str, str]) -> None:
+        label = str(source or "").strip()
+        logo = str(url or "").strip()
+        if not label or not logo:
+            return
+        store[label.lower()] = logo
+
+    profile_logo_map: Dict[str, str] = {}
+    if isinstance(profile, Mapping):
+        _register(profile.get("brand_label") or profile.get("name"), profile.get("brand_logo_url") or profile.get("logo_url"), profile_logo_map)
+        _register(profile.get("brand_slug") or profile.get("slug"), profile.get("brand_logo_url") or profile.get("logo_url"), profile_logo_map)
+        allowed_meta = profile.get("allowed_brand_meta")
+        if isinstance(allowed_meta, Sequence) and not isinstance(allowed_meta, (str, bytes)):
+            for item in allowed_meta:
+                if not isinstance(item, Mapping):
+                    continue
+                _register(item.get("name") or item.get("slug"), item.get("logo_url"), profile_logo_map)
+    output: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    conn: Optional[psycopg.Connection] = None
+    if SUPABASE_DB_URL:
+        try:
+            conn = _open_supabase_conn()
+        except Exception:
+            conn = None
+    try:
+        for label in labels:
+            name = str(label or "").strip()
+            if not name:
+                continue
+            slug = _slugify(name)
+            key_candidates = [name.lower()]
+            if slug:
+                key_candidates.append(slug.lower())
+            if any(k in seen for k in key_candidates if k):
+                continue
+            for k in key_candidates:
+                if k:
+                    seen.add(k)
+
+            resolved_name = name
+            resolved_slug = slug
+            logo_url = None
+
+            for k in key_candidates:
+                if k and profile_logo_map.get(k):
+                    logo_url = profile_logo_map[k]
+                    break
+
+            row: Optional[Mapping[str, Any]] = None
+            if conn is not None:
+                try:
+                    row = conn.execute(
+                        """
+                        select name, slug, logo_url
+                        from cortex.brands
+                        where lower(name) = lower(%s) or lower(slug) = lower(%s)
+                        order by case when lower(name) = lower(%s) then 0 else 1 end,
+                                 case when coalesce(nullif(trim(logo_url), ''), '') = '' then 1 else 0 end
+                        limit 1
+                        """,
+                        (name, slug or name, name),
+                    ).fetchone()
+                except Exception:
+                    row = None
+            if row:
+                resolved_name = str(row.get("name") or resolved_name).strip() or resolved_name
+                resolved_slug = str(row.get("slug") or resolved_slug or "").strip() or resolved_slug
+                candidate_logo = str(row.get("logo_url") or "").strip()
+                if candidate_logo:
+                    logo_url = candidate_logo
+
+            if not logo_url:
+                for k in key_candidates:
+                    direct = profile_logo_map.get(k)
+                    if direct:
+                        logo_url = direct
+                        break
+
+            if not logo_url:
+                logo_url = _static_logo_url_for_slug(resolved_slug) or _static_logo_url_for_label(resolved_name)
+
+            meta: Dict[str, Any] = {"name": resolved_name}
+            if resolved_slug:
+                meta["slug"] = resolved_slug
+            if logo_url:
+                meta["logo_url"] = logo_url
+            output.append(meta)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return output
 
 
 def _extract_dealer_id(request: Request, payload: Optional[Mapping[str, Any]] = None) -> Optional[str]:
@@ -940,6 +1074,19 @@ def _build_dealer_state(session_data: Mapping[str, Any]) -> Dict[str, Any]:
         lowered = {item.lower() for item in allowed_brands}
         if primary.lower() not in lowered:
             allowed_brands.insert(0, primary)
+    allowed_brand_meta = _resolve_brand_meta_with_logo(allowed_brands, profile)
+    brand_logo_url = None
+    for item in allowed_brand_meta:
+        candidate = str(item.get("logo_url") or "").strip()
+        if candidate:
+            brand_logo_url = candidate
+            break
+    if not brand_logo_url:
+        direct_logo = str(profile.get("brand_logo_url") or "").strip()
+        if direct_logo:
+            brand_logo_url = direct_logo
+    if brand_logo_url:
+        profile["brand_logo_url"] = brand_logo_url
     dealer_id = profile.get("id") or membership_id
     return {
         "membership_id": membership_id,
@@ -947,6 +1094,7 @@ def _build_dealer_state(session_data: Mapping[str, Any]) -> Dict[str, Any]:
         "brand_label": brand_label,
         "brand_slug": session_data.get("brand_slug") or session_data.get("brand_label"),
         "allowed_brands": allowed_brands,
+        "allowed_brand_meta": allowed_brand_meta,
         "context": {
             "id": dealer_id,
             "name": profile.get("name") or (brand_label or "Dealer"),
@@ -958,6 +1106,7 @@ def _build_dealer_state(session_data: Mapping[str, Any]) -> Dict[str, Any]:
         "status": session_data.get("status"),
         "paid": bool(session_data.get("paid")),
         "phone": session_data.get("phone"),
+        "brand_logo_url": brand_logo_url,
     }
 
 
@@ -3953,6 +4102,13 @@ def membership_profile(payload: MembershipProfileInput) -> Dict[str, Any]:
     dealer_profile["brand_label"] = brand_label
     if membership_id and not dealer_profile.get("id"):
         dealer_profile["id"] = f"dealer-{membership_id}"
+    brand_meta_from_label = _resolve_brand_meta_with_logo([brand_label], dealer_profile)
+    if brand_meta_from_label:
+        primary_meta = brand_meta_from_label[0]
+        logo_candidate = str(primary_meta.get("logo_url") or "").strip()
+        if logo_candidate:
+            dealer_profile["brand_logo_url"] = logo_candidate
+        dealer_profile["brand_meta"] = primary_meta
     if membership_id:
         updates: Dict[str, Any] = {
             "brand_slug": brand_slug,

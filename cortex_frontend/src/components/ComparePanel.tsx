@@ -9,6 +9,7 @@ import { useAppState } from '@/lib/state';
 import { useI18n } from '@/lib/i18n';
 import { endpoints } from '@/lib/api';
 import { brandLabel, vehicleLabel, fuelCategory } from '@/lib/vehicleLabels';
+import { AdvantageMode, AdvantageSection, buildAdvantageOption, computeAdvantageSections } from '@/lib/advantage';
 import { energyConsumptionLabel, isElectric, kmlFromRow, kwhPer100FromRow, parseNumberLike } from '@/lib/consumption';
 import { VehicleThumb } from '@/components/VehicleThumb';
 import { renderStruct } from '@/lib/insightsTemplates';
@@ -392,6 +393,7 @@ export default function ComparePanel() {
   const [dismissedKeys, setDismissedKeys] = React.useState<Set<string>>(() => new Set());
   const [insightsStruct, setInsightsStruct] = React.useState<any | null>(null);
   const [insightsNotice, setInsightsNotice] = React.useState<string>('Pulsa “Generar insights” para ver highlights del vehículo.');
+  const [advantageMode, setAdvantageMode] = React.useState<AdvantageMode>('upsides');
   const [insightsLoading, setInsightsLoading] = React.useState<boolean>(false);
 
   const keyForRow = React.useCallback((row: any) => {
@@ -1068,7 +1070,78 @@ export default function ComparePanel() {
     };
   }), [compared]);
   const comps = React.useMemo(() => rawComps.filter((r:any) => !dismissedKeys.has(keyForRow(r))), [rawComps, dismissedKeys, keyForRow]);
-
+  const compsCount = comps.length;
+  const brandNameForSales = React.useMemo(() => {
+    if (!baseRow) return '';
+    const cleanLabel = brandLabel(baseRow, '');
+    if (cleanLabel && cleanLabel.trim()) return cleanLabel.trim();
+    const make = String((baseRow as any)?.make || (baseRow as any)?.marca || '').trim();
+    if (make) return make;
+    const brand = String((baseRow as any)?.brand || (baseRow as any)?.brand_label || (baseRow as any)?.brand_name || '').trim();
+    return brand;
+  }, [baseRow]);
+  const brandSalesKey = brandNameForSales ? ['brand_sales_compare', brandNameForSales] : null;
+  const { data: brandSalesData, error: brandSalesError } = useSWR<any>(
+    brandSalesKey,
+    async ([, make]) => endpoints.brandSalesMonthly(make, [2025, 2024]),
+  );
+  const brandSalesLoading = Boolean(brandSalesKey && !brandSalesData && !brandSalesError);
+  const brandSalesOption = React.useMemo(() => {
+    if (!brandSalesData) return null;
+    const months = Array.isArray(brandSalesData?.months) && brandSalesData.months.length === 12
+      ? brandSalesData.months
+      : ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+    const rawSeries = Array.isArray(brandSalesData?.series) ? brandSalesData.series : [];
+    const palette = ['#2563eb', '#94a3b8', '#f97316', '#10b981'];
+    const series = rawSeries
+      .map((entry: any, idx: number) => {
+        const monthly = Array.isArray(entry?.monthly)
+          ? entry.monthly.map((value: any) => (Number.isFinite(Number(value)) ? Number(value) : 0))
+          : [];
+        return {
+          name: String(entry?.year || '').trim() || `Serie ${idx + 1}`,
+          data: monthly,
+          itemStyle: { color: palette[idx % palette.length] },
+          lineStyle: { color: palette[idx % palette.length], width: idx === 0 ? 3 : 2 },
+        };
+      })
+      .filter((entry) => Array.isArray(entry.data) && entry.data.some((value: number) => Number(value) > 0));
+    if (!series.length) return null;
+    return {
+      grid: { left: 60, right: 16, top: 30, bottom: 32, containLabel: true },
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: (value: number) => Intl.NumberFormat('es-MX').format(Math.round(value)),
+      },
+      legend: { top: 0, left: 'center', data: series.map((entry) => entry.name) },
+      xAxis: { type: 'category', data: months },
+      yAxis: { type: 'value', min: 0, name: 'Unidades' },
+      series: series.map((entry) => ({
+        name: entry.name,
+        type: 'line',
+        smooth: true,
+        data: entry.data,
+        itemStyle: entry.itemStyle,
+        lineStyle: entry.lineStyle,
+        symbolSize: 6,
+      })),
+    } as any;
+  }, [brandSalesData]);
+  const advantageSections: AdvantageSection[] = React.useMemo(() => {
+    if (!baseRow || !comps.length) return [];
+    return computeAdvantageSections(baseRow, comps, advantageMode);
+  }, [baseRow, comps, advantageMode]);
+  const limitedAdvantageSections = React.useMemo(
+    () => advantageSections.slice(0, 3),
+    [advantageSections],
+  );
+  const advantageNotice = React.useMemo(() => {
+    if (!baseRow) return 'Selecciona un vehículo propio para visualizar comparativos.';
+    if (!compsCount) return 'Selecciona competidores en el panel de comparación para ver esta gráfica.';
+    if (!advantageSections.length) return 'No encontramos diferencias claras con los competidores seleccionados.';
+    return '';
+  }, [baseRow, compsCount, advantageSections]);
+  const showAdvantageChart = Boolean(advantageSections.length);
   const comparisonPayload = React.useMemo(() => {
     if (!baseRow) {
       return { base: null as Row | null, competitors: [] as Row[] };
@@ -2475,6 +2548,84 @@ export default function ComparePanel() {
           })}
         </tbody>
       </table>
+
+      <section style={{ marginTop:16, border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#fff' }}>
+        <div style={{ paddingBottom:8, borderBottom:'1px solid #e5e7eb', marginBottom:12, background:'#f8fafc', fontWeight:600 }}>
+          Ventajas vs brechas (equipamiento & prestaciones)
+        </div>
+        <div className="no-print" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }}>
+          <button
+            type="button"
+            onClick={() => setAdvantageMode('upsides')}
+            style={{
+              padding:'6px 12px',
+              borderRadius:8,
+              border: advantageMode === 'upsides' ? '1px solid #16a34a' : '1px solid #cbd5e1',
+              background: advantageMode === 'upsides' ? '#dcfce7' : '#ffffff',
+              color: advantageMode === 'upsides' ? '#166534' : '#0f172a',
+              cursor:'pointer',
+              fontSize:12,
+              fontWeight:600,
+            }}
+          >
+            Nuestras ventajas
+          </button>
+          <button
+            type="button"
+            onClick={() => setAdvantageMode('gaps')}
+            style={{
+              padding:'6px 12px',
+              borderRadius:8,
+              border: advantageMode === 'gaps' ? '1px solid #dc2626' : '1px solid #cbd5e1',
+              background: advantageMode === 'gaps' ? '#fee2e2' : '#ffffff',
+              color: advantageMode === 'gaps' ? '#991b1b' : '#0f172a',
+              cursor:'pointer',
+              fontSize:12,
+              fontWeight:600,
+            }}
+          >
+            Brechas vs rivales
+          </button>
+        </div>
+        {showAdvantageChart ? (
+          <div style={{ display:'grid', gap:12 }}>
+            {limitedAdvantageSections.map((section, idx) => {
+              const name = vehicleLabel(section.comp, { includeYear: true, marker: '' });
+              const key = keyForRow(section.comp) || `${idx}`;
+              return (
+                <div key={key} style={{ border:'1px solid #f1f5f9', borderRadius:10, padding:12, background:'#fff' }}>
+                  <div style={{ fontWeight:600, marginBottom:8 }}>{name || `Competidor ${idx + 1}`}</div>
+                  {EChart ? (
+                    <EChart
+                      option={buildAdvantageOption(section.rows, advantageMode)}
+                      style={{ height: Math.max(section.rows.length * 32, 180) }}
+                    />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ color:'#64748b', fontSize:12, padding:12 }}>
+            {advantageNotice}
+          </div>
+        )}
+      </section>
+
+      {brandNameForSales ? (
+        <section style={{ marginTop:16, border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#fff' }}>
+          <div style={{ fontWeight:700, marginBottom:6 }}>Ventas mensuales de {brandNameForSales} (2025 vs 2024)</div>
+          {brandSalesLoading ? (
+            <div style={{ fontSize:12, color:'#64748b' }}>Cargando ventas de la marca…</div>
+          ) : brandSalesError ? (
+            <div style={{ fontSize:12, color:'#dc2626' }}>No pudimos cargar las ventas de la marca.</div>
+          ) : brandSalesOption ? (
+            <EChart option={brandSalesOption} style={{ height:200 }} />
+          ) : (
+            <div style={{ fontSize:12, color:'#64748b' }}>{brandSalesData?.warning || 'No hay ventas reportadas para esta marca en 2024–2025.'}</div>
+          )}
+        </section>
+      ) : null}
 
       {/* Manual list rendered inside ManualBlock */}
       <div style={{ marginTop:16, display:'grid', gap:16 }}>

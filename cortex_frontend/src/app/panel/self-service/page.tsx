@@ -472,6 +472,48 @@ export default function PanelSelfServicePage(): JSX.Element {
         : Array.isArray(impersonatedMembership?.allowed_brands)
           ? (impersonatedMembership?.allowed_brands as string[])
           : [];
+      const dealerState = response?.dealer_state as Record<string, any> | undefined;
+
+      const metaRaw = Array.isArray(response?.allowed_brand_meta)
+        ? (response.allowed_brand_meta as Array<Record<string, any>>)
+        : Array.isArray(dealerState?.allowed_brand_meta)
+          ? (dealerState?.allowed_brand_meta as Array<Record<string, any>>)
+          : Array.isArray((impersonatedMembership as any)?.allowed_brand_meta)
+            ? (((impersonatedMembership as any).allowed_brand_meta) as Array<Record<string, any>>)
+            : [];
+      const metaSeen = new Set<string>();
+      const normalizedMeta: Array<{ name: string; slug?: string; logo_url?: string }> = [];
+      const registerMeta = (name: string, slug?: string, logo?: string) => {
+        const trimmedName = (name || '').trim();
+        const trimmedSlug = (slug || '').trim();
+        const trimmedLogo = (logo || '').trim();
+        if (!trimmedName && !trimmedSlug) return;
+        const key = (trimmedSlug || trimmedName).toLowerCase();
+        if (!key || metaSeen.has(key)) return;
+        metaSeen.add(key);
+        const entry: { name: string; slug?: string; logo_url?: string } = { name: trimmedName || trimmedSlug };
+        if (trimmedSlug) entry.slug = trimmedSlug;
+        if (trimmedLogo) entry.logo_url = trimmedLogo;
+        normalizedMeta.push(entry);
+      };
+      if (dealerState) {
+        const stateLogo = String(dealerState.brand_logo_url || '').trim();
+        if (stateLogo) {
+          registerMeta(
+            String(dealerState.brand_label || primaryBrand || allowedBrandsFromResponse[0] || '').trim() || String(dealerState.brand_slug || ''),
+            String(dealerState.brand_slug || '').trim(),
+            stateLogo,
+          );
+        }
+      }
+      metaRaw.forEach((item) => {
+        if (!item || typeof item !== 'object') return;
+        const name = String((item as any).name || (item as any).label || '').trim();
+        const slug = String((item as any).slug || '').trim();
+        const logoUrl = String((item as any).logo_url || (item as any).logo || '').trim();
+        if (!name && !slug && !logoUrl) return;
+        registerMeta(name || slug, slug, logoUrl);
+      });
 
       if (typeof window !== 'undefined') {
         try {
@@ -490,8 +532,13 @@ export default function PanelSelfServicePage(): JSX.Element {
           if (allowedBrands.length) {
             window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(allowedBrands));
             window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', allowedBrands[0]);
-            window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
-            window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+            if (normalizedMeta.length) {
+              window.localStorage.setItem('CORTEX_ALLOWED_BRAND_META', JSON.stringify(normalizedMeta));
+              window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: normalizedMeta }));
+            } else {
+              window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+              window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+            }
           } else {
             window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
             window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
@@ -500,7 +547,6 @@ export default function PanelSelfServicePage(): JSX.Element {
           }
           window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: allowedBrands }));
 
-          const dealerState = response?.dealer_state as Record<string, any> | undefined;
           if (dealerState && typeof dealerState === 'object') {
             if (dealerState.dealer_id) {
               window.localStorage.setItem('CORTEX_DEALER_ID', String(dealerState.dealer_id));

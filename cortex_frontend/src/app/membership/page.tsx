@@ -32,7 +32,13 @@ export default function MembershipPage() {
 
   const applyDealerState = React.useCallback(
     (
-      state?: { dealer_id?: string; brand_label?: string; allowed_brands?: string[]; context?: Record<string, any> },
+      state?: {
+        dealer_id?: string;
+        brand_label?: string;
+        allowed_brands?: string[];
+        allowed_brand_meta?: Array<Record<string, any>>;
+        context?: Record<string, any>;
+      },
       fallbackBrand?: string,
     ) => {
       if (typeof window === 'undefined' || !state) return;
@@ -47,11 +53,54 @@ export default function MembershipPage() {
           normalizedAllowed.unshift(primaryBrand);
         }
 
+        const metaRaw = Array.isArray(state.allowed_brand_meta)
+          ? (state.allowed_brand_meta as Array<Record<string, any>>)
+          : [];
+        const metaSeen = new Set<string>();
+        const normalizedMeta: Array<{ name: string; slug?: string; logo_url?: string }> = [];
+        const registerMeta = (name: string, slug?: string, logo?: string) => {
+          const trimmedName = (name || '').trim();
+          const trimmedSlug = (slug || '').trim();
+          const trimmedLogo = (logo || '').trim();
+          if (!trimmedName && !trimmedSlug) return;
+          const key = (trimmedSlug || trimmedName).toLowerCase();
+          if (!key || metaSeen.has(key)) return;
+          metaSeen.add(key);
+          const entry: { name: string; slug?: string; logo_url?: string } = { name: trimmedName || trimmedSlug };
+          if (trimmedSlug) entry.slug = trimmedSlug;
+          if (trimmedLogo) entry.logo_url = trimmedLogo;
+          normalizedMeta.push(entry);
+        };
+        metaRaw.forEach((item) => {
+          if (!item || typeof item !== 'object') return;
+          const name = String((item as any).name || (item as any).label || '').trim();
+          const slug = String((item as any).slug || '').trim();
+          const logoUrl = String((item as any).logo_url || (item as any).logo || '').trim();
+          if (!name && !slug && !logoUrl) return;
+          registerMeta(name || slug, slug, logoUrl);
+        });
+
+        if (!normalizedMeta.length && primaryBrand) {
+          const slugify = (value: string): string =>
+            value
+              .normalize('NFD')
+              .replace(/\p{Diacritic}+/gu, '')
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-+|-+$/g, '');
+          registerMeta(primaryBrand, slugify(primaryBrand), '');
+        }
+
         if (normalizedAllowed.length) {
           window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(normalizedAllowed));
           window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', normalizedAllowed[0]);
-          window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
-          window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+          if (normalizedMeta.length) {
+            window.localStorage.setItem('CORTEX_ALLOWED_BRAND_META', JSON.stringify(normalizedMeta));
+            window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: normalizedMeta }));
+          } else {
+            window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+            window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+          }
           window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: normalizedAllowed }));
         } else {
           window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
