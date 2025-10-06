@@ -1658,7 +1658,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
             Ventas mensuales {salesChart.year}
           </div>
           {EChart ? (
-            <EChart echarts={echarts} option={salesChart.option} opts={{ renderer: 'svg' }} style={{ height: 320 }} />
+            <EChart echarts={echarts} option={salesChart.option} opts={{ renderer: 'svg' }} style={{ height: 320, position: 'relative' }} />
           ) : null}
         </div>
       ) : null}
@@ -1667,14 +1667,14 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
       <div className="print-block" style={{ display:'grid', gap:16, gridTemplateColumns:'repeat(auto-fit, minmax(320px,1fr))' }}>
         <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
           {EChart && Object.keys(hpPriceOption).length ? (
-            <EChart echarts={echarts} option={hpPriceOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
+            <EChart echarts={echarts} option={hpPriceOption} opts={{ renderer: 'svg' }} style={{ height: 300, position: 'relative' }} />
           ) : (
             <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos suficientes de precio y HP.</div>
           )}
         </div>
         <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
           {EChart && Object.keys(lengthOption).length ? (
-            <EChart echarts={echarts} option={lengthOption} opts={{ renderer: 'svg' }} style={{ height: 300 }} />
+            <EChart echarts={echarts} option={lengthOption} opts={{ renderer: 'svg' }} style={{ height: 300, position: 'relative' }} />
           ) : (
             <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos de longitud para graficar.</div>
           )}
@@ -1686,7 +1686,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
           {advantageCharts.map(({ name, option }) => (
             <div key={`adv-chart-${name}`} style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#fff', display:'grid', gap:12 }}>
               <div style={{ fontWeight:600, fontSize:14, color:'#0f172a' }}>Ventajas clave vs {name}</div>
-              <EChart echarts={echarts} option={option} opts={{ renderer: 'svg' }} style={{ height: 280 }} />
+              <EChart echarts={echarts} option={option} opts={{ renderer: 'svg' }} style={{ height: 280, position: 'relative' }} />
             </div>
           ))}
         </div>

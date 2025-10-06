@@ -472,7 +472,7 @@ export default function ComparePanel() {
     if (!EChart) return null;
     return (
       <div style={{ ...noBreakStyle }}>
-        <EChart echarts={echarts} option={option} opts={{ renderer: 'svg' }} style={{ height }} />
+        <EChart echarts={echarts} option={option} opts={{ renderer: 'svg' }} style={{ height, position: 'relative' }} />
       </div>
     );
   };
