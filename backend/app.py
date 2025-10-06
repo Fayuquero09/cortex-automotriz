@@ -12,24 +12,19 @@ import os
 import sys
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, Request
-# ¡Saludos, Ruslan!
+
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-# Comentario de prueba en la línea 15
+
 from fastapi.middleware.cors import CORSMiddleware
 
-# Ensure project root on path
-
-# Ensure project root on path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Ensure project root on pathaa
 CORTEX_FRONTEND_PUBLIC = ROOT / "cortex_frontend" / "public"
 PUBLIC_LOGOS_DIR = CORTEX_FRONTEND_PUBLIC / "logos"
 
-# Ensure project root on path PRUEBA 2
 import json
 from datetime import datetime, timedelta, timezone
 import re
