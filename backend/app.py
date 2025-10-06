@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Comentario de prueba en backend/app.py
+# Segundo comentario de prueba
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,6 +14,7 @@ import sys
 from fastapi import FastAPI, HTTPException, Query, WebSocket, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+# Comentario de prueba en la línea 15
 from fastapi.middleware.cors import CORSMiddleware
 
 # Ensure project root on path
