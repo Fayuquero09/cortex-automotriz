@@ -1,5 +1,6 @@
 "use client";
 import React from 'react';
+import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import * as echarts from 'echarts';
 const EChart = dynamic(() => import('echarts-for-react'), { ssr: false });
@@ -13,9 +14,9 @@ import { VehicleThumb } from '@/components/VehicleThumb';
 import {
   AdvantageMode,
   AdvantageSection,
-  buildAdvantageOption,
   cleanVehicleRow,
   computeAdvantageSections,
+  keyForRow,
   num,
   vehicleDisplayName,
 } from '@/lib/advantage';
@@ -26,6 +27,87 @@ const THUMB_WIDTH = 116;
 const THUMB_HEIGHT = 72;
 const RADAR_PILLARS = ['seguridad', 'confort', 'audio_y_entretenimiento', 'transmision', 'energia'] as const;
 const RADAR_MAX_SCORE = 100;
+
+function normalizeVersion(value: string): string {
+  let s = String(value || '').trim();
+  if (!s) return s;
+  s = s.replace(/\b(d-?cab(?:ina)?)\b|\b(double\s*cab)\b|\b(doble\s*cabina)\b/gi, 'D-Cab');
+  s = s.replace(/\b(diesel|diésel|díesel|d[ií]esel|dsl)\b/gi, 'DSL');
+  s = s.replace(/\b(automático|automatico|auto|a\/t|at)\b/gi, 'AT');
+  s = s.replace(/\b(mild\s*hybrid|mhev|h[íi]brido\s*ligero)\b/gi, 'MHEV');
+  s = s.replace(/\bgsr\b/gi, 'GSR');
+  s = s.replace(/\bgls\b/gi, 'GLS');
+  s = s.replace(/\btm\b/gi, 'TM');
+  s = s.replace(/\bivt\b/gi, 'IVT');
+  s = s.replace(/\bgl\b/gi, 'GL');
+  s = s.replace(/\bglx\b/gi, 'GLX');
+  s = s.replace(/\bgt\b/gi, 'GT');
+  s = s.replace(/\bgti\b/gi, 'GTI');
+  s = s.replace(/\bcvt\b/gi, 'CVT');
+  s = s.replace(/\bdct\b/gi, 'DCT');
+  s = s.replace(/\bt8\b/gi, 'T8');
+  return s;
+}
+
+type InsightSectionLike = {
+  id?: string | null;
+  title?: string | null;
+  heading?: string | null;
+  items?: any;
+};
+
+type InsightStructLike = {
+  title?: string | null;
+  sections?: InsightSectionLike[] | null;
+};
+
+const SELLER_INSIGHT_KEYWORDS = ['venta', 'vendedor', 'speech', 'guion', 'objec', 'cierre', 'seguimiento'];
+const CLIENT_INSIGHT_KEYWORDS = ['cliente', 'beneficio', 'ventaja', 'resumen', 'comparativo', 'argumento', 'valor'];
+
+const matchKeywords = (value: string, keywords: string[]) => {
+  if (!value) return false;
+  const lowered = value.toLowerCase();
+  return keywords.some(keyword => lowered.includes(keyword));
+};
+
+function splitInsightsStruct(struct: InsightStructLike | null | undefined): {
+  seller: InsightStructLike | null;
+  client: InsightStructLike | null;
+} {
+  if (!struct || typeof struct !== 'object') {
+    return { seller: null, client: null };
+  }
+  const sections = Array.isArray(struct.sections) ? struct.sections.filter(Boolean) as InsightSectionLike[] : [];
+  if (!sections.length) {
+    return { seller: null, client: null };
+  }
+  const sellerSections: InsightSectionLike[] = [];
+  const clientSections: InsightSectionLike[] = [];
+  const remaining: InsightSectionLike[] = [];
+
+  sections.forEach((section) => {
+    const idVal = String(section?.id ?? '').trim();
+    const labelVal = String(section?.title ?? section?.heading ?? '').trim();
+    const haystack = `${idVal} ${labelVal}`.trim().toLowerCase();
+    if (matchKeywords(haystack, CLIENT_INSIGHT_KEYWORDS)) {
+      clientSections.push(section);
+      return;
+    }
+    if (matchKeywords(haystack, SELLER_INSIGHT_KEYWORDS)) {
+      sellerSections.push(section);
+      return;
+    }
+    remaining.push(section);
+  });
+
+  const finalSeller = sellerSections.length ? sellerSections : remaining;
+  const finalClient = clientSections.length ? clientSections : [];
+
+  return {
+    seller: finalSeller.length ? { ...struct, sections: finalSeller } : null,
+    client: finalClient.length ? { ...struct, sections: finalClient } : null,
+  };
+}
 type DealerContextInfo = {
   id?: string;
   name?: string;
@@ -127,8 +209,16 @@ function DealerManualBlock({ onAdd, year, allowDifferentYears }: { onAdd: (r: Ro
   const { data: sugg } = useSWR<Row[]>(q.trim().length>=2 ? ['dealer_sugg', q, year||0, !!allowDifferentYears] : null, async () => {
     const params: any = { q, limit: 50 };
     if (!allowDifferentYears && year) params.year = year;
-    const list = await endpoints.catalog(params);
-    const rows: Row[] = Array.isArray(list) ? list : (Array.isArray((list as any)?.items) ? (list as any).items : []);
+    let list = await endpoints.catalog(params);
+    let rows: Row[] = Array.isArray(list) ? list : (Array.isArray((list as any)?.items) ? (list as any).items : []);
+    if ((!rows || rows.length === 0) && !allowDifferentYears && year) {
+      try {
+        list = await endpoints.catalog({ q, limit: 50 });
+        rows = Array.isArray(list) ? list : (Array.isArray((list as any)?.items) ? (list as any).items : []);
+      } catch {
+        rows = [];
+      }
+    }
     return rows;
   });
   const list = (sugg||[]).slice(0, 12);
@@ -210,6 +300,9 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
   const [templateDeleting, setTemplateDeleting] = React.useState<string | null>(null);
   const [advantageMode, setAdvantageMode] = React.useState<AdvantageMode>('upsides');
   const canUseTemplates = Boolean(dealerUserId && dealerUserId.trim());
+  const [paywall, setPaywall] = React.useState<{ message: string; checkoutEndpoint?: string; checkoutAvailable?: boolean; limit?: number; used?: number } | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = React.useState(false);
+  const [checkoutError, setCheckoutError] = React.useState<string | null>(null);
   const {
     data: templateData,
     error: templateFetchError,
@@ -355,7 +448,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
   }, [templateSuccess]);
 
   const sig = (rows: Row[]) => rows.map(r => `${r.make}|${r.model}|${r.version||''}|${r.ano||''}`).join(',');
-  const { data: compared } = useSWR(ownRow ? ['dealer_compare', ownRow?.id || ownRow?.model, ownRow?.ano, sig(manual)] : null, async () => {
+  const { data: compared, error: compareError } = useSWR(ownRow ? ['dealer_compare', ownRow?.id || ownRow?.model, ownRow?.ano, sig(manual)] : null, async () => {
     return endpoints.compare({ own: ownRow, competitors: manual });
   });
   const baseRow = (compared?.own || ownRow) as Row | null;
@@ -370,7 +463,53 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
 
   React.useEffect(() => {
     setComparison(comparisonPayload);
+    if (comparisonPayload.competitors.length) {
+      setPaywall(null);
+    }
   }, [comparisonPayload, setComparison]);
+
+  React.useEffect(() => {
+    if (!compareError) {
+      setPaywall(null);
+      setCheckoutError(null);
+      return;
+    }
+    const status = (compareError as any)?.status;
+    const data = (compareError as any)?.data;
+    if (status === 402 && data) {
+      setPaywall({
+        message: data.message || 'Alcanzaste el límite gratuito de la membresía.',
+        checkoutEndpoint: data.checkout_endpoint,
+        checkoutAvailable: data.checkout_available !== false,
+        limit: typeof data.limit === 'number' ? data.limit : undefined,
+        used: typeof data.used === 'number' ? data.used : undefined,
+      });
+      setManualNotice('');
+    } else if (status === 401 && data?.error === 'membership_session_invalid') {
+      setPaywall({ message: 'Tu sesión de membresía expiró. Vuelve a verificar tu teléfono desde la página de membresía.' });
+    } else {
+      setPaywall(null);
+    }
+  }, [compareError]);
+
+  const startCheckout = React.useCallback(async () => {
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+    try {
+      const response = await endpoints.membershipCheckout();
+      const url = response?.checkout_url || response?.url;
+      if (url) {
+        window.open(url, '_blank', 'noopener');
+      } else {
+        setCheckoutError('No recibimos la URL de Stripe. Intenta nuevamente o contacta a soporte.');
+      }
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'No se pudo abrir Stripe.');
+    } finally {
+      setCheckoutLoading(false);
+    }
+  }, []);
+
 
   function fuelLabel(row: any): string {
     const label = fuelCategory(row).label;
@@ -443,6 +582,19 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
   const [insightsStruct, setInsightsStruct] = React.useState<any|null>(null);
   const [insightsNotice, setInsightsNotice] = React.useState<string>('Pulsa “Generar speech comercial” para armar el guion.');
   const [loading, setLoading] = React.useState<boolean>(false);
+  const [insightsTab, setInsightsTab] = React.useState<'cliente' | 'vendedor'>('cliente');
+
+  const { seller: sellerInsightsStruct, client: clientInsightsStruct } = React.useMemo(
+    () => splitInsightsStruct(insightsStruct),
+    [insightsStruct],
+  );
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleBeforePrint = () => setInsightsTab('cliente');
+    window.addEventListener('beforeprint', handleBeforePrint);
+    return () => window.removeEventListener('beforeprint', handleBeforePrint);
+  }, []);
 
   const equipScoreFor = React.useCallback((row: any): number | null => {
     const direct = num(row?.equip_score);
@@ -468,11 +620,11 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
     return `${sign}${formatMoney(Math.abs(val))}`;
   }, [formatMoney]);
 
-  const pickFeatures = (arr: any[] | undefined, fallback: string) => {
+  const pickFeatures = React.useCallback((arr: any[] | undefined, fallback: string) => {
     if (!Array.isArray(arr) || !arr.length) return fallback;
     const unique = Array.from(new Set(arr.map(item => String(item).trim()).filter(Boolean)));
     return unique.slice(0, 3).join(', ');
-  };
+  }, []);
 
   const radarSummary = React.useMemo(() => {
     if (!baseRow) return null;
@@ -623,6 +775,82 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
     () => computeAdvantageSections(baseRow, comps, advantageMode),
     [baseRow, comps, advantageMode],
   );
+
+  const advantageUpsideSections = React.useMemo(
+    () => computeAdvantageSections(baseRow, comps, 'upsides'),
+    [baseRow, comps],
+  );
+
+  const clientSummaryFallback = React.useMemo(() => {
+    if (!baseRow || !comps.length) return null;
+    const basePriceTx = num(baseRow?.precio_transaccion);
+    const baseMsrp = num(baseRow?.msrp);
+    const basePrice = basePriceTx ?? baseMsrp;
+    const baseHp = num(baseRow?.caballos_fuerza);
+    const sections: InsightSectionLike[] = [];
+    comps.forEach((comp, index) => {
+      if (!comp) return;
+      const name = vehicleDisplayName(comp) || `${brandLabel(comp)} ${comp?.model || ''}`.trim() || 'Competidor';
+      const items: string[] = [];
+      const compPriceTx = num(comp?.precio_transaccion);
+      const compMsrp = num(comp?.msrp);
+      const compPrice = compPriceTx ?? compMsrp;
+      if (basePrice != null && compPrice != null) {
+        const diff = compPrice - basePrice;
+        if (diff > 0) {
+          items.push(`Precio tx ${formatCurrency(Math.abs(diff))} más accesible (nosotros ${formatCurrency(basePrice)} vs ${formatCurrency(compPrice)}).`);
+        }
+      }
+      const compHp = num(comp?.caballos_fuerza);
+      if (baseHp != null && compHp != null) {
+        const diffHp = baseHp - compHp;
+        if (diffHp > 0) {
+          const formattedHp = Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 }).format(diffHp);
+          items.push(`Mayor potencia: +${formattedHp} HP frente a ${name}.`);
+        }
+      }
+      const compKey = keyForRow(comp) || `comp-${index}`;
+      const advantageSection = advantageUpsideSections.find(section => keyForRow(section.comp) === compKey);
+      if (advantageSection) {
+        advantageSection.rows.slice(0, 6).forEach(row => {
+          items.push(`${row.label}: nosotros ${row.ownValue} vs ${row.compValue}.`);
+        });
+      }
+      if (items.length) {
+        sections.push({
+          id: `cliente_${compKey}`,
+          title: `Ventajas frente a ${name}`,
+          items,
+        });
+      }
+    });
+    if (!sections.length) return null;
+    return { sections } as InsightStructLike;
+  }, [baseRow, comps, advantageUpsideSections]);
+
+  const renderClientSummary = React.useCallback(() => {
+    const struct = clientInsightsStruct ?? clientSummaryFallback;
+    if (struct) {
+      return renderStruct(struct as any, 'es' as any);
+    }
+    if (!baseRow) {
+      return <div style={{ color: '#475569', fontSize: 13 }}>Selecciona un vehículo propio y genera los insights para ver los beneficios comparativos.</div>;
+    }
+    if (!comps.length) {
+      return <div style={{ color: '#475569', fontSize: 13 }}>Agrega al menos un competidor para mostrar un resumen imprimible con nuestras ventajas.</div>;
+    }
+    return <div style={{ color: '#475569', fontSize: 13 }}>Pulsa “Generar speech comercial” para construir el resumen imprimible de beneficios.</div>;
+  }, [clientInsightsStruct, clientSummaryFallback, baseRow, comps]);
+
+  const renderSellerTips = React.useCallback(() => {
+    if (sellerInsightsStruct) {
+      return renderStruct(sellerInsightsStruct as any, 'es' as any);
+    }
+    if (insightsStruct && !clientInsightsStruct) {
+      return renderStruct(insightsStruct as any, 'es' as any);
+    }
+    return <div style={{ color: '#475569', fontSize: 13 }}>Genera el speech para recibir tips internos de venta en esta pestaña.</div>;
+  }, [sellerInsightsStruct, insightsStruct, clientInsightsStruct]);
 
   const salesChart = React.useMemo<
     | {
@@ -796,7 +1024,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
     }) as ChartRow[];
   }, [baseRow, comps]);
 
-  const formatCurrencyShort = (value: number) => {
+  const formatCurrencyShort = React.useCallback((value: number) => {
     if (!Number.isFinite(value)) return '$0';
     if (Math.abs(value) >= 1_000_000) {
       return `$${(value / 1_000_000).toFixed(1)} M`;
@@ -805,82 +1033,203 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
       return `$${(value / 1_000).toFixed(0)} K`;
     }
     return Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(value);
-  };
+  }, []);
 
   const hpPriceOption = React.useMemo(() => {
-    const data = chartsRows.filter(d => d.price !== null && d.hp !== null);
-    if (!data.length) return {} as any;
-    const seriesData = data.map(d => ({
-      name: d.name,
-      value: [d.price as number, d.hp as number],
-      itemStyle: { color: d.isBase ? '#0fa968' : '#0c5840' },
-      symbolSize: d.isBase ? 18 : 14,
-    }));
+    const base = chartsRows.find(d => d.isBase);
+    const basePrice = num(base?.price);
+    const baseHp = num(base?.hp);
+    if (!base || basePrice == null || baseHp == null) return {} as any;
+
+    const competitors = chartsRows.filter(d => !d.isBase && d.price !== null && d.hp !== null);
+    if (!competitors.length) return {} as any;
+
+    const items = competitors.map(d => {
+      const compPrice = Number(d.price);
+      const compHp = Number(d.hp);
+      const priceAdvantage = compPrice - basePrice; // positivo cuando el competidor es mas caro
+      const hpAdvantage = baseHp - compHp; // positivo cuando tenemos mas HP
+      return {
+        name: d.name,
+        compPrice,
+        compHp,
+        priceAdvantage,
+        hpAdvantage,
+      };
+    });
+
+    const maxPriceAbs = Math.max(0, ...items.map(item => Math.abs(item.priceAdvantage)));
+    const maxHpAbs = Math.max(0, ...items.map(item => Math.abs(item.hpAdvantage)));
+    const pricePad = Math.max(10_000, Math.ceil((maxPriceAbs || 1) * 0.2 / 1000) * 1000);
+    const hpPad = Math.max(5, Math.ceil((maxHpAbs || 1) * 0.2));
+    const xLimit = Math.ceil((maxPriceAbs + pricePad) / 1000) * 1000;
+    const yLimit = Math.ceil(maxHpAbs + hpPad);
+
+    const baseLabel = base.name ? `${base.name} (Nosotros)` : 'Nosotros';
+    const seriesData = [
+      {
+        name: baseLabel,
+        value: [0, 0],
+        base: true,
+        ownPrice: basePrice,
+        ownHp: baseHp,
+        itemStyle: { color: '#0fa968' },
+      },
+      ...items.map(item => {
+        const inUpsideQuadrant = item.priceAdvantage >= 0 && item.hpAdvantage >= 0;
+        const partlyUpside = !inUpsideQuadrant && (item.priceAdvantage >= 0 || item.hpAdvantage >= 0);
+        const color = inUpsideQuadrant ? '#0fa968' : (partlyUpside ? '#2563eb' : '#dc2626');
+        return {
+          name: item.name,
+          value: [item.priceAdvantage, item.hpAdvantage],
+          base: false,
+          ownPrice: basePrice,
+          ownHp: baseHp,
+          compPrice: item.compPrice,
+          compHp: item.compHp,
+          itemStyle: { color },
+        };
+      }),
+    ];
+
+    const fmtCurrencyDelta = (value: number) => {
+      if (!Number.isFinite(value) || value === 0) return '$0';
+      const abs = formatCurrencyShort(Math.abs(value));
+      return `${value > 0 ? '+' : '-'}${abs}`;
+    };
+    const fmtHpDelta = (value: number) => {
+      if (!Number.isFinite(value) || value === 0) return '0 HP';
+      const abs = Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 }).format(Math.abs(value));
+      return `${value > 0 ? '+' : '-'}${abs} HP`;
+    };
+    const fmtNum = (value: number) => Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 }).format(value);
+
     return {
-      title: { text: 'HP vs Precio tx', left: 'center', top: 6 },
+      title: { text: 'Ventaja en precio tx vs HP', left: 'center', top: 6 },
       tooltip: {
         trigger: 'item',
         formatter: (params: any) => {
-          const [price, hp] = params.value || [];
-          const fmt = Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 });
-          const fmtNum = Intl.NumberFormat('es-MX');
-          return `<strong>${params.name}</strong><br/>Precio: ${fmt.format(price)}<br/>HP: ${fmtNum.format(hp)}`;
+          const data = params?.data || {};
+          const [priceAdv, hpAdv] = params?.value || [0, 0];
+          if (data.base) {
+            return `<strong>${params.name}</strong><br/>Referencia: este es nuestro vehículo base.`;
+          }
+          const ourPrice = data?.ownPrice ?? basePrice;
+          const ourHp = data?.ownHp ?? baseHp;
+          const compPrice = data?.compPrice;
+          const compHp = data?.compHp;
+          const ourLine = `<span style="color:#16a34a">Nosotros:</span> ${formatCurrency(ourPrice)} · ${fmtNum(ourHp)} HP`;
+          const compLine = `<span style="color:#dc2626">Competidor:</span> ${formatCurrency(compPrice)} · ${fmtNum(compHp)} HP`;
+          return `
+            <strong>${params.name}</strong><br/>
+            Ventaja en precio tx: ${fmtCurrencyDelta(priceAdv)}<br/>
+            Ventaja en HP: ${fmtHpDelta(hpAdv)}<br/>
+            ${ourLine}<br/>
+            ${compLine}
+          `;
         },
       },
-      grid: { left: 70, right: 30, top: 60, bottom: 60 },
+      grid: { left: 90, right: 40, top: 60, bottom: 60 },
       xAxis: {
-        name: 'Precio tx (MXN)',
+        name: 'Ventaja en precio tx (MXN)',
+        min: -xLimit,
+        max: xLimit,
         axisLabel: {
-          formatter: (val: number) => formatCurrencyShort(val),
+          formatter: (val: number) => {
+            if (val === 0) return '$0';
+            const abs = formatCurrencyShort(Math.abs(val));
+            return `${val > 0 ? '+' : '-'}${abs}`;
+          },
         },
-        axisPointer: { show: true, label: { formatter: ({ value }: any) => formatCurrencyShort(value) } },
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
       },
       yAxis: {
-        name: 'HP',
+        name: 'Ventaja en HP (positivo = más potencia)',
+        min: -yLimit,
+        max: yLimit,
         axisLabel: {
-          formatter: (val: number) => Intl.NumberFormat('es-MX').format(val),
+          formatter: (val: number) => {
+            if (val === 0) return '0';
+            const abs = Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 }).format(Math.abs(val));
+            return `${val > 0 ? '+' : '-'}${abs}`;
+          },
         },
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
       },
-      series: [{ type: 'scatter', data: seriesData }],
+      series: [{
+        type: 'scatter',
+        data: seriesData,
+        symbolSize: (_: any, params: any) => (params?.data?.base ? 18 : 14),
+        markLine: {
+          silent: true,
+          symbol: 'none',
+          lineStyle: { type: 'dashed', color: '#94a3b8' },
+          data: [{ xAxis: 0 }, { yAxis: 0 }],
+        },
+      }],
     } as any;
-  }, [chartsRows]);
+  }, [chartsRows, formatCurrencyShort]);
 
   const lengthOption = React.useMemo(() => {
     const baseLength = num(baseRow?.longitud_mm);
+    if (baseLength == null) return {} as any;
     const data = chartsRows.filter(d => d.length !== null);
-    if (!data.length || baseLength == null) return {} as any;
+    if (!data.length) return {} as any;
+
     const formatted = data.map(d => {
-      const delta = (d.length ?? 0) - baseLength;
+      const compLength = num(d.length);
+      const delta = compLength == null ? 0 : baseLength - compLength;
       return {
         name: d.isBase ? `${d.name} (Nosotros)` : d.name,
         value: Number(delta.toFixed(0)),
-        abs: d.length,
+        compLength,
         isBase: d.isBase,
       };
     });
-    const maxAbs = Math.max(...formatted.map(d => Math.abs(d.value))) || 1;
-    const pad = Math.max(100, Math.ceil(maxAbs * 0.1));
-    const xMax = maxAbs + pad;
+
+    const maxAbs = Math.max(...formatted.map(d => Math.abs(d.value)), 0);
+    const pad = Math.max(100, Math.ceil((maxAbs || 1) * 0.1));
+    const xMax = Math.ceil(maxAbs + pad);
+    const mmFmt = (n: number | null | undefined) => {
+      if (n == null) return 'N/D';
+      return `${Intl.NumberFormat('es-MX').format(n)} mm`;
+    };
+
     return {
-      title: { text: 'Δ Longitud vs base (mm)', left: 'center', top: 6 },
+      title: { text: 'Ventaja en longitud (mm)', left: 'center', top: 6 },
       tooltip: {
         trigger: 'item',
         formatter: (params: any) => {
-          const mmFmt = (n: number) => `${Intl.NumberFormat('es-MX').format(n)} mm`;
-          const delta = Number(params.value);
-          const original = formatted[params.dataIndex]?.abs ?? baseLength;
-          const label = formatted[params.dataIndex]?.isBase ? 'Nosotros' : params.name;
-          const sign = delta > 0 ? '+' : '';
-          return `<strong>${label}</strong><br/>Longitud: ${mmFmt(Number(original))}<br/>Δ vs base: ${sign}${mmFmt(delta)}`;
+          const dataPoint = formatted[params.dataIndex];
+          if (!dataPoint) return params.name || '';
+          if (dataPoint.isBase) {
+            return `<strong>${params.name}</strong><br/>Nuestra longitud de referencia: ${mmFmt(baseLength)}`;
+          }
+          const delta = Number(params.value) || 0;
+          const sign = delta > 0 ? '+' : delta < 0 ? '-' : '';
+          const advantage = `${sign}${mmFmt(Math.abs(delta))}`;
+          return [
+            `<strong>${params.name}</strong>`,
+            `Nuestra longitud: ${mmFmt(baseLength)}`,
+            `Longitud competidor: ${mmFmt(dataPoint.compLength)}`,
+            `Ventaja (nosotros - competidor): ${advantage}`,
+          ].join('<br/>');
         },
       },
-      grid: { left: 120, right: 40, top: 60, bottom: 40 },
+      grid: { left: 140, right: 48, top: 60, bottom: 40 },
       xAxis: {
         type: 'value',
         min: -xMax,
         max: xMax,
         splitNumber: 6,
-        axisLabel: { formatter: (val: number) => `${Intl.NumberFormat('es-MX').format(val)} mm` },
+        axisLabel: {
+          formatter: (val: number) => {
+            if (val === 0) return '0 mm';
+            const abs = Intl.NumberFormat('es-MX').format(Math.abs(val));
+            return `${val > 0 ? '+' : '-'}${abs} mm`;
+          },
+        },
+        splitLine: { lineStyle: { color: '#e2e8f0' } },
       },
       yAxis: {
         type: 'category',
@@ -890,11 +1239,16 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
         type: 'bar',
         data: formatted.map(d => ({
           value: d.value,
-          itemStyle: { color: d.isBase ? '#0fa968' : (d.value >= 0 ? '#0c4a30' : '#dc2626') },
+          itemStyle: { color: d.isBase ? '#0fa968' : (d.value >= 0 ? '#0fa968' : '#dc2626') },
           label: {
             show: true,
             position: d.value >= 0 ? 'right' : 'left',
-            formatter: ({ value }: any) => `${value >= 0 ? '+' : ''}${Intl.NumberFormat('es-MX').format(value)} mm`,
+            formatter: ({ value }: any) => {
+              const v = Number(value) || 0;
+              if (v === 0) return '0 mm';
+              const abs = Intl.NumberFormat('es-MX').format(Math.abs(v));
+              return `${v > 0 ? '+' : '-'}${abs} mm`;
+            },
             color: '#0f172a',
           },
         })),
@@ -937,7 +1291,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
         </div>
       ) : (
         <>
-          <div className="no-print" style={{ display:'grid', gap:12, gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))' }}>
+          <div className="no-print" style={{ display:'grid', gap:12, gridTemplateColumns:'repeat(auto-fit, minmax(340px, 1fr))' }}>
             <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#f8fafc' }}>
               <div style={{ fontSize:12, color:'#64748b', marginBottom:4 }}>Vehículo propio</div>
               {baseRow ? (
@@ -989,15 +1343,62 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
               {manualNotice ? (
                 <div style={{ marginTop:6, fontSize:11, color:'#b91c1c' }}>{manualNotice}</div>
               ) : null}
-            </div>
-            <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#ffffff' }}>
-              <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>Plantillas de comparativos</div>
-              {!canUseTemplates ? (
-                <div style={{ fontSize:12, color:'#475569', lineHeight:1.4 }}>
-                  Captura el UUID del superusuario del dealer para habilitar el guardado automático de plantillas.
+              {paywall ? (
+                <div style={{ marginTop:12, padding:12, borderRadius:10, border:'1px solid #cbd5f5', background:'#eef2ff', display:'grid', gap:8 }}>
+                  <strong style={{ fontSize:13, color:'#1e293b' }}>Activa tu membresía</strong>
+                  <span style={{ fontSize:12, color:'#334155' }}>{paywall.message}</span>
+                  {typeof paywall.limit === 'number' ? (
+                    <span style={{ fontSize:11, color:'#475569' }}>
+                      {typeof paywall.used === 'number'
+                        ? `Usaste ${paywall.used} de ${paywall.limit} comparativos gratuitos.`
+                        : `Límite gratuito: ${paywall.limit} comparativos.`}
+                    </span>
+                  ) : null}
+                  {checkoutError ? (
+                    <span style={{ fontSize:11, color:'#b91c1c' }}>{checkoutError}</span>
+                  ) : null}
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                    {paywall.checkoutAvailable !== false ? (
+                      <button
+                        type="button"
+                        onClick={startCheckout}
+                        disabled={checkoutLoading}
+                        style={{
+                          padding:'6px 12px',
+                          borderRadius:8,
+                          border:'none',
+                          background: checkoutLoading ? '#818cf8' : '#4f46e5',
+                          color:'#fff',
+                          fontSize:12,
+                          cursor: checkoutLoading ? 'wait' : 'pointer',
+                        }}
+                      >
+                        {checkoutLoading ? 'Abriendo Stripe…' : 'Pagar con Stripe'}
+                      </button>
+                    ) : (
+                      <span style={{ fontSize:11, color:'#64748b' }}>Stripe no está configurado. Contacta a soporte.</span>
+                    )}
+                    <Link
+                      href="/membership"
+                      style={{
+                        padding:'6px 12px',
+                        borderRadius:8,
+                        border:'1px solid #94a3b8',
+                        color:'#1e293b',
+                        fontSize:12,
+                        background:'#fff',
+                        textDecoration:'none',
+                      }}
+                    >
+                      Ver opciones de membresía
+                    </Link>
+                  </div>
                 </div>
-              ) : (
-                <>
+              ) : null}
+            </div>
+            {canUseTemplates ? (
+              <div style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#ffffff' }}>
+                <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>Plantillas de comparativos</div>
                   {templateError ? (
                     <div style={{ marginBottom:8, fontSize:12, color:'#b91c1c', background:'#fee2e2', padding:'6px 8px', borderRadius:8 }}>
                       {templateError}
@@ -1089,9 +1490,8 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
                   ) : (
                     <div style={{ fontSize:12, color:'#64748b' }}>Todavía no guardas plantillas.</div>
                   )}
-                </>
-              )}
-            </div>
+              </div>
+            ) : null}
           </div>
 
       {/* Tabla de deltas */}
@@ -1100,10 +1500,11 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
           <table className="avoid-break" style={{ width:'100%', minWidth: 1100, borderCollapse:'collapse' }}>
             <thead>
               <tr style={{ background:'#f8fafc' }}>
-                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}></th>
+                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb', width: 40 }}></th>
                 <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Vehículo</th>
-                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>MSRP</th>
-                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Precio tx</th>
+                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Precio de lista</th>
+                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Precio de transacción</th>
+                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Bono</th>
                 <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Comb/Energ 60k</th>
                 <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Servicio 60k</th>
                 <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>TCO 60k</th>
@@ -1112,19 +1513,23 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
             </thead>
             <tbody>
               <tr>
-                <td></td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 260, maxWidth: 360, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'anywhere' }}>
-                  <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(160px, 1fr)`, gap:8, alignItems:'flex-start' }}>
-                    <div><VehicleThumb row={baseRow} width={THUMB_WIDTH} height={THUMB_HEIGHT} /></div>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', width: 40 }}></td>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 360, maxWidth: 520, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere' }}>
+                  <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(200px, 1fr)`, gap:12, alignItems:'flex-start' }}>
                     <div>
-                      <div style={{ fontWeight:700 }}>{brandLabel(baseRow)} {String(baseRow.model||'')}</div>
-                      <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || ''}</div>
-                      <div style={{ fontWeight:500 }}>{String(baseRow.version||'')}</div>
+                      <VehicleThumb row={baseRow} width={THUMB_WIDTH} height={THUMB_HEIGHT} />
+                    </div>
+                    <div style={{ display:'grid', gap:6, lineHeight:1.3 }}>
+                      <div style={{ fontWeight:700, fontSize:16 }}>{String(baseRow.make || brandLabel(baseRow) || '')}</div>
+                      <div style={{ fontWeight:600, fontSize:15 }}>{String(baseRow.model||'')}</div>
+                      <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || baseRow.year || ''}</div>
+                      <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(baseRow.version||''))}</div>
                     </div>
                   </div>
                 </td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.msrp)}</td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.precio_transaccion)}</td>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.bono ?? baseRow.bono_mxn)}</td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                   {fmtMoney(baseRow.fuel_cost_60k_mxn)}
                   {(() => {
@@ -1145,26 +1550,37 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
               {comps.map((r:any, i:number)=>{
                 const d = r.__deltas || {};
                 const inv = (dd:any)=> (dd && typeof dd.delta==='number') ? -dd.delta : null;
-                const d_m = inv(d.msrp), d_tx=inv(d.precio_transaccion), d_f=inv(d.fuel_cost_60k_mxn), d_s=inv(d.service_cost_60k_mxn), d_t=inv(d.tco_60k_mxn);
+                const d_m = inv(d.msrp), d_tx=inv(d.precio_transaccion), d_b=inv(d.bono ?? d.bono_mxn), d_f=inv(d.fuel_cost_60k_mxn), d_s=inv(d.service_cost_60k_mxn), d_t=inv(d.tco_60k_mxn);
                 const d_h = (d.caballos_fuerza && typeof d.caballos_fuerza.delta==='number') ? d.caballos_fuerza.delta : null;
                 const rowBg = i%2===0? '#ffffff':'#fafafa';
                 return (
                   <tr key={i} style={{ background: rowBg }}>
-                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-                      <button className="no-print" onClick={()=>removeComp(i)} title="Quitar" style={{ border:'1px solid #e5e7eb', background:'#fff', borderRadius:6, padding:'2px 6px' }}>×</button>
+                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', width: 40 }}>
+                      <button
+                        className="no-print"
+                        onClick={()=>removeComp(i)}
+                        title="Quitar"
+                        style={{ border:'1px solid #e5e7eb', background:'#fff', borderRadius:6, padding:'2px 6px', lineHeight:1 }}
+                      >
+                        ×
+                      </button>
                     </td>
-                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 260, maxWidth: 360, whiteSpace:'normal', wordBreak:'normal', overflowWrap:'anywhere' }}>
-                      <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(160px, 1fr)`, gap:8, alignItems:'flex-start' }}>
-                        <div><VehicleThumb row={r} width={THUMB_WIDTH} height={THUMB_HEIGHT} /></div>
+                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 360, maxWidth: 520, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere' }}>
+                      <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(200px, 1fr)`, gap:12, alignItems:'flex-start' }}>
                         <div>
-                          <div style={{ fontWeight:600 }}>{brandLabel(r)} {String(r.model||'')}</div>
-                          <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano||''}</div>
-                          <div style={{ fontWeight:500 }}>{String(r.version||'')}</div>
+                          <VehicleThumb row={r} width={THUMB_WIDTH} height={THUMB_HEIGHT} />
+                        </div>
+                        <div style={{ display:'grid', gap:6, lineHeight:1.3 }}>
+                          <div style={{ fontWeight:700, fontSize:16 }}>{String(r.make || brandLabel(r) || '')}</div>
+                          <div style={{ fontWeight:600, fontSize:15 }}>{String(r.model||'')}</div>
+                          <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano || r.year || ''}</div>
+                          <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(r.version||''))}</div>
                         </div>
                       </div>
                     </td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.msrp)}<div style={{ fontSize:12, opacity:0.9, color: d_m!=null ? (d_m<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_m==null?'-':`${tri(d_m)} ${fmtMoney(Math.abs(d_m))}`}</div></td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.precio_transaccion)}<div style={{ fontSize:12, opacity:0.9, color: d_tx!=null ? (d_tx<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_tx==null?'-':`${tri(d_tx)} ${fmtMoney(Math.abs(d_tx))}`}</div></td>
+                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.bono ?? r.bono_mxn)}<div style={{ fontSize:12, opacity:0.9, color: d_b!=null ? (d_b<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_b==null?'-':`${tri(d_b)} ${fmtMoney(Math.abs(d_b))}`}</div></td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
                       {fmtMoney(r.fuel_cost_60k_mxn)}
                       {(() => {
@@ -1187,134 +1603,6 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
               })}
             </tbody>
           </table>
-        </div>
-      ) : null}
-
-      {/* Tabla de equipamiento (pilares) */}
-      {baseRow ? (() => {
-        const rows = [{ row: baseRow, isBase: true }, ...comps.map(r => ({ row: r, isBase: false }))];
-        const pillars = ['seguridad','confort','audio_y_entretenimiento','transmision','energia'];
-        return (
-          <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
-            <div style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', fontWeight:600 }}>Cobertura de equipamiento (0-100)</div>
-            <div style={{ overflowX:'auto' }}>
-              <table style={{ width:'100%', minWidth: 800, borderCollapse:'collapse' }}>
-                <thead>
-                  <tr style={{ background:'#f8fafc' }}>
-                    <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Vehículo</th>
-                    {pillars.map(p => (
-                      <th key={p} style={{ textAlign:'center', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>{PILLAR_LABELS[p]}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(({ row, isBase }, idx) => (
-                    <tr key={idx} style={{ background: isBase ? '#f0fdf4' : 'transparent' }}>
-                      <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', fontWeight:isBase?600:500 }}>
-                        {brandLabel(row)} {String(row.model||'')} {row.version ? `– ${row.version}` : ''}
-                      </td>
-                      {pillars.map(p => {
-                        const val = getPillarValue(row, p);
-                        return (
-                          <td key={p} style={{ textAlign:'center', padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>
-                            {val != null ? `${Number(val).toFixed(1)} pts` : 'N/D'}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-      })() : null}
-
-      {/* Radar de pilares */}
-      {baseRow ? (
-        <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
-          <div style={{ paddingBottom:8, borderBottom:'1px solid #e5e7eb', marginBottom:12, background:'#fafafa', fontWeight:600 }}>Radar de pilares — propio vs segmento</div>
-          {EChart && radarSummary?.option ? (
-            <EChart echarts={echarts} option={radarSummary.option} opts={{ renderer: 'svg' }} style={{ height: 320 }} />
-          ) : (
-            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin datos suficientes de pilares para graficar.</div>
-          )}
-          {radarSummary?.highlights?.length ? (
-            <div style={{ marginTop:12, display:'grid', gap:6, fontSize:12, color:'#475569' }}>
-              <div style={{ fontWeight:600 }}>{radarSummary.bestLabel} por pilar:</div>
-              <ul style={{ margin:0, paddingLeft:18, display:'grid', gap:4 }}>
-                {radarSummary.highlights.map((text, idx) => (
-                  <li key={idx}>{text}</li>
-                ))}
-              </ul>
-              <div style={{ color:'#64748b' }}>
-                {radarBenchmarkLabel} calculado con {radarSummary.sampleSize} vehículo{radarSummary.sampleSize === 1 ? '' : 's'} ({radarSegmentLabel}).
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {baseRow ? (
-        <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12 }}>
-          <div style={{ paddingBottom:8, borderBottom:'1px solid #e5e7eb', marginBottom:12, background:'#fafafa', fontWeight:600 }}>Ventajas vs brechas (equipamiento & prestaciones)</div>
-          <div className="no-print" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }}>
-            <button
-              type="button"
-              onClick={() => setAdvantageMode('upsides')}
-              style={{
-                padding:'6px 12px',
-                borderRadius:8,
-                border: advantageMode === 'upsides' ? '1px solid #16a34a' : '1px solid #cbd5e1',
-                background: advantageMode === 'upsides' ? '#dcfce7' : '#ffffff',
-                color: advantageMode === 'upsides' ? '#166534' : '#0f172a',
-                cursor:'pointer',
-                fontSize:12,
-                fontWeight:600,
-              }}
-            >
-              Nuestras ventajas
-            </button>
-            <button
-              type="button"
-              onClick={() => setAdvantageMode('gaps')}
-              style={{
-                padding:'6px 12px',
-                borderRadius:8,
-                border: advantageMode === 'gaps' ? '1px solid #dc2626' : '1px solid #cbd5e1',
-                background: advantageMode === 'gaps' ? '#fee2e2' : '#ffffff',
-                color: advantageMode === 'gaps' ? '#991b1b' : '#0f172a',
-                cursor:'pointer',
-                fontSize:12,
-                fontWeight:600,
-              }}
-            >
-              Brechas vs rivales
-            </button>
-          </div>
-          {advantageSections.length ? (
-            <div style={{ display:'grid', gap:12 }}>
-              {advantageSections.map((section, idx) => {
-                const name = vehicleDisplayName(section.comp) || brandLabel(section.comp) || `Competidor ${idx + 1}`;
-                const key = String((section.comp as any)?.vehicle_id || `${name}-${idx}`);
-                return (
-                  <div key={key} style={{ border:'1px solid #f1f5f9', borderRadius:10, padding:12, background:'#fff' }}>
-                    <div style={{ fontWeight:600, marginBottom:8 }}>{name}</div>
-                    {EChart ? (
-                      <EChart
-                        echarts={echarts}
-                        option={buildAdvantageOption(section.rows, advantageMode)}
-                        opts={{ renderer: 'svg' }}
-                        style={{ height: Math.max(section.rows.length * 36, 180) }}
-                      />
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div style={{ color:'#64748b', fontSize:12, padding:12 }}>Sin diferencias claras para mostrar en esta selección.</div>
-          )}
         </div>
       ) : null}
 
@@ -1349,15 +1637,58 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
 
       {/* Insights (Dealer) */}
       <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>
-        <div className="no-print" style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div style={{ fontWeight:700 }}>Guion de ventas</div>
-          <button onClick={genDealer} disabled={!baseRow || loading} style={{ padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor: (!baseRow || loading) ? 'not-allowed' : 'pointer', opacity: (!baseRow || loading) ? 0.6 : 1 }}>
-            {loading ? 'Generando…' : 'Generar speech comercial'}
-          </button>
+        <div className="no-print" style={{ padding:'8px 10px', borderBottom:'1px solid #e5e7eb', background:'#fafafa', display:'flex', flexWrap:'wrap', gap:12, justifyContent:'space-between', alignItems:'center' }}>
+          <div style={{ fontWeight:700 }}>Insights comerciales</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:10, alignItems:'center' }}>
+            <div style={{ display:'inline-flex', border:'1px solid #cbd5f5', borderRadius:999, overflow:'hidden' }}>
+              <button
+                type="button"
+                onClick={() => setInsightsTab('cliente')}
+                style={{
+                  padding:'6px 12px',
+                  border:'none',
+                  background: insightsTab === 'cliente' ? '#111827' : 'transparent',
+                  color: insightsTab === 'cliente' ? '#fff' : '#1f2937',
+                  fontSize:12,
+                  fontWeight:600,
+                  cursor: insightsTab === 'cliente' ? 'default' : 'pointer',
+                  transition:'background 0.2s ease, color 0.2s ease',
+                }}
+              >
+                Resumen cliente
+              </button>
+              <button
+                type="button"
+                onClick={() => setInsightsTab('vendedor')}
+                style={{
+                  padding:'6px 12px',
+                  border:'none',
+                  background: insightsTab === 'vendedor' ? '#111827' : 'transparent',
+                  color: insightsTab === 'vendedor' ? '#fff' : '#1f2937',
+                  fontSize:12,
+                  fontWeight:600,
+                  cursor: insightsTab === 'vendedor' ? 'default' : 'pointer',
+                  transition:'background 0.2s ease, color 0.2s ease',
+                }}
+              >
+                Tips vendedor
+              </button>
+            </div>
+            <button onClick={genDealer} disabled={!baseRow || loading} style={{ padding:'6px 10px', background:'#111827', color:'#fff', border:'none', borderRadius:8, cursor: (!baseRow || loading) ? 'not-allowed' : 'pointer', opacity: (!baseRow || loading) ? 0.6 : 1 }}>
+              {loading ? 'Generando…' : 'Generar speech comercial'}
+            </button>
+          </div>
         </div>
-        <div style={{ padding:10, display:'grid', gap:10 }}>
-          {insightsStruct ? renderStruct(insightsStruct, 'es' as any) : null}
-          <div style={{ color:'#64748b', fontSize:13 }}>{insightsNotice}</div>
+        <div style={{ padding:10, display:'grid', gap:12 }}>
+          <div style={{ display: insightsTab === 'cliente' ? 'grid' : 'none', gap:12 }}>
+            <div style={{ fontWeight:700, fontSize:16 }}>Beneficios para el cliente</div>
+            {renderClientSummary()}
+          </div>
+          <div className="no-print" style={{ display: insightsTab === 'vendedor' ? 'grid' : 'none', gap:12 }}>
+            <div style={{ fontWeight:700, fontSize:16 }}>Tips de venta (interno)</div>
+            {renderSellerTips()}
+          </div>
+          <div className="no-print" style={{ color:'#64748b', fontSize:13 }}>{insightsNotice}</div>
         </div>
       </div>
         </>

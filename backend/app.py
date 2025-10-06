@@ -4292,6 +4292,68 @@ def membership_checkout_confirm(payload: MembershipCheckoutConfirm) -> Dict[str,
     return {"ok": True, "paid": True, "usage": usage}
 
 
+@app.get("/membership/session")
+def membership_session_info(request: Request, session: Optional[str] = None) -> Dict[str, Any]:
+    """Return sanitized membership session info so the frontend can rehidratar datos tras Stripe u otras acciones.
+
+    Se permite recibir el token vía query (?session=) o encabezado x-membership-session.
+    """
+
+    token = (session or "").strip()
+    if not token:
+        token = _extract_membership_session(request)
+    if not token:
+        raise HTTPException(status_code=400, detail="membership_session requerido")
+
+    try:
+        session_data = _require_membership_session(token)
+    except HTTPException:
+        logger.warning("[membership] session info denied: invalid or expired token")
+        raise
+
+    free_limit = int(session_data.get("free_limit", _MEMBERSHIP_FREE_LIMIT) or 0)
+    search_count = int(session_data.get("search_count", 0) or 0)
+    paid = bool(session_data.get("paid"))
+    status = str(session_data.get("status") or ("active" if paid else "trial")).lower()
+    remaining = None if paid else max(0, free_limit - search_count)
+
+    dealer_state = _build_dealer_state(session_data)
+    profile = {
+        "display_name": session_data.get("display_name"),
+        "brand_label": session_data.get("brand_label"),
+        "brand_slug": session_data.get("brand_slug"),
+        "footer_note": session_data.get("footer_note"),
+    }
+
+    result = {
+        "session": token,
+        "paid": paid,
+        "status": status,
+        "search_count": search_count,
+        "free_limit": free_limit,
+        "remaining_free": remaining,
+        "checkout_available": _stripe_is_configured(),
+        "checkout_session_id": session_data.get("checkout_session_id"),
+        "dealer_state": dealer_state,
+        "profile": profile,
+        "membership_id": session_data.get("membership_id"),
+        "phone": session_data.get("phone"),
+    }
+
+    logger.info(
+        "[membership] session info accessed",
+        extra={
+            "membership_id": session_data.get("membership_id"),
+            "paid": paid,
+            "status": status,
+            "search_count": search_count,
+            "free_limit": free_limit,
+        },
+    )
+
+    return result
+
+
 def _fetch_admin_self_membership(
     conn: psycopg.Connection, membership_id: str
 ) -> Optional[Dict[str, Any]]:
@@ -10557,15 +10619,33 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
             "3) Propón tácticas de demostración (test drive, activaciones, accesorios, bundles F&I) y cómo neutralizan objeciones típicas de precio, entrega o equipamiento. "
             "4) Cierra con un llamado a la acción inmediato (agenda prueba, firma, apartado) y un plan de seguimiento multicanal. "
             "Usa siempre voz de 'nosotros', evita describir gráficas o la fuente de datos y entrega recomendaciones concretas. "
+            "Convenciones de cálculo y narrativa: los deltas de entrada están definidos como 'competidor − nuestro' (competitor_minus_base). "
+            "• Si el delta es negativo, nosotros estamos por debajo/mejor; si es positivo, el rival está por encima/peor. "
+            "• Al redactar porcentajes, expresa la variación respecto al rival cuando hables de 'nosotros': por ejemplo, 'nuestro precio es +19.5% vs rival' se calcula como (nuestro − rival)/rival. "
+            "• Para KPIs en puntos (ADAS, seguridad, etc.), si nuestro valor es mayor que el del rival, escribe 'tenemos +X pp' (no uses signo negativo). "
+            "• Para potencia, usa forma 'tenemos +134 hp (+50% vs rival)'. "
+            "• Para TCO usa primero 'tco_total_60k_mxn' si está disponible; expresa el gap también respecto al rival. "
+            "• Evita afirmar superioridad de garantía si los meses/km del rival no están explícitos. "
+            "Sobre recomendaciones de precio: si el gap de TCO supera 10% o $50,000 MXN, evita proponer micro‑ajustes (<3%); prioriza 'mantener TX + Value‑Pack' o tácticas F&I (buy‑down de tasa, seguro/servicio). "
             "Devuelve JSON UTF-8 con dos claves: 'insights' (mensaje ejecutivo) y 'struct' (secciones con items) para renderizar en la interfaz."
         )
         oem_system = (
-            "Actúa como estratega comercial senior de una OEM. Tu objetivo es entregar un diagnóstico de precio y un plan accionable que pueda ejecutar Marketing, F&I y la red sin cambios de producto ni de planta. "
-            "1) Emite un juicio claro sobre si el MSRP/TX actual se sostiene frente a los rivales, usando relaciones como costo/HP, gap de TCO y brecha de equipamiento/ADAS. "
-            "2) Recomienda un TX objetivo en dos variantes: (A) ajuste táctico en un rango estrecho o (B) mantener precio con un Value‑Pack (servicio 60k, seguro 1er año y, si aplica, tasa preferente). No propongas descuentos triviales. "
-            "3) Propón palancas inmediatas para Marketing y piso de ventas (guion, demos de 4WD/360°, accesorios y ofertas F&I) y define por qué cierran objeciones del cliente. "
-            "4) Trabaja siempre desde la voz de 'nosotros'; no describas gráficas ni el origen de datos; convierte cifras en implicaciones. "
-            "Devuelve JSON UTF‑8 con dos claves: 'insights' (texto ejecutivo) y 'struct' (secciones con items) para render en front."
+            """Actúa como estratega comercial senior de una OEM automotriz. Tu objetivo es entregar un diagnóstico de precio y plan accionable basado en el JSON proporcionado, sin cambios de producto ni planta.\n\n"
+            "Emite juicio sobre si el MSRP/TX se sostiene vs rivales, usando costo/HP, gap de TCO y brecha de equipamiento/ADAS.\n"
+            "Recomienda TX objetivo en: (A) ajuste táctico (rango estrecho con cálculo: nuevo_TX = TX_actual + delta; nuevo_TCO = nuevo_TX + fuel_cost) o (B) mantener con Value-Pack (servicios 60k, seguro 1er año, tasa preferente 200 bps; estima impacto: reducción TCO ~$50,000 o 5%).\n"
+            "Propón palancas para Marketing (claims, canales, metas CTR/leads), Piso de ventas (demos 4WD/360°, objetivos conversión) y F&I (buy-down tasa, impacto mensualidad ~$1,500).\n"
+            "Usa voz de 'nosotros'; convierte cifras en implicaciones; deltas como (competidor - nuestro), pero comunica % como ((nuestro - rival)/rival)*100.\n\n"
+            "Convenciones: Para TCO usa 'tco_total_60k_mxn' (fallback 'tco_60k_mxn'); reporta monto y %; evita especulaciones si datos faltan.\n"
+            "Formato: Encabeza con 'Evaluación del Insight'. Secciones:\n\n"
+            "Diagnóstico Ejecutivo: Bullets con monto/% (ej. 'Nuestro TCO es $170,000 (15.9%) más alto').\n"
+            "Recomendación de TX: Opciones A/B con fórmulas.\n"
+            "Plan Comercial Inmediato: Subsecciones con metas.\n"
+            "Rival por rival: Ventajas (ej. '+134 HP (+33%)') y neutralización.\n"
+            "Decisiones a aprobar: Priorizadas (P1-P3) con responsable/plazo.\n"
+            "Riesgos y mitigación: 3-4 específicos.\n"
+            "Recomendaciones para mejorar: Correcciones y notas.\n\n"
+            "Devuelve JSON: {'insights': texto narrativo, 'struct': {sección: [items]}}.\n"
+            "[Inserta JSON aquí]"""
         )
         if (prompt_profile_slug == "dealer_vendor") or (scope_req == "dealer_script") or (org_type == "grupo") or membership_token:
             system = vendor_system
