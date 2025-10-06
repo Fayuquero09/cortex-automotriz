@@ -1,6 +1,22 @@
 const USE_SSCMEX_PROXY = process.env.NEXT_PUBLIC_USE_SSCMEX_PROXY === '1';
 const SSCMEX_REMOTE_BASE = (process.env.NEXT_PUBLIC_SSCMEX_REMOTE_BASE || 'https://sslphotos.jato.com/PHOTO400').replace(/\/$/, '');
 
+const SSCMEX_FALLBACKS: Array<{ missing: string; fallback: string }> = [
+  {
+    missing: 'SSCMEX/FORD/TERRITORY/2026/5OD.JPG',
+    fallback: 'SSCMEX/FORD/TERRITORY/2025/5OD.JPG',
+  },
+];
+
+function applyFallback(value: string): string {
+  for (const entry of SSCMEX_FALLBACKS) {
+    if (value.toUpperCase().includes(entry.missing.toUpperCase())) {
+      return value.replace(entry.missing, entry.fallback);
+    }
+  }
+  return value;
+}
+
 export function vehicleImageSrc(row: Record<string, any> | null | undefined): string | null {
   if (!row || typeof row !== 'object') return null;
   const candidates: Array<unknown> = [
@@ -13,7 +29,7 @@ export function vehicleImageSrc(row: Record<string, any> | null | undefined): st
   for (const candidate of candidates) {
     const normalized = normalizeCandidate(candidate);
     if (normalized) {
-      return normalized;
+      return applyFallback(normalized);
     }
   }
 
@@ -35,9 +51,9 @@ function normalizeCandidate(raw: unknown): string | null {
         if (idx >= 0) {
           const suffix = url.pathname.slice(idx).replace(/^\/+/, '');
           if (USE_SSCMEX_PROXY) {
-            return `/${suffix}`;
+            return applyFallback(`/${suffix}`);
           }
-          return `${SSCMEX_REMOTE_BASE}/${suffix}`;
+          return applyFallback(`${SSCMEX_REMOTE_BASE}/${suffix}`);
         }
       }
     } catch {}
@@ -45,38 +61,38 @@ function normalizeCandidate(raw: unknown): string | null {
       const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
       if (idx >= 0) {
         const suffix = withForwardSlashes.slice(idx);
-        return `/${suffix.replace(/^\/+/, '')}`;
+        return applyFallback(`/${suffix.replace(/^\/+/, '')}`);
       }
     }
-    return withForwardSlashes;
+    return applyFallback(withForwardSlashes);
   }
   if (value.startsWith('//')) {
     if (USE_SSCMEX_PROXY) {
       const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
       if (idx >= 0) {
         const suffix = withForwardSlashes.slice(idx);
-        return `/${suffix.replace(/^\/+/, '')}`;
+        return applyFallback(`/${suffix.replace(/^\/+/, '')}`);
       }
     }
     const normalized = withForwardSlashes.startsWith('//')
       ? withForwardSlashes
       : `//${withForwardSlashes.replace(/^\/+/, '')}`;
-    return `https:${normalized}`;
+    return applyFallback(`https:${normalized}`);
   }
 
   const idx = withForwardSlashes.toUpperCase().indexOf('SSCMEX/');
   if (idx >= 0) {
     const suffix = withForwardSlashes.slice(idx).replace(/^\/+/, '');
     if (USE_SSCMEX_PROXY) {
-      return `/${suffix}`;
+      return applyFallback(`/${suffix}`);
     }
-    return `${SSCMEX_REMOTE_BASE}/${suffix}`;
+    return applyFallback(`${SSCMEX_REMOTE_BASE}/${suffix}`);
   }
   if (withForwardSlashes.startsWith('/')) {
-    return withForwardSlashes;
+    return applyFallback(withForwardSlashes);
   }
   if (/\.[a-z0-9]{3,4}$/i.test(withForwardSlashes)) {
-    return `/${withForwardSlashes}`;
+    return applyFallback(`/${withForwardSlashes}`);
   }
   return null;
 }

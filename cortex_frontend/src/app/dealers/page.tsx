@@ -84,6 +84,7 @@ export default function DealersPage() {
   const [statusLoading, setStatusLoading] = React.useState(false);
   const [previewMode, setPreviewMode] = React.useState(false);
   const [dealerUsers, setDealerUsers] = React.useState<DealerUserSummary[]>([]);
+  const [hideIdentitySection, setHideIdentitySection] = React.useState(false);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -136,6 +137,104 @@ export default function DealersPage() {
     } catch {}
     setContextLoaded(true);
   }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const detectMembershipMode = () => {
+      try {
+        const session = window.localStorage.getItem('CORTEX_MEMBERSHIP_SESSION');
+        const status = window.localStorage.getItem('CORTEX_MEMBERSHIP_STATUS');
+        const shouldHide = Boolean((session && session.trim()) || (status && status.trim()));
+        setHideIdentitySection(shouldHide);
+      } catch {
+        setHideIdentitySection(false);
+      }
+    };
+    detectMembershipMode();
+    const handleMembershipStorage = (event: StorageEvent) => {
+      if (!event.key) return;
+      if (event.key.startsWith('CORTEX_MEMBERSHIP')) detectMembershipMode();
+    };
+    window.addEventListener('storage', handleMembershipStorage);
+    return () => {
+      window.removeEventListener('storage', handleMembershipStorage);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!contextLoaded) return;
+    if (typeof window === 'undefined') return;
+    const session = window.localStorage.getItem('CORTEX_MEMBERSHIP_SESSION');
+    if (!session) return;
+    let cancelled = false;
+
+    const syncMembershipState = async () => {
+      try {
+        const info = await endpoints.membershipSession(session);
+        if (cancelled || !info) return;
+
+        const status = String(info.status || (info.paid ? 'active' : 'trial'));
+        try {
+          window.localStorage.setItem('CORTEX_MEMBERSHIP_STATUS', status);
+        } catch {}
+
+        const dealerState = (info as any)?.dealer_state || {};
+        const contextData = dealerState?.context;
+        if (contextData && typeof contextData === 'object') {
+          const nextCtx: DealerContext = {
+            ...emptyContext,
+            ...(contextData as Record<string, any>),
+            locked: true,
+          };
+          setContext((prev) => {
+            const sameId = prev.id === nextCtx.id;
+            const sameName = prev.name === nextCtx.name;
+            const sameLoc = prev.location === nextCtx.location;
+            if (sameId && sameName && sameLoc && prev.locked) {
+              return prev;
+            }
+            persistDealerContext(nextCtx);
+            return nextCtx;
+          });
+          setContextLocked(true);
+        }
+
+        const allowedBrands = Array.isArray(dealerState?.allowed_brands)
+          ? (dealerState.allowed_brands as string[]).filter((item) => typeof item === 'string' && item.trim().length > 0)
+          : [];
+        const allowedMeta = Array.isArray(dealerState?.allowed_brand_meta)
+          ? (dealerState.allowed_brand_meta as Array<Record<string, any>>)
+          : [];
+        try {
+          if (allowedBrands.length) {
+            window.localStorage.setItem('CORTEX_ALLOWED_BRANDS', JSON.stringify(allowedBrands));
+            window.localStorage.setItem('CORTEX_DEALER_ALLOWED_BRAND', allowedBrands[0]);
+            window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: allowedBrands }));
+          } else {
+            window.localStorage.removeItem('CORTEX_ALLOWED_BRANDS');
+            window.localStorage.removeItem('CORTEX_DEALER_ALLOWED_BRAND');
+            window.dispatchEvent(new CustomEvent('cortex:allowed_brands', { detail: [] }));
+          }
+          if (allowedMeta.length) {
+            window.localStorage.setItem('CORTEX_ALLOWED_BRAND_META', JSON.stringify(allowedMeta));
+            window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: allowedMeta }));
+          } else {
+            window.localStorage.removeItem('CORTEX_ALLOWED_BRAND_META');
+            window.dispatchEvent(new CustomEvent('cortex:allowed_brand_meta', { detail: [] }));
+          }
+        } catch {}
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('membership session sync failed', err);
+        }
+      }
+    };
+
+    syncMembershipState();
+    return () => {
+      cancelled = true;
+    };
+  }, [contextLoaded]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -264,8 +363,18 @@ export default function DealersPage() {
       const blocked = result?.status === 'paused' || result?.organization_status === 'paused';
       setStatusInfo({ ...result, blocked });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'No se pudo obtener el estado del dealer';
-      setStatusError(message);
+      let friendly = 'No se pudo obtener el estado del dealer. Verifica el UUID o contacta a tu administrador.';
+      if (err instanceof Error) {
+        const raw = err.message.toLowerCase();
+        if (raw.includes('dealer_id')) {
+          friendly = 'El UUID del dealer no es válido. Solicita el identificador correcto a tu superadmin.';
+        }
+      }
+      if (process.env.NODE_ENV !== 'production') {
+        // Reporta detalles a la consola para facilitar el soporte sin mostrar mensajes crudos al usuario final.
+        console.warn('dealer status fetch failed:', err);
+      }
+      setStatusError(friendly);
       setStatusInfo(null);
     } finally {
       setStatusLoading(false);
@@ -291,7 +400,8 @@ export default function DealersPage() {
   return (
     <main style={{ display: 'grid', gap: 16 }}>
       <PrintHeader />
-      <section style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: 16, background: '#fff', display: 'grid', gap: 12 }}>
+      {!hideIdentitySection ? (
+        <section style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: 16, background: '#fff', display: 'grid', gap: 12 }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Identidad del dealer</h2>
@@ -397,7 +507,8 @@ export default function DealersPage() {
             La organización completa está en pausa; no podrás generar comparativos hasta nuevo aviso.
           </p>
         ) : null}
-      </section>
+        </section>
+      ) : null}
 
       <div className="no-print">
         <VehicleSelect />

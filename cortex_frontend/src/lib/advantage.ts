@@ -102,6 +102,19 @@ export function buildAdvantageOption(rows: AdvantageRow[], mode: AdvantageMode):
   return {
     color: [color],
     grid: { left: 140, right: 24, top: 24, bottom: 36, containLabel: true },
+    legend: { show: false },
+    toolbox: {
+      show: true,
+      orient: 'horizontal',
+      itemSize: 16,
+      itemGap: 10,
+      top: 10,
+      right: 10,
+      feature: {
+        dataView: { show: true, readOnly: true, title: 'Datos', lang: ['Tabla de ventajas', 'Cerrar', 'Actualizar'] },
+        saveAsImage: { show: typeof window !== 'undefined', title: 'Descargar' },
+      },
+    },
     tooltip: {
       trigger: 'item',
       backgroundColor: '#0f172a',
@@ -137,6 +150,18 @@ export function buildAdvantageOption(rows: AdvantageRow[], mode: AdvantageMode):
           ownValue: row.ownValue,
           compValue: row.compValue,
         })),
+        label: {
+          show: true,
+          position: 'right',
+          formatter: (params: any) => {
+            const val = Number(params?.value ?? 0);
+            const delta = Number(params?.data?.delta ?? 0);
+            const sign = delta < 0 ? '+' : '-';
+            return `${sign}${val.toFixed(1)}`;
+          },
+          color: '#0f172a',
+          fontSize: 11,
+        },
       },
     ],
   };

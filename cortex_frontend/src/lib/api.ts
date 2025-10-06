@@ -370,6 +370,7 @@ export const endpoints = {
       }
       return res.json();
     }),
+  membershipSession: (session?: string) => apiGet('/membership/session', session ? { session } : undefined),
   membershipBrands: (session: string) => apiGet('/membership/brands', { session }),
   membershipSaveProfile: (body: { session: string; brand: string; pdf_display_name: string; pdf_footer_note?: string | null }) =>
     fetch(buildUrl('/membership/profile'), withAuth({

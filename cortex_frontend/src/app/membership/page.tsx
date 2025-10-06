@@ -146,6 +146,31 @@ export default function MembershipPage() {
     }
   })();
 
+  const syncMembershipSession = React.useCallback(
+    async (token: string) => {
+      if (!token) return;
+      try {
+        const info = await endpoints.membershipSession(token);
+        if (typeof window !== 'undefined') {
+          try {
+            const statusValue = String(info?.status || (info?.paid ? 'active' : 'trial'));
+            window.localStorage.setItem('CORTEX_MEMBERSHIP_STATUS', statusValue);
+          } catch {}
+        }
+        const dealerState = (info as any)?.dealer_state;
+        if (dealerState) {
+          const brandLabel = String((info as any)?.profile?.brand_label || (info as any)?.profile?.display_name || '');
+          applyDealerState(dealerState as any, brandLabel);
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('membership session sync failed', err);
+        }
+      }
+    },
+    [applyDealerState],
+  );
+
   const sendCode = async () => {
     setLoading(true);
     setError(null);
@@ -185,6 +210,7 @@ export default function MembershipPage() {
         } catch {}
       }
       setSessionToken(payload.session);
+      syncMembershipSession(payload.session);
       setStep('details');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Código inválido o expirado.');
@@ -192,6 +218,14 @@ export default function MembershipPage() {
       setLoading(false);
     }
   };
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const storedSession = window.localStorage.getItem('CORTEX_MEMBERSHIP_SESSION');
+      if (storedSession) syncMembershipSession(storedSession);
+    } catch {}
+  }, [syncMembershipSession]);
 
   React.useEffect(() => {
     if (!sessionToken || step !== 'details') return;
@@ -242,6 +276,7 @@ export default function MembershipPage() {
           /* ignore storage errors */
         }
       }
+      syncMembershipSession(sessionToken);
       setSuccessMessage('¡Tu membresía self-service quedó configurada!');
       setStep('done');
     } catch (err) {

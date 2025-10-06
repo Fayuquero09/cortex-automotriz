@@ -620,6 +620,7 @@ export default function PanelSelfServicePage(): JSX.Element {
             <div style={{ display: 'grid', gap: 8 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>Buscar</label>
               <input
+                suppressHydrationWarning
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
                 placeholder="Teléfono, nombre o marca"
@@ -629,6 +630,7 @@ export default function PanelSelfServicePage(): JSX.Element {
             <div style={{ display: 'grid', gap: 8 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>Estatus</label>
               <select
+                suppressHydrationWarning
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13 }}
@@ -643,6 +645,7 @@ export default function PanelSelfServicePage(): JSX.Element {
             <div style={{ display: 'grid', gap: 8 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>Tipo</label>
               <select
+                suppressHydrationWarning
                 value={paidFilter}
                 onChange={(event) => setPaidFilter(event.target.value as PaidFilter)}
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13 }}
@@ -826,6 +829,7 @@ export default function PanelSelfServicePage(): JSX.Element {
               ) : null}
 
               <form
+                suppressHydrationWarning
                 onSubmit={(event) => {
                   event.preventDefault();
                   handleSave();
@@ -836,6 +840,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Nombre mostrado
                     <input
+                      suppressHydrationWarning
                       value={editState?.displayName ?? ''}
                       onChange={(event) => setEditState((prev) => (prev ? { ...prev, displayName: event.target.value } : prev))}
                       placeholder="Nombre en los PDF"
@@ -845,6 +850,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Marca visible
                     <select
+                      suppressHydrationWarning
                       value={editState?.brandLabel ?? ''}
                       onChange={(event) => handleBrandLabelChange(event.target.value)}
                       style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #cbd5e1' }}
@@ -861,6 +867,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Slug de marca
                     <input
+                      suppressHydrationWarning
                       value={editState?.brandSlug ?? ''}
                       onChange={(event) => setEditState((prev) => (prev ? { ...prev, brandSlug: event.target.value } : prev))}
                       placeholder="slug-personalizado"
@@ -870,6 +877,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Notas del pie de página
                     <input
+                      suppressHydrationWarning
                       value={editState?.footerNote ?? ''}
                       onChange={(event) => setEditState((prev) => (prev ? { ...prev, footerNote: event.target.value } : prev))}
                       placeholder="Leyenda opcional en los PDF"
@@ -886,6 +894,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                       return (
                         <label key={`allowed-${name}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                           <input
+                            suppressHydrationWarning
                             type="checkbox"
                             checked={isChecked}
                             onChange={() => handleAllowedBrandToggle(name)}
@@ -907,6 +916,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Límite gratuito
                     <input
+                      suppressHydrationWarning
                       type="number"
                       min={0}
                       value={editState?.freeLimit ?? ''}
@@ -917,6 +927,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Búsquedas realizadas
                     <input
+                      suppressHydrationWarning
                       type="number"
                       min={0}
                       value={editState?.searchCount ?? ''}
@@ -927,6 +938,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                   <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
                     Estatus
                     <select
+                      suppressHydrationWarning
                       value={editState?.status ?? 'trial'}
                       onChange={(event) => setEditState((prev) => (prev ? { ...prev, status: event.target.value } : prev))}
                       style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #cbd5e1' }}
@@ -939,6 +951,7 @@ export default function PanelSelfServicePage(): JSX.Element {
                   </label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                     <input
+                      suppressHydrationWarning
                       type="checkbox"
                       checked={editState?.paid ?? false}
                       onChange={(event) => setEditState((prev) => (prev ? { ...prev, paid: event.target.checked } : prev))}

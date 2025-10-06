@@ -14,6 +14,7 @@ import { VehicleThumb } from '@/components/VehicleThumb';
 import {
   AdvantageMode,
   AdvantageSection,
+  buildAdvantageOption,
   cleanVehicleRow,
   computeAdvantageSections,
   keyForRow,
@@ -320,13 +321,34 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
     }
     // Regla: mismo año modelo por defecto; permitir diferentes si se activa el toggle
     setManualNotice('');
+    const baseYearNum = typeof own?.year === 'number' && Number.isFinite(own.year) ? Number(own.year) : null;
     try{
-      if (!allowDifferentYears && own?.year && r?.ano && Number(r.ano)!==Number(own.year)){
-        const list = await endpoints.catalog({ make: r.make, model: r.model, year: Number(own.year), limit: 50 });
-        const rows: Row[] = Array.isArray(list) ? list : (Array.isArray((list as any)?.items) ? (list as any).items : []);
-        if (rows && rows.length){ r = rows[0]; }
+      const compYearNum = Number(r?.ano ?? r?.year);
+      if (!allowDifferentYears && baseYearNum != null && Number.isFinite(compYearNum)){
+        if (compYearNum !== baseYearNum && r?.make && r?.model){
+          const list = await endpoints.catalog({ make: r.make, model: r.model, year: baseYearNum, limit: 50 });
+          const rows: Row[] = Array.isArray(list) ? list : (Array.isArray((list as any)?.items) ? (list as any).items : []);
+          if (rows && rows.length){
+            r = rows[0];
+          } else {
+            const label = `${brandLabel(r)} ${r?.model || ''}`.trim() || 'El competidor seleccionado';
+            setManualNotice(`${label} no tiene versión ${baseYearNum}. Activa "Permitir otros años modelo" para usar ${compYearNum}.`);
+            return;
+          }
+        } else if (compYearNum !== baseYearNum && (!r?.make || !r?.model)) {
+          const label = `${brandLabel(r)} ${r?.model || ''}`.trim() || 'El competidor seleccionado';
+          setManualNotice(`${label} no tiene datos suficientes para validar año ${baseYearNum}. Activa "Permitir otros años modelo" para usar ${compYearNum}.`);
+          return;
+        }
       }
-    } catch {}
+    } catch {
+      if (!allowDifferentYears && baseYearNum != null){
+        const compYearNum = Number(r?.ano ?? r?.year);
+        const label = `${brandLabel(r)} ${r?.model || ''}`.trim() || 'El competidor seleccionado';
+        setManualNotice(`${label} no tiene versión ${baseYearNum}. Activa "Permitir otros años modelo"${Number.isFinite(compYearNum) ? ` para usar ${compYearNum}` : ''}.`);
+        return;
+      }
+    }
     if (!allowDifferentSegments && ownRow){
       const baseSeg = segLabel(ownRow);
       const candSeg = segLabel(r);
@@ -781,6 +803,15 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
     [baseRow, comps],
   );
 
+  const advantageCharts = React.useMemo(() => {
+    if (!advantageUpsideSections.length) return [] as Array<{ name: string; option: echarts.EChartsOption }>;
+    return advantageUpsideSections.map(section => {
+      const name = vehicleDisplayName(section.comp) || brandLabel(section.comp) || 'Competidor';
+      const option = buildAdvantageOption(section.rows, 'upsides');
+      return { name, option };
+    });
+  }, [advantageUpsideSections]);
+
   const clientSummaryFallback = React.useMemo(() => {
     if (!baseRow || !comps.length) return null;
     const basePriceTx = num(baseRow?.precio_transaccion);
@@ -1010,7 +1041,21 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
     hp: number | null;
     length: number | null;
     isBase: boolean;
+    year: number | '';
   };
+
+  const normalizeYear = React.useCallback((value: any): number | '' => {
+    if (value === null || value === undefined || value === '') return '';
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+    const digits = String(value).trim().match(/\d{4}/);
+    if (digits) {
+      const yr = Number(digits[0]);
+      if (yr >= 1980 && yr <= 2100) return yr;
+    }
+    return '';
+  }, []);
 
   const chartsRows = React.useMemo(() => {
     if (!baseRow) return [] as ChartRow[];
@@ -1020,9 +1065,10 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
       const hp = num(row?.caballos_fuerza);
       const length = num(row?.longitud_mm);
       const name = `${brandLabel(row)} ${row?.model || ''}${row?.version ? ` – ${row.version}` : ''}`.trim();
-      return { name: name || 'Vehículo', price, hp, length, isBase: !!row?.__isBase };
+      const year = normalizeYear(row?.ano ?? row?.year);
+      return { name: name || 'Vehículo', price, hp, length, isBase: !!row?.__isBase, year };
     }) as ChartRow[];
-  }, [baseRow, comps]);
+  }, [baseRow, comps, normalizeYear]);
 
   const formatCurrencyShort = React.useCallback((value: number) => {
     if (!Number.isFinite(value)) return '$0';
@@ -1055,6 +1101,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
         compHp,
         priceAdvantage,
         hpAdvantage,
+        year: d.year,
       };
     });
 
@@ -1087,6 +1134,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
           ownHp: baseHp,
           compPrice: item.compPrice,
           compHp: item.compHp,
+          year: item.year,
           itemStyle: { color },
         };
       }),
@@ -1118,8 +1166,9 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
           const ourHp = data?.ownHp ?? baseHp;
           const compPrice = data?.compPrice;
           const compHp = data?.compHp;
+          const compYear = data?.year;
           const ourLine = `<span style="color:#16a34a">Nosotros:</span> ${formatCurrency(ourPrice)} · ${fmtNum(ourHp)} HP`;
-          const compLine = `<span style="color:#dc2626">Competidor:</span> ${formatCurrency(compPrice)} · ${fmtNum(compHp)} HP`;
+          const compLine = `<span style="color:#dc2626">Competidor:</span> ${formatCurrency(compPrice)} · ${fmtNum(compHp)} HP${compYear ? ` · MY ${compYear}` : ''}`;
           return `
             <strong>${params.name}</strong><br/>
             Ventaja en precio tx: ${fmtCurrencyDelta(priceAdv)}<br/>
@@ -1501,6 +1550,7 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
             <thead>
               <tr style={{ background:'#f8fafc' }}>
                 <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb', width: 40 }}></th>
+                <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb', width: THUMB_WIDTH + 24 }}>Foto</th>
                 <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Vehículo</th>
                 <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Precio de lista</th>
                 <th style={{ textAlign:'left', padding:'6px 8px', borderBottom:'1px solid #e5e7eb' }}>Precio de transacción</th>
@@ -1514,17 +1564,15 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
             <tbody>
               <tr>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', width: 40 }}></td>
-                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 360, maxWidth: 520, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere' }}>
-                  <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(200px, 1fr)`, gap:12, alignItems:'flex-start' }}>
-                    <div>
-                      <VehicleThumb row={baseRow} width={THUMB_WIDTH} height={THUMB_HEIGHT} />
-                    </div>
-                    <div style={{ display:'grid', gap:6, lineHeight:1.3 }}>
-                      <div style={{ fontWeight:700, fontSize:16 }}>{String(baseRow.make || brandLabel(baseRow) || '')}</div>
-                      <div style={{ fontWeight:600, fontSize:15 }}>{String(baseRow.model||'')}</div>
-                      <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || baseRow.year || ''}</div>
-                      <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(baseRow.version||''))}</div>
-                    </div>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', width: THUMB_WIDTH + 24 }}>
+                  <VehicleThumb row={baseRow} width={THUMB_WIDTH} height={THUMB_HEIGHT} />
+                </td>
+                <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 320, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere' }}>
+                  <div style={{ display:'grid', gap:6, lineHeight:1.3 }}>
+                    <div style={{ fontWeight:700, fontSize:16 }}>{String(baseRow.make || brandLabel(baseRow) || '')}</div>
+                    <div style={{ fontWeight:600, fontSize:15 }}>{String(baseRow.model||'')}</div>
+                    <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{baseRow.ano || baseRow.year || ''}</div>
+                    <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(baseRow.version||''))}</div>
                   </div>
                 </td>
                 <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(baseRow.msrp)}</td>
@@ -1565,17 +1613,15 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
                         ×
                       </button>
                     </td>
-                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 360, maxWidth: 520, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere' }}>
-                      <div style={{ display:'grid', gridTemplateColumns: `${THUMB_WIDTH}px minmax(200px, 1fr)`, gap:12, alignItems:'flex-start' }}>
-                        <div>
-                          <VehicleThumb row={r} width={THUMB_WIDTH} height={THUMB_HEIGHT} />
-                        </div>
-                        <div style={{ display:'grid', gap:6, lineHeight:1.3 }}>
-                          <div style={{ fontWeight:700, fontSize:16 }}>{String(r.make || brandLabel(r) || '')}</div>
-                          <div style={{ fontWeight:600, fontSize:15 }}>{String(r.model||'')}</div>
-                          <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano || r.year || ''}</div>
-                          <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(r.version||''))}</div>
-                        </div>
+                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', width: THUMB_WIDTH + 24 }}>
+                      <VehicleThumb row={r} width={THUMB_WIDTH} height={THUMB_HEIGHT} />
+                    </td>
+                    <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9', minWidth: 320, whiteSpace:'normal', wordBreak:'break-word', overflowWrap:'anywhere' }}>
+                      <div style={{ display:'grid', gap:6, lineHeight:1.3 }}>
+                        <div style={{ fontWeight:700, fontSize:16 }}>{String(r.make || brandLabel(r) || '')}</div>
+                        <div style={{ fontWeight:600, fontSize:15 }}>{String(r.model||'')}</div>
+                        <div style={{ fontSize:12, opacity:0.8, color:'#475569' }}>{r.ano || r.year || ''}</div>
+                        <div style={{ fontWeight:500, fontSize:14 }}>{normalizeVersion(String(r.version||''))}</div>
                       </div>
                     </td>
                     <td style={{ padding:'6px 8px', borderBottom:'1px solid #f1f5f9' }}>{fmtMoney(r.msrp)}<div style={{ fontSize:12, opacity:0.9, color: d_m!=null ? (d_m<0?'#16a34a':'#dc2626'):'#64748b' }}>{d_m==null?'-':`${tri(d_m)} ${fmtMoney(Math.abs(d_m))}`}</div></td>
@@ -1634,6 +1680,17 @@ export default function DealerPanel({ dealerContext, dealerStatus, dealerUserId,
           )}
         </div>
       </div>
+
+      {EChart && advantageCharts.length ? (
+        <div className="print-block" style={{ display:'grid', gap:16, gridTemplateColumns:'repeat(auto-fit, minmax(320px,1fr))' }}>
+          {advantageCharts.map(({ name, option }) => (
+            <div key={`adv-chart-${name}`} style={{ border:'1px solid #e5e7eb', borderRadius:10, padding:12, background:'#fff', display:'grid', gap:12 }}>
+              <div style={{ fontWeight:600, fontSize:14, color:'#0f172a' }}>Ventajas clave vs {name}</div>
+              <EChart echarts={echarts} option={option} opts={{ renderer: 'svg' }} style={{ height: 280 }} />
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {/* Insights (Dealer) */}
       <div className="print-block" style={{ border:'1px solid #e5e7eb', borderRadius:10 }}>

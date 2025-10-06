@@ -19,9 +19,26 @@ type OptionsPayload = {
 };
 
 export default function VehicleSelect() {
-  // Años permitidos en la UI
-  const ALLOWED_YEARS = React.useMemo(() => new Set<number>([2024, 2025, 2026]), []);
   const { own, setOwn } = useAppState();
+  const { data: cfg } = useSWR<any>('cfg', () => endpoints.config());
+  const allowedYearsSet = React.useMemo(() => {
+    const list = cfg?.allowed_model_years;
+    if (Array.isArray(list) && list.length) {
+      const set = new Set<number>();
+      list.forEach((value) => {
+        const num = Number(value);
+        if (Number.isFinite(num)) set.add(num);
+      });
+      return set.size ? set : null;
+    }
+    return null;
+  }, [cfg?.allowed_model_years]);
+  const isAllowedYear = React.useCallback((value: unknown) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return false;
+    if (!allowedYearsSet || allowedYearsSet.size === 0) return true;
+    return allowedYearsSet.has(num);
+  }, [allowedYearsSet]);
   const brand = own.make;
   const model = own.model;
   const year = own.year;
@@ -212,9 +229,9 @@ export default function VehicleSelect() {
     rows.forEach(r => { const mk = String(r?.make || '').trim().toUpperCase(); if (mk) set.add(mk); });
     return Array.from(set).sort();
   });
-  const brandNorm = (s: string) => {
+  const brandNorm = React.useCallback((s: string) => {
     try { return s.normalize('NFD').replace(/\p{Diacritic}+/gu,'').toLowerCase(); } catch { return s.toLowerCase(); }
-  };
+  }, []);
   const allowedBrandSet = React.useMemo(() => {
     if (isSuperadmin || !allowedBrandList.length) return null;
     const set = new Set<string>();
@@ -223,7 +240,7 @@ export default function VehicleSelect() {
       if (key) set.add(key);
     });
     return set.size ? set : null;
-  }, [allowedBrandList, isSuperadmin]);
+  }, [allowedBrandList, isSuperadmin, brandNorm]);
   const allBrands = React.useMemo(() => {
     if (isSuperadmin) {
       const out: string[] = [];
@@ -269,7 +286,7 @@ export default function VehicleSelect() {
       });
     }
     return out;
-  }, [base, brandsFallback, allowedBrand, allowedBrandSet, allowedBrandList, isSuperadmin]);
+  }, [base, brandsFallback, allowedBrand, allowedBrandSet, allowedBrandList, isSuperadmin, brandNorm]);
   const brandSuggest = React.useMemo(() => {
     if (isSuperadmin) return (allBrands || []).slice(0, 18);
     if (allowedBrand) return [allowedBrand];
@@ -278,7 +295,7 @@ export default function VehicleSelect() {
     if (!q) return src.slice(0, 18);
     const nq = brandNorm(q);
     return src.filter(b => brandNorm(String(b)).includes(nq)).slice(0, 18);
-  }, [brand, allBrands, allowedBrand, isSuperadmin]);
+  }, [brand, allBrands, allowedBrand, isSuperadmin, brandNorm]);
   const brandApi = React.useMemo(() => {
     if (isSuperadmin) {
       const raw = (brand || '').trim();
@@ -304,7 +321,7 @@ export default function VehicleSelect() {
     if (exact) return exact;
     const matches = brands.filter((m) => brandNorm(String(m)).startsWith(needle));
     return matches.length === 1 ? matches[0] : '';
-  }, [brand, allBrands, allowedBrand, isSuperadmin]);
+  }, [brand, allBrands, allowedBrand, isSuperadmin, brandNorm]);
 
   React.useEffect(() => {
     if (isSuperadmin) return;
@@ -333,7 +350,7 @@ export default function VehicleSelect() {
         setOwn({ ...own, make: singleAllowed });
       }
     }
-  }, [allowedBrand, allowedBrandList, allowedBrandSet, brand, isSuperadmin, own.model, own.version, own.year, setOwn]);
+  }, [allowedBrand, allowedBrandList, allowedBrandSet, brand, isSuperadmin, own, brandNorm, setOwn]);
   // Models filtered by selected brand (if any)
   const { data: forBrand } = useSWR<OptionsPayload>(brandApi ? ['options_brand', brandApi] : null, () => endpoints.options({ make: brandApi }));
   const { data: catalogBrandAllowed } = useSWR<any[]>(brandApi ? ['catalog_brand_allowed', brandApi] : null, async () => {
@@ -350,17 +367,18 @@ export default function VehicleSelect() {
     }
   });
   const brandModelsAllowedSet = React.useMemo(() => {
+    if (!allowedYearsSet || allowedYearsSet.size === 0) return null;
     if (!Array.isArray(catalogBrandAllowed) || !catalogBrandAllowed.length) return null;
     const set = new Set<string>();
     for (const row of catalogBrandAllowed) {
       const rawYear = Number.parseInt(String(row?.ano ?? row?.year ?? row?.model_year ?? ''));
-      if (!Number.isFinite(rawYear) || !ALLOWED_YEARS.has(rawYear)) continue;
+      if (!isAllowedYear(rawYear)) continue;
       const label = String(row?.model || '').trim();
       if (!label) continue;
       set.add(norm(label));
     }
     return set.size ? set : null;
-  }, [catalogBrandAllowed, ALLOWED_YEARS]);
+  }, [catalogBrandAllowed, allowedYearsSet, isAllowedYear]);
   const brandLocked = !isSuperadmin && (Boolean(allowedBrand) || (allowedBrandList.length === 1 && allowedBrandSet !== null));
   const brandTyping = false;
   const brandDisplay = brandLocked ? (allowedBrand || allowedBrandList[0] || '') : brand;
@@ -437,16 +455,24 @@ export default function VehicleSelect() {
         const years: number[] = [];
         catalogForModel.forEach(r => {
           const y = parseInt(String(r?.ano || r?.year || ''));
-          if (Number.isFinite(y) && ALLOWED_YEARS.has(y)) years.push(y);
+          if (isAllowedYear(y)) years.push(Number(y));
         });
         if (!autoYear && years.length) autoYear = Math.max(...years);
       } catch {}
     }
-    const next = { ...own, make: (mk || own.make) } as any;
-    if (autoYear) next.year = autoYear;
-    // Evita ciclos si ya está seteado
-    if (next.make !== own.make || next.year !== own.year) setOwn(next);
-  }, [model, forModel, catalogForModel]);
+    if (!mk && !autoYear) return;
+    setOwn((prev) => {
+      const targetMake = mk || prev.make;
+      const sameMake = targetMake === prev.make;
+      const targetYear = typeof autoYear === 'number' ? autoYear : prev.year;
+      const sameYear = targetYear === prev.year;
+      if (sameMake && sameYear) return prev;
+      const updated = { ...prev } as typeof prev;
+      if (!sameMake) updated.make = targetMake;
+      if (typeof autoYear === 'number' && !sameYear) updated.year = autoYear;
+      return updated;
+    });
+  }, [model, forModel, catalogForModel, isAllowedYear, setOwn]);
 
   React.useEffect(() => {
     if (isSuperadmin) return;
@@ -459,42 +485,58 @@ export default function VehicleSelect() {
   // When brand changes, set most recent year using SWR brand options (no extra request)
   React.useEffect(() => {
     if (!brandApi || !forBrand) return;
-    const yrs = (forBrand.years || []) as number[];
-    const mostRecent = yrs.length ? Math.max(...yrs) : undefined;
-    if (mostRecent && !model && mostRecent !== own.year) setOwn({ ...own, year: mostRecent });
-  }, [brandApi, forBrand, model]);
+    if (model) return;
+    const yrs = ((forBrand.years || []) as number[]).filter((y) => isAllowedYear(y));
+    if (!yrs.length) return;
+    const mostRecent = Math.max(...yrs);
+    setOwn((prev) => {
+      if (prev.year === mostRecent) return prev;
+      return { ...prev, year: mostRecent };
+    });
+  }, [brandApi, forBrand, model, isAllowedYear, setOwn]);
 
   // Load versions once model+year ready
   const { data: forMY } = useSWR<OptionsPayload>(model && year ? ['options_my', model, year, brandApi] : null, () => endpoints.options({ model, year, make: (brandApi || undefined) }));
-  const versionsRaw = (forMY?.versions || []) as string[];
+  const versionsRaw = React.useMemo(() => {
+    const raw = forMY?.versions;
+    return Array.isArray(raw) ? raw : [];
+  }, [forMY?.versions]);
   const versions = React.useMemo(() => (
     Array.isArray(versionsRaw)
       ? versionsRaw.map(v => String(v ?? '').trim()).filter(Boolean)
       : []
-  ), [versionsRaw.join('|')]);
+  ), [versionsRaw]);
   const yearsOptions: number[] = React.useMemo(() => {
-    const a = (forMY?.years as number[] | undefined) || [];
-    const b = (forModel?.years as number[] | undefined) || [];
-    const c = (forBrand?.years as number[] | undefined) || [];
-    const d = Array.isArray(catalogForModel) ? Array.from(new Set(
-      catalogForModel.map(r => parseInt(String(r?.ano || r?.year || ''))).filter((y:number)=> Number.isFinite(y) && ALLOWED_YEARS.has(y))
-    )) : [];
-    const merged = [...a, ...b, ...c, ...d].filter((y:number)=> ALLOWED_YEARS.has(y));
+    const a = ((forMY?.years as number[] | undefined) || []).filter(isAllowedYear);
+    const b = ((forModel?.years as number[] | undefined) || []).filter(isAllowedYear);
+    const c = ((forBrand?.years as number[] | undefined) || []).filter(isAllowedYear);
+    const d = Array.isArray(catalogForModel)
+      ? Array.from(
+          new Set(
+            catalogForModel
+              .map((r) => parseInt(String(r?.ano || r?.year || '')))
+              .filter((y: number) => isAllowedYear(y)),
+          ),
+        )
+      : [];
+    const merged = [...a, ...b, ...c, ...d];
     return Array.from(new Set(merged)).sort();
-  }, [forMY, forModel, forBrand, catalogForModel]);
+  }, [forMY, forModel, forBrand, catalogForModel, isAllowedYear]);
 
   // Safety net: si ya hay modelo y hay años disponibles pero own.year sigue vacío,
   // selecciona automáticamente el más reciente. Evita que el usuario se quede en "—".
   React.useEffect(() => {
-    try {
-      const hasYear = typeof year === 'number' && Number.isFinite(year);
-      if (model && !hasYear && yearsOptions && yearsOptions.length) {
-        const pick = Math.max(...yearsOptions);
-        setOwn({ ...own, year: pick as number });
-      }
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, yearsOptions && yearsOptions.join('|')]);
+    if (!model) return;
+    if (!Array.isArray(yearsOptions) || !yearsOptions.length) return;
+    const pick = Math.max(...yearsOptions);
+    setOwn((prev) => {
+      const hasYear = typeof prev.year === 'number' && Number.isFinite(prev.year);
+      if (hasYear && prev.year === pick) return prev;
+      if (hasYear) return prev;
+      if (prev.year === pick) return prev;
+      return { ...prev, year: pick as number };
+    });
+  }, [model, yearsOptions, setOwn]);
 
   const onYearChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const v = e.target.value;
@@ -503,11 +545,14 @@ export default function VehicleSelect() {
 
   // Auto‑seleccionar versión si solo hay una para el modelo+año
   React.useEffect(() => {
-    if (model && year && Array.isArray(versions) && versions.length === 1) {
-      const only = String(versions[0] || '');
-      if (only && version !== only) setOwn({ ...own, version: only });
-    }
-  }, [model, year, versions && versions.join('|')]);
+    if (!(model && year && Array.isArray(versions) && versions.length === 1)) return;
+    const only = String(versions[0] || '');
+    if (!only || version === only) return;
+    setOwn((prev) => {
+      if (prev.version === only) return prev;
+      return { ...prev, version: only };
+    });
+  }, [model, year, versions, version, setOwn]);
 
   // Predictive suggestions for Modelo (contains match, not only prefix)
   function norm(s: string){
@@ -526,7 +571,9 @@ export default function VehicleSelect() {
   const modelsLoading = !baseReady || (!hasBaseModels && modelsFallback === undefined);
 
   // Reset/prime highlight when suggestions change
-  React.useEffect(() => { setHiModel(modelSuggest.length ? 0 : -1); }, [modelSuggest.join('|')]);
+  React.useEffect(() => {
+    setHiModel(modelSuggest.length ? 0 : -1);
+  }, [modelSuggest]);
 
   // When brand is selected and no model typed, open suggestions automatically
   React.useEffect(() => {
@@ -545,7 +592,7 @@ export default function VehicleSelect() {
       });
       return true;
     },
-    [allowedBrandSet, setOwn],
+    [brandNorm, setOwn],
   );
 
   const inferBrandForModel = React.useCallback(
@@ -605,7 +652,7 @@ export default function VehicleSelect() {
     if (normalizedCurrent === normalizedCandidate) return;
     if (allowedBrandSet && !allowedBrandSet.has(normalizedCandidate)) return;
     tryApplyBrand(brandApi);
-  }, [model, brandApi, brand, allowedBrandSet, tryApplyBrand]);
+  }, [model, brandApi, brand, allowedBrandSet, tryApplyBrand, brandNorm]);
 
   React.useEffect(() => {
     if (!model || brandLocked) return;

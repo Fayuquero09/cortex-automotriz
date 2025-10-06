@@ -5772,7 +5772,6 @@ def get_config() -> Dict[str, Any]:
             "as_of": remote.get("as_of"),
             "source": remote.get("source"),
         },
-        "allowed_model_years": sorted(ALLOWED_YEARS),
     }
     audit("resp", "/config", body=resp)
     return resp
@@ -5805,19 +5804,6 @@ def _allowed_years_from_env() -> set[int]:
 
 ALLOWED_YEARS = _allowed_years_from_env()
 _MAINT_PATH_ENV = "RUTA_DATOS_MANTENIMIENTO"
-
-
-# Overrides for missing specs in fallback catalog rows (make, model) -> attrs
-FALLBACK_SPEC_OVERRIDES: Dict[tuple[str, str], Dict[str, Any]] = {
-    ("HONDA", "CR-V"): {
-        "caballos_fuerza": 190,
-        "longitud_mm": 4704,
-        "categoria_combustible_final": "Gasolina",
-        "segmento_display": "Todo Terreno",
-        "segmento_ventas": "SUV'S",
-        "body_style": "Todo Terreno",
-    },
-}
 
 
 # Audio lookup cache (brand / speakers) sourced from vehiculos_todos_flat.csv
@@ -7817,83 +7803,27 @@ def get_catalog(limit: int = Query(1000, ge=1, le=20000), make: Optional[str] = 
         except Exception:
             pass
     # Fallback: if no rows after filters, try building from external sources (processed/flat/JSON)
-    token_q = str(q or "").strip().upper()
-    needs_fallback = bool(make or model or token_q)
-    if needs_fallback:
+    if (make or model) and (len(sub) == 0):
         try:
             mk_up = _canon_make(make) or (make or "").upper()
             md_up = _canon_model(make, model) or (model or "").upper()
-
-            def _allowed_year(yr: Optional[int]) -> bool:
-                if yr is None:
-                    return True
-                try:
-                    yr_int = int(yr)
-                except Exception:
-                    return False
-                return (not ALLOWED_YEARS) or (yr_int in ALLOWED_YEARS)
-
-            def _matches_query(mk: str, md: str, vr: str) -> bool:
-                if not token_q:
-                    return True
-                target = [mk, md, vr]
-                for val in target:
-                    if token_q in str(val or "").upper():
-                        return True
-                return False
-
-            def _add_row(arr, mk, md, vr, yr, msrp=None, tx=None, fuel=None, kml=None, hp=None, length=None, eq=None, extra: Optional[Dict[str, Any]] = None):
+            def _add_row(arr, mk, md, vr, yr, msrp=None, tx=None, fuel=None, kml=None, hp=None, length=None, eq=None):
                 # canonicalize fallback rows too
                 mk = _canon_make(mk) or str(mk or '').upper()
                 md = _canon_model(mk, md) or str(md or '').upper()
-                try:
-                    yr_int = int(yr) if yr is not None else None
-                except Exception:
-                    yr_int = None
-                if yr_int is not None and not _allowed_year(yr_int):
-                    return
-                if not _matches_query(mk, md, vr):
-                    return
-
                 def _num(x):
                     try:
                         v = float(str(x).replace(',', '').strip())
                         return v
                     except Exception:
                         return None
-
                 row = {c: None for c in df.columns}
                 # Precio TX: si no existe o no es válido, usa MSRP como fallback
                 txf = _num(tx)
                 msf = _num(msrp)
-                specs = FALLBACK_SPEC_OVERRIDES.get((mk, md)) or {}
-                row.update({
-                    "make": mk,
-                    "model": md,
-                    "version": vr,
-                    "ano": yr_int,
-                    "msrp": msrp,
-                    "precio_transaccion": (txf if (txf is not None and txf > 0) else msf),
-                    "categoria_combustible_final": fuel or specs.get("categoria_combustible_final"),
-                    "combinado_kml": kml,
-                    "caballos_fuerza": hp or specs.get("caballos_fuerza"),
-                    "longitud_mm": length or specs.get("longitud_mm"),
-                    "equip_score": eq,
-                })
-                for extra_key, extra_value in specs.items():
-                    if extra_key in {"caballos_fuerza", "longitud_mm", "categoria_combustible_final"}:
-                        continue
-                    if row.get(extra_key) in (None, "") and extra_value is not None:
-                        row[extra_key] = extra_value
-                if extra:
-                    for key, value in extra.items():
-                        if value is None:
-                            continue
-                        if row.get(key) in (None, ""):
-                            continue
-                        row[key] = value
+                row.update({"make": mk, "model": md, "version": vr, "ano": yr, "msrp": msrp, "precio_transaccion": (txf if (txf is not None and txf > 0) else msf),
+                            "categoria_combustible_final": fuel, "combinado_kml": kml, "caballos_fuerza": hp, "longitud_mm": length, "equip_score": eq})
                 arr.append(row)
-
             new_rows: list[dict] = []
             import json as _json, re as _re
             def _to_kml(val):
@@ -7921,7 +7851,7 @@ def get_catalog(limit: int = Query(1000, ge=1, le=20000), make: Optional[str] = 
                 data = _json.loads(pjson.read_text(encoding="utf-8"))
                 items = data.get("vehicles") if isinstance(data, dict) else (data if isinstance(data, list) else [])
                 for v in items or []:
-                    mk = (v.get("make",{}) or {}).get("name") or (v.get("manufacturer",{}) or {}).get("name") or ""
+                    mk = (v.get("manufacturer",{}) or {}).get("name") or (v.get("make",{}) or {}).get("name") or ""
                     md = (v.get("model",{}) or {}).get("name") or ""
                     ver = (v.get("version",{}) or {}).get("name") or ""
                     yr = (v.get("version",{}) or {}).get("year") or None
@@ -7930,25 +7860,15 @@ def get_catalog(limit: int = Query(1000, ge=1, le=20000), make: Optional[str] = 
                             msrp = (v.get("pricing",{}) or {}).get("msrp")
                             fe = (v.get("fuelEconomy",{}) or {})
                             kml = _to_kml(fe.get("combined")) or _to_kml(fe.get("city")) or _to_kml(fe.get("highway"))
-                            specs_extra = v.get("specs") or {}
-                            extra = {
-                                "segmento_display": (v.get("version") or {}).get("bodyStyle") or (v.get("model") or {}).get("bodyStyleName") or None,
-                                "segmento_ventas": (v.get("model") or {}).get("segmentCategory") or None,
-                                "body_style": (v.get("version") or {}).get("bodyStyle") or None,
-                                "caballos_fuerza": specs_extra.get("caballos_fuerza"),
-                                "longitud_mm": specs_extra.get("longitud_mm"),
-                            }
-                            _add_row(new_rows, mk, md, ver, int(yr), msrp=msrp, kml=kml, extra=extra)
+                            _add_row(new_rows, mk, md, ver, int(yr), msrp=msrp, kml=kml)
             # Processed CSV
             pproc = ROOT / "data" / "equipo_veh_limpio_procesado.csv"
             if pproc.exists() and pd is not None:
                 t = pd.read_csv(pproc, low_memory=False)
                 t.columns = [str(c).strip().lower() for c in t.columns]
                 q = t.copy()
-                if make:
-                    q = q[q["make"].astype(str).str.upper()==mk_up]
-                if model:
-                    q = q[q["model"].astype(str).str.upper()==md_up]
+                if make: q = q[q["make"].astype(str).str.upper()==mk_up]
+                if model: q = q[q["model"].astype(str).str.upper()==md_up]
                 if year and "ano" in q.columns:
                     q = q[pd.to_numeric(q["ano"], errors="coerce").fillna(0).astype(int)==int(year)]
                 for _, r in q.iterrows():
@@ -7960,74 +7880,21 @@ def get_catalog(limit: int = Query(1000, ge=1, le=20000), make: Optional[str] = 
                 t = pd.read_csv(pflat, low_memory=False)
                 t.columns = [str(c).strip().lower() for c in t.columns]
                 q = t.copy()
-                if make:
-                    q = q[q["make"].astype(str).str.upper()==mk_up]
-                if model:
-                    q = q[q["model"].astype(str).str.upper()==md_up]
+                if make: q = q[q["make"].astype(str).str.upper()==mk_up]
+                if model: q = q[q["model"].astype(str).str.upper()==md_up]
                 if year and "ano" in q.columns:
                     q = q[pd.to_numeric(q["ano"], errors="coerce").fillna(0).astype(int)==int(year)]
                 for _, r in q.iterrows():
                     _add_row(new_rows, r.get("make",""), r.get("model",""), r.get("version"), int(r.get("ano")) if not pd.isna(r.get("ano")) else None,
                              msrp=r.get("msrp"), tx=r.get("precio_transaccion"), fuel=r.get("categoria_combustible_final"), kml=r.get("combinado_kml"), hp=r.get("caballos_fuerza"), length=r.get("longitud_mm"))
             if new_rows:
-                fallback_df = pd.DataFrame(new_rows)
-                if not fallback_df.empty:
-                    for col in ("make", "model", "version"):
-                        if col in fallback_df.columns:
-                            fallback_df[col] = fallback_df[col].astype(str).str.strip()
-                            if col in {"make", "model", "version"}:
-                                fallback_df[col] = fallback_df[col].str.upper()
-                    if "ano" in fallback_df.columns:
-                        fallback_df["ano"] = pd.to_numeric(fallback_df["ano"], errors="coerce")
-                    if len(sub):
-                        try:
-                            sub = pd.concat([sub, fallback_df], ignore_index=True, sort=False)
-                            dedupe_keys = [c for c in ["make", "model", "version", "ano"] if c in sub.columns]
-                            if dedupe_keys:
-                                sub = sub.drop_duplicates(subset=dedupe_keys, keep="last")
-                        except Exception:
-                            sub = fallback_df
-                    else:
-                        sub = fallback_df
+                sub = pd.DataFrame(new_rows)
         except Exception:
             pass
-
-    # Normalise and deduplicate after merging fallback
-    try:
-        for col in ("make", "model", "version"):
-            if col in sub.columns:
-                sub[col] = sub[col].astype(str).str.strip()
-                if col in {"make", "model", "version"}:
-                    sub[col] = sub[col].str.upper()
-        if "ano" in sub.columns:
-            sub["ano"] = pd.to_numeric(sub["ano"], errors="coerce")
-        key_cols = [c for c in ["make", "model", "version", "ano"] if c in sub.columns]
-        if key_cols:
-            sub = sub.drop_duplicates(subset=key_cols, keep="last")
-    except Exception:
-        pass
 
     rows = sub.head(limit).where(sub.notna(), None).to_dict(orient="records")
     for row in rows:
         try:
-            mk_key = str(row.get("make") or row.get("make_slug") or "").strip().upper()
-            md_key = str(row.get("model") or row.get("model_slug") or "").strip().upper()
-            override = FALLBACK_SPEC_OVERRIDES.get((mk_key, md_key))
-            if override:
-                for key, value in override.items():
-                    if value is None:
-                        continue
-                    if key not in row or row.get(key) in (None, ""):
-                        row[key] = value
-            if row.get("precio_transaccion") in (None, ""):
-                pt = row.get("price_transaction") or row.get("msrp")
-                if pt not in (None, ""):
-                    row["precio_transaccion"] = pt
-            if row.get("caballos_fuerza") in (None, "") and row.get("engine_power_hp") not in (None, ""):
-                row["caballos_fuerza"] = row.get("engine_power_hp")
-            if row.get("longitud_mm") in (None, "") and row.get("length_mm") not in (None, ""):
-                row["longitud_mm"] = row.get("length_mm")
-
             fc = row.get("fuel_combined_kml")
             if fc not in (None, ""):
                 row["combinado_kml"] = fc
@@ -10746,45 +10613,44 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
         system = system_prompt_override
     else:
         vendor_system = (
-            """Actúa como un analista de ventas automotrices especializado en generar insights personalizados basados en datos comparativos de vehículos. Tu objetivo es crear dos tipos de insights a partir de un JSON proporcionado: uno dirigido al vendedor (tips accionables para cerrar la venta) y otro dirigido al comprador (ventajas competitivas del vehículo propio vs rivales).\n\n"
-            "Instrucciones generales:\n"
-            "• Usa únicamente los datos del JSON: precio (msrp, precio_transaccion), potencia (caballos_fuerza, cost_per_hp_mxn), TCO (tco_total_60k_mxn), equipamiento (equip_p_adas, equip_p_safety, etc.), deltas y diffs (features_plus, features_minus, numeric_diffs).\n"
-            "• Los deltas están definidos como 'competidor − nuestro'. Comunica porcentajes como ((nuestro − rival)/rival)*100 y utiliza 'pp' para diferencias de puntuación.\n"
-            "• Tono vendedor: voz de 'nosotros', motivador y estratégico. Tono comprador: dirigido al cliente, persuasivo y centrado en beneficios personales.\n"
-            "• Si falta información (ej. garantía del rival), indica 'no disponible'. No inventes datos ni cites fuentes externas.\n"
-            "• No generes gráficos; todo debe ser texto fundamentado en el JSON.\n\n"
-            "Formato de salida: devuelve JSON UTF-8 con claves 'insight_vendedor' y 'insight_comprador', cada una con texto narrativo estructurado en secciones claras.\n\n"
-            "Estructura del Insight para el Vendedor:\n"
-            "1. Diagnóstico Rápido — resume deltas clave (precio, TCO, potencia, equipamiento) con implicaciones para ventas.\n"
-            "2. Tips para Cierre de Venta — 4-6 recomendaciones accionables apoyadas en ventajas y cómo neutralizar desventajas; incluye guiones de conversación, demos recomendadas y tácticas F&I (ej. tasas preferentes).\n"
-            "3. Objetivos y Métricas — metas cuantificables (ej. 'Incrementa cierre +10% usando ADAS').\n"
-            "4. Riesgos en Ventas — 2-3 riesgos con mitigaciones claras.\n\n"
-            "Estructura del Insight para el Comprador:\n"
-            "1. Ventajas Principales — 3-5 beneficios cuantificados frente a cada rival.\n"
-            "2. Por Qué Elegirnos — beneficios personales (seguridad, ahorro, desempeño).\n"
-            "3. Comparación Rival por Rival — resumen específico por competidor.\n"
-            "4. Llamado a Acción — mensaje final persuasivo (ej. 'Agenda tu prueba de manejo').\n\n"
-            "Formato de respuesta requerido:\n"
-            "{\n  \"insight_vendedor\": \"Texto completo con secciones\",\n  \"insight_comprador\": \"Texto completo con secciones\"\n}\n"
-            "[Inserta JSON aquí]"""
+            "Actúa como asesor de ventas senior en piso. Tu objetivo es construir un guion claro y accionable para cerrar al cliente con el vehículo propio. "
+            "1) Arranca con una apertura que conecte con la necesidad del prospecto y resuma por qué este modelo es la mejor solución. "
+            "2) Contrasta contra los rivales relevantes enfocándote en los kilómetros que manejará el cliente, el equipamiento diferenciador, garantías, ADAS y costos totales. "
+            "3) Propón tácticas de demostración (test drive, activaciones, accesorios, bundles F&I) y cómo neutralizan objeciones típicas de precio, entrega o equipamiento. "
+            "4) Cierra con un llamado a la acción inmediato (agenda prueba, firma, apartado) y un plan de seguimiento multicanal. "
+            "Usa siempre voz de 'nosotros', evita describir gráficas o la fuente de datos y entrega recomendaciones concretas. "
+            "Convenciones de cálculo y narrativa: los deltas de entrada están definidos como 'competidor − nuestro' (competitor_minus_base). "
+            "• Si el delta es negativo, nosotros estamos por debajo/mejor; si es positivo, el rival está por encima/peor. "
+            "• Al redactar porcentajes, expresa la variación respecto al rival cuando hables de 'nosotros': por ejemplo, 'nuestro precio es +19.5% vs rival' se calcula como (nuestro − rival)/rival. "
+            "• Para KPIs en puntos (ADAS, seguridad, etc.), si nuestro valor es mayor que el del rival, escribe 'tenemos +X pp' (no uses signo negativo). "
+            "• Para potencia, usa forma 'tenemos +134 hp (+50% vs rival)'. "
+            "• Para TCO usa primero 'tco_total_60k_mxn' si está disponible; expresa el gap también respecto al rival. "
+            "• Evita afirmar superioridad de garantía si los meses/km del rival no están explícitos. "
+            "Sobre recomendaciones de precio: si el gap de TCO supera 10% o $50,000 MXN, evita proponer micro‑ajustes (<3%); prioriza 'mantener TX + Value‑Pack' o tácticas F&I (buy‑down de tasa, seguro/servicio). "
+            "Devuelve JSON UTF-8 con dos claves: 'insights' (mensaje ejecutivo) y 'struct' (secciones con items) para renderizar en la interfaz."
         )
         oem_system = (
-            """Actúa como estratega comercial senior de una OEM automotriz. Tu objetivo es entregar un diagnóstico de precio y plan accionable basado en el JSON proporcionado, sin cambios de producto ni planta.\n\n"
-            "Emite juicio sobre si el MSRP/TX se sostiene vs rivales, usando costo/HP, gap de TCO y brecha de equipamiento/ADAS.\n"
-            "Recomienda TX objetivo en: (A) ajuste táctico (rango estrecho con cálculo: nuevo_TX = TX_actual + delta; nuevo_TCO = nuevo_TX + fuel_cost) o (B) mantener con Value-Pack (servicios 60k, seguro 1er año, tasa preferente 200 bps; estima impacto: reducción TCO ~$50,000 o 5%).\n"
-            "Propón palancas para Marketing (claims, canales, metas CTR/leads), Piso de ventas (demos 4WD/360°, objetivos conversión) y F&I (buy-down tasa, impacto mensualidad ~$1,500).\n"
-            "Usa voz de 'nosotros'; convierte cifras en implicaciones; deltas como (competidor - nuestro), pero comunica % como ((nuestro - rival)/rival)*100.\n\n"
-            "Convenciones: Para TCO usa 'tco_total_60k_mxn' (fallback 'tco_60k_mxn'); reporta monto y %; evita especulaciones si datos faltan.\n"
-            "Formato: Encabeza con 'Evaluación del Insight'. Secciones:\n\n"
-            "Diagnóstico Ejecutivo: Bullets con monto/% (ej. 'Nuestro TCO es $170,000 (15.9%) más alto').\n"
-            "Recomendación de TX: Opciones A/B con fórmulas.\n"
-            "Plan Comercial Inmediato: Subsecciones con metas.\n"
-            "Rival por rival: Ventajas (ej. '+134 HP (+33%)') y neutralización.\n"
-            "Decisiones a aprobar: Priorizadas (P1-P3) con responsable/plazo.\n"
-            "Riesgos y mitigación: 3-4 específicos.\n"
-            "Recomendaciones para mejorar: Correcciones y notas.\n\n"
-            "Devuelve JSON: {'insights': texto narrativo, 'struct': {sección: [items]}}.\n"
-            "[Inserta JSON aquí]"""
+            "Actúa como estratega comercial senior de una OEM. Tu objetivo es entregar un diagnóstico de precio y un plan accionable que pueda ejecutar Marketing, F&I y la red sin cambios de producto ni de planta. "
+            "1) Emite un juicio claro sobre si el MSRP/TX actual se sostiene frente a los rivales, usando relaciones como costo/HP, gap de TCO y brecha de equipamiento/ADAS. "
+            "2) Recomienda un TX objetivo en dos variantes: (A) ajuste táctico en un rango estrecho o (B) mantener precio con un Value‑Pack (servicio 60k, seguro 1er año y, si aplica, tasa preferente). No propongas descuentos triviales. "
+            "3) Propón palancas inmediatas para Marketing y piso de ventas (guion, demos de 4WD/360°, accesorios y ofertas F&I) y define por qué cierran objeciones del cliente. "
+            "4) Trabaja siempre desde la voz de 'nosotros'; no describas gráficas ni el origen de datos; convierte cifras en implicaciones. "
+            "Convenciones de cálculo y narrativa: los deltas de entrada están definidos como 'competidor − nuestro'. "
+            "• Interpreta signo y magnitud con esa convención y, al comunicar, usa porcentajes relativos al rival para frases de 'nosotros vs rival' ( (nuestro − rival)/rival ). "
+            "• En KPIs de puntos, reporta ventajas como '+X pp'; en potencia, '+X hp (+Y% vs rival)'. "
+            "• Para TCO usa 'tco_total_60k_mxn' si existe (si no, 'tco_60k_mxn'); reporta tanto monto como % vs rival. "
+            "• Evita aseveraciones de garantía si faltan meses/km del rival. "
+            "• Si el gap de TCO es alto (>10% o >$50k), no recomiendes micro‑ajustes (<3%); privilegia Value‑Pack o tácticas financieras para cerrar percepción. "
+            "Formato OEM requerido (insights en texto ejecutivo): encabeza con 'Evaluación del Insight' y sigue estas secciones con subtítulos claros: "
+            "• Diagnóstico Ejecutivo — bullets verificables con monto y % Correcto/Corregir según JSON. "
+            "• Recomendación de TX — dos opciones (A y B) con cálculo explícito: muestra fórmula de % o deltas (ej. nuevo_TCO = nuevo_TX + fuel/service). "
+            "• Plan Comercial Inmediato — Marketing, Piso de ventas y F&I con metas cuantificables. "
+            "• Rival por rival — para cada competidor: ventajas cuantificadas (hp, ADAS pp, costo/HP), y táctica de neutralización. "
+            "• Decisiones a aprobar — priorizadas (P1, P2, P3) con responsable y plazo. "
+            "• Riesgos y mitigación — específicos al caso (incluye percepción de marca cuando aplique). "
+            "• Recomendaciones para mejorar el insight — correcciones de % si aplica y notas de trazabilidad (indica fórmula resumida). "
+            "Formatea dinero como '$ 1,234,567 MXN', porcentajes con una decimal (ej. 15.9%) y 'pp' para diferencias en puntuación. "
+            "Devuelve JSON UTF‑8 con dos claves: 'insights' (texto ejecutivo con el formato anterior) y 'struct' (secciones con items) para render en front."
         )
         if (prompt_profile_slug == "dealer_vendor") or (scope_req == "dealer_script") or (org_type == "grupo") or membership_token:
             system = vendor_system
@@ -12444,52 +12310,9 @@ def post_insights(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
                 pass
             return {"sections": secs}
 
-        def _struct_from_dual_insights(seller: Optional[str], buyer: Optional[str]) -> Dict[str, Any]:
-            import re as _re2
-            sections: list[dict] = []
-
-            def _items_from_text(text: Optional[str]):
-                if not isinstance(text, str):
-                    return []
-                cleaned = text.strip()
-                if not cleaned:
-                    return []
-                paragraphs = [p.strip() for p in _re2.split(r"\n{2,}", cleaned) if p.strip()]
-                if not paragraphs:
-                    paragraphs = [cleaned]
-                return [{"key": "narrativa", "args": {"text": para}} for para in paragraphs]
-
-            seller_items = _items_from_text(seller)
-            if seller_items:
-                sections.append({
-                    "id": "insight_vendedor",
-                    "title": "Insight para el vendedor",
-                    "items": seller_items,
-                })
-
-            buyer_items = _items_from_text(buyer)
-            if buyer_items:
-                sections.append({
-                    "id": "insight_comprador",
-                    "title": "Insight para el comprador",
-                    "items": buyer_items,
-                })
-
-            return {"sections": sections}
-
         # Extract fields
         ins_json = (parsed.get("insights") if isinstance(parsed, dict) and parsed.get("insights") is not None else parsed)
         ins_struct = (parsed.get("struct") if isinstance(parsed, dict) else None)
-
-        seller_text = parsed.get("insight_vendedor") if isinstance(parsed, dict) else None
-        buyer_text = parsed.get("insight_comprador") if isinstance(parsed, dict) else None
-        if seller_text or buyer_text:
-            ins_struct = _struct_from_dual_insights(seller_text, buyer_text)
-            # También expone los textos para consumo directo
-            ins_json = {
-                "insight_vendedor": seller_text,
-                "insight_comprador": buyer_text,
-            }
 
         # Prefer construir struct desde 'insights' (blob) si viene bien formado,
         # ya que el 'struct' que devuelven algunos modelos puede venir sin textos.
