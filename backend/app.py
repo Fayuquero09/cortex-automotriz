@@ -15,11 +15,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 # Ensure project root on path
+
 # Ensure project root on path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Ensure project root on pathaa
 CORTEX_FRONTEND_PUBLIC = ROOT / "cortex_frontend" / "public"
 PUBLIC_LOGOS_DIR = CORTEX_FRONTEND_PUBLIC / "logos"
 
