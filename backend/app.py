@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 CORTEX_FRONTEND_PUBLIC = ROOT / "cortex_frontend" / "public"
 PUBLIC_LOGOS_DIR = CORTEX_FRONTEND_PUBLIC / "logos"
 
+# Ensure project root on path PRUEBA 2
 import json
 from datetime import datetime, timedelta, timezone
 import re
