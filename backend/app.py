@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Comentario de prueba en backend/app.py
 from __future__ import annotations
 
 from pathlib import Path
