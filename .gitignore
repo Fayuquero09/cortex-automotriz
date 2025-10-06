@@ -39,5 +39,12 @@ frontend/.next/
 *.swp
 .venv/
 frontend/node_modules/
-ruta/al/archivo_o_directorio/ # agrega la ruta para que no se vuelva a trackear
-ruta/al/archivo_o_directorio/ # agrega la ruta para que no se vuelva a trackear
+
+# Large data assets
+archive/
+jato/
+dataframe_base/data/
+scraper_mopar/.playwright-browsers/
+scraper_mopar/output/
+vehiculos/
+Strapi/vehicles.json
