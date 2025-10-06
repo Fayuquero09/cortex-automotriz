@@ -40,3 +40,4 @@ frontend/.next/
 .venv/
 frontend/node_modules/
 ruta/al/archivo_o_directorio/ # agrega la ruta para que no se vuelva a trackear
+ruta/al/archivo_o_directorio/ # agrega la ruta para que no se vuelva a trackear
