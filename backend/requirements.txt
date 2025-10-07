@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pandas
+numpy
+psycopg[binary]
+requests
+stripe
+python-multipart
+email-validator

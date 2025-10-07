@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+    volumes:
+      - ./backend:/app/backend
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+      - ./supabase:/app/supabase
+      - ./core:/app/core
+      - ./src:/app/src
+      - ./csv:/app/csv
+      - ./cortex_frontend/public:/app/cortex_frontend/public
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    build:
+      context: cortex_frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: http://localhost:8000
+      BACKEND_INTERNAL_URL: http://backend:8000
+      CHOKIDAR_USEPOLLING: "1"
+    depends_on:
+      - backend
+    volumes:
+      - ./cortex_frontend:/app
+    ports:
+      - "3000:3000"
+    command: ["sh", "-c", "npm install && npm run dev -- --hostname 0.0.0.0 --port 3000"]
