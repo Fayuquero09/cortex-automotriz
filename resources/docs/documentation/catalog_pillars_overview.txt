@@ -7,7 +7,7 @@ Trabajamos con los años modelo 2024, 2025 y 2026, apoyándonos en el historial 
 - **Histórico 1995-2026** (`equipo_veh_limpio_enriquecido.csv` / `equipo_veh_limpio.csv`): columnas por marca, modelo, versión, año, equipamiento, atributos booleanos/numéricos, precios (`msrp`, `precio_transaccion`).
 - **Catálogo normalizado** (`vehiculos-todos-augmented.normalized.raw.json`): base sin pilares.
 - **Catálogo enriquecido y escorado** (`vehiculos-todos-augmented.normalized.enriched.scored.json`).
-- **Scripts de auditoría/ingesta** (`scripts/audit_pillars.py`, `process_raw_catalog.py`, `enrich_catalog.py`, `run_daily_refresh.sh`).
+- **Scripts de auditoría/ingesta** (`tools/scripts/audit_pillars.py`, `tools/scripts/process_raw_catalog.py`, `tools/scripts/enrich_catalog.py`, `tools/scripts/run_daily_refresh.sh`).
 
 ## 3. Pipeline
 1. Normalización inicial con `process_raw_catalog.py`.
@@ -18,7 +18,7 @@ Trabajamos con los años modelo 2024, 2025 y 2026, apoyándonos en el historial 
 
 
 ## 4. Pilares enriquecidos (campos, KPIs y casos de uso)
-El script `scripts/enrich_catalog.py` (`merge_augmented_json` + `compute_pillar_kpis`) consume directamente el catálogo JSON (`vehiculos-todos-augmented.normalized.enriched.scored.json` → `...enriched.json` → `...backup.json`) para poblar los nuevos campos y KPIs; tras refrescar con `scripts/enrich_catalog.py` los valores quedan reflejados en `data/enriched/current.csv`.
+El script `tools/scripts/enrich_catalog.py` (`merge_augmented_json` + `compute_pillar_kpis`) consume directamente el catálogo JSON (`vehiculos-todos-augmented.normalized.enriched.scored.json` → `...enriched.json` → `...backup.json`) para poblar los nuevos campos y KPIs; tras refrescar con `tools/scripts/enrich_catalog.py` los valores quedan reflejados en `resources/datasets/data/enriched/current.csv`.
 
 ### 4.1 Audio & Entretenimiento
 - **Fuente JSON:** `equipment -> "Bocinas"`, `features -> "Infoentretenimiento"`.
@@ -224,9 +224,9 @@ El script `scripts/enrich_catalog.py` (`merge_augmented_json` + `compute_pillar_
 ```
 
 ## 10. Monitoreo continuo y auditoría
-- Refrescar catálogo con `scripts/run_daily_refresh.sh` (resetea cachés como `_VEH_JSON_ENTRIES`).
-- Regenerar `data/enriched/current.csv` vía `scripts/enrich_catalog.py` cuando cambien los mapeos.
-- Auditoría `scripts/audit_pillars.py` para cobertura (priorizar pendientes `only_general_missing_ids.txt`).
+- Refrescar catálogo con `tools/scripts/run_daily_refresh.sh` (resetea cachés como `_VEH_JSON_ENTRIES`).
+- Regenerar `resources/datasets/data/enriched/current.csv` vía `tools/scripts/enrich_catalog.py` cuando cambien los mapeos.
+- Auditoría `tools/scripts/audit_pillars.py` para cobertura (priorizar pendientes `only_general_missing_ids.txt`).
 - Validar variaciones de precio y KPI vs rivales en cada refresh.
 
 ## 11. Resultado final

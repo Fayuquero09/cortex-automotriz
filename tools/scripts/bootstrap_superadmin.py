@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
-"""Bootstrap a global superadmin user for Cortex multitenant setup.
+"""
+Bootstrap a global superadmin user in Supabase and the local DB.
 
 Usage:
-    python scripts/bootstrap_superadmin.py \
+    python tools/scripts/bootstrap_superadmin.py \
         --org-name "Cortex Master" \
         --email admin@example.com \
-        --password "StrongPass123" \
-        [--package marca|black_ops]
-
-Environment variables required:
-    SUPABASE_URL             -> e.g. https://xxxxx.supabase.co
-    SUPABASE_SERVICE_KEY     -> service role key
-    SUPABASE_DB_URL          -> Postgres connection string with credentials
-
-The script will:
- 1. Insert an organization row in cortex.organizations.
- 2. Create a Supabase Auth user (email+password) via admin API with role claims.
- 3. Insert the user in cortex.app_users as superadmin_global.
-It finally prints a curl snippet to obtain a JWT for manual testing.
+        --password "TempPass123!"
 """
 
 from __future__ import annotations

@@ -6,9 +6,11 @@ from typing import Optional
 
 
 def repo_root() -> Path:
-    """Return the repository root inferred from this file location."""
-    # This file lives under <repo>/core/industry_io.py
-    return Path(__file__).resolve().parents[1]
+    """Return the repository root inferred from this file location.
+
+    This file now lives under <repo>/packages/core/core/industry_io.py
+    """
+    return Path(__file__).resolve().parents[3]
 
 
 def get_industry_dir() -> Path:
@@ -16,7 +18,7 @@ def get_industry_dir() -> Path:
 
     Resolution order:
     - If env var KPI_INDUSTRIA_DIR is set, use it.
-    - Otherwise, use the local symlink at data/external/industry/current.
+    - Otherwise, use the local symlink at resources/datasets/data/external/industry/current.
 
     Returns a Path (may be a symlink). Raises FileNotFoundError if path not found.
     """
@@ -24,12 +26,12 @@ def get_industry_dir() -> Path:
     if env:
         p = Path(env).expanduser()
     else:
-        p = repo_root() / "data" / "external" / "industry" / "current"
+        p = repo_root() / "resources" / "datasets" / "data" / "external" / "industry" / "current"
 
     if not p.exists():
         raise FileNotFoundError(
             f"Industry data directory not found: {p}. "
-            "Set KPI_INDUSTRIA_DIR or create the symlink at data/external/industry/current"
+            "Set KPI_INDUSTRIA_DIR or create the symlink at resources/datasets/data/external/industry/current"
         )
     return p
 

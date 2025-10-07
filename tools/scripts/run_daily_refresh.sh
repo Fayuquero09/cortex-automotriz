@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-# Resolve repo root (this script lives in scripts/)
+# Resolve repo root (this script lives in tools/scripts/)
 SCRIPT_DIR=${0:A:h}
 ROOT_DIR=${SCRIPT_DIR:h}
 cd "$ROOT_DIR"
@@ -17,7 +17,7 @@ if [ -f .venv/bin/activate ]; then
 fi
 
 # Run the job
-python3 scripts/daily_refresh.py >> "$LOG_FILE" 2>&1
+python3 tools/scripts/daily_refresh.py >> "$LOG_FILE" 2>&1
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] END daily_refresh (rc=$?)" | tee -a "$LOG_FILE"
 

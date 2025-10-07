@@ -7,14 +7,14 @@
 ## Aplicar la migración inicial
 ```bash
 cd /Users/Fernando.Molina/cortex-automotriz/dataframe_base
-supabase db push --file supabase/migrations/0001_multitenant_schema.sql
-supabase db push --file supabase/migrations/0002_extend_organizations.sql
-supabase db push --file supabase/migrations/0003_org_status.sql
+supabase db push --file infra/supabase/supabase/migrations/0001_multitenant_schema.sql
+supabase db push --file infra/supabase/supabase/migrations/0002_extend_organizations.sql
+supabase db push --file infra/supabase/supabase/migrations/0003_org_status.sql
 ```
 
 Si prefieres `psql`, puedes ejecutar:
 ```bash
-psql "$SUPABASE_DB_URL" -f supabase/migrations/0001_multitenant_schema.sql
+psql "$SUPABASE_DB_URL" -f infra/supabase/supabase/migrations/0001_multitenant_schema.sql
 ```
 
 La migración crea:
@@ -35,7 +35,7 @@ export SUPABASE_URL="https://trfyakvrdkkrjjpmyufd.supabase.co"
 export SUPABASE_SERVICE_KEY="<service_role_key>"
 export SUPABASE_DB_URL="postgresql://postgres.trfyakvrdkkrjjpmyufd:<DB_PASSWORD>@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require"
 
-python3 scripts/bootstrap_superadmin.py \
+python3 tools/scripts/bootstrap_superadmin.py \
   --org-name "Cortex Master" \
   --email superadmin@cortex.test \
   --password "TempPass123!"
@@ -45,8 +45,8 @@ El script crea la organización, registra el usuario en Supabase Auth con los cl
 
 ## Variables para el panel de superadmin global
 
-- Backend (`backend/app.py`): `SUPABASE_DB_URL` y `SUPERADMIN_API_TOKEN` para obligar el header `x-superadmin-token`.
-- Frontend (`cortex_frontend`): `NEXT_PUBLIC_BACKEND_URL` y `NEXT_PUBLIC_SUPERADMIN_TOKEN` con el mismo valor del token.
+- Backend (`apps/backend/backend/app.py`): `SUPABASE_DB_URL` y `SUPERADMIN_API_TOKEN` para obligar el header `x-superadmin-token`.
+- Frontend (`apps/web`): `NEXT_PUBLIC_BACKEND_URL` y `NEXT_PUBLIC_SUPERADMIN_TOKEN` con el mismo valor del token.
 - Accede a `http://localhost:3000/admin` para ver organizaciones, marcas, dealers y usuarios.
 
 ### Cambiar una organización de paquete “Marca” a “Black Ops”

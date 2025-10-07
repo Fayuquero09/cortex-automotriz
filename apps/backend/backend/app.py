@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-CORTEX_FRONTEND_PUBLIC = ROOT / "cortex_frontend" / "public"
+CORTEX_FRONTEND_PUBLIC = ROOT / "apps" / "web" / "public"
 PUBLIC_LOGOS_DIR = CORTEX_FRONTEND_PUBLIC / "logos"
 
 import json
@@ -2508,9 +2508,9 @@ _PROMPT_CACHE: Dict[str, Dict[str, _Any]] = {}
 def _prompt_search_dirs() -> list[Path]:
     dirs: list[Path] = []
     # Next.js frontend public dir
-    dirs.append(ROOT / "cortex_frontend" / "public" / "data")
+    dirs.append(ROOT / "apps" / "web" / "public" / "data")
     # Legacy frontend public dir
-    dirs.append(ROOT / "frontend" / "public" / "data")
+    dirs.append(ROOT / "archive" / "frontend_legacy" / "public" / "data")
     # Root-level public/data if present
     dirs.append(ROOT / "public" / "data")
     # Optional env override
@@ -3286,7 +3286,7 @@ def index() -> Response:
             return Response(content=html, media_type="text/html; charset=utf-8")
         except Exception:
             return FileResponse(path)
-    raise HTTPException(status_code=404, detail="frontend/dist/index.html not found")
+    raise HTTPException(status_code=404, detail="archive/frontend_legacy/dist/index.html not found")
 
 
 # ------------------------------ Audit utils ------------------------------

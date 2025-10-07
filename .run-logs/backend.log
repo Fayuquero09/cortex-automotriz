@@ -1,2 +1,292 @@
-INFO:     Will watch for changes in these directories: ['/Users/Fernando.Molina/cortex-automotriz/dataframe_base']
-ERROR:    [Errno 1] Operation not permitted
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+Traceback (most recent call last):
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/bin/uvicorn", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/click/core.py", line 1462, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/click/core.py", line 1383, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/click/core.py", line 1246, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/click/core.py", line 814, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/main.py", line 423, in main
+    run(
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/main.py", line 593, in run
+    server.run()
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/server.py", line 67, in run
+    return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/server.py", line 71, in serve
+    await self._serve(sockets)
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/server.py", line 78, in _serve
+    config.load()
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/config.py", line 438, in load
+    self.loaded_app = import_from_string(self.app)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/apps/backend/backend/main.py", line 7, in <module>
+    from .app import app  # noqa: F401
+    ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/apps/backend/backend/app.py", line 40, in <module>
+    import psycopg
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/psycopg/__init__.py", line 9, in <module>
+    from . import pq  # noqa: F401 import early to stabilize side effects
+    ^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/psycopg/pq/__init__.py", line 116, in <module>
+    import_from_libpq()
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/psycopg/pq/__init__.py", line 108, in import_from_libpq
+    raise ImportError(
+ImportError: no pq wrapper available.
+Attempts made:
+- couldn't import psycopg 'c' implementation: No module named 'psycopg_c'
+- couldn't import psycopg 'binary' implementation: No module named 'psycopg_binary'
+- couldn't import psycopg 'python' implementation: libpq library not found
+Traceback (most recent call last):
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/networks.py", line 949, in import_email_validator
+    import email_validator
+ModuleNotFoundError: No module named 'email_validator'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/bin/uvicorn", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/click/core.py", line 1462, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/click/core.py", line 1383, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/click/core.py", line 1246, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/click/core.py", line 814, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/main.py", line 423, in main
+    run(
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/main.py", line 593, in run
+    server.run()
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/server.py", line 67, in run
+    return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/server.py", line 71, in serve
+    await self._serve(sockets)
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/server.py", line 78, in _serve
+    config.load()
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/config.py", line 438, in load
+    self.loaded_app = import_from_string(self.app)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/uvicorn/importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/apps/backend/backend/main.py", line 7, in <module>
+    from .app import app  # noqa: F401
+    ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/apps/backend/backend/app.py", line 1454, in <module>
+    class AdminOrganizationUpdate(BaseModel):
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_model_construction.py", line 255, in __new__
+    complete_model_class(
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_model_construction.py", line 648, in complete_model_class
+    schema = gen_schema.generate_schema(cls)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 729, in generate_schema
+    schema = self._generate_schema_inner(obj)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 1023, in _generate_schema_inner
+    return self._model_schema(obj)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 856, in _model_schema
+    {k: self._generate_md_field_schema(k, v, decorators) for k, v in fields.items()},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 1228, in _generate_md_field_schema
+    schema, metadata = self._common_field_schema(name, field_info, decorators)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 1282, in _common_field_schema
+    schema = self._apply_annotations(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 2227, in _apply_annotations
+    schema = get_inner_schema(source_type)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_schema_generation_shared.py", line 83, in __call__
+    schema = self._handler(source_type)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 2206, in inner_handler
+    schema = self._generate_schema_inner(obj)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 1028, in _generate_schema_inner
+    return self.match_type(obj)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 1144, in match_type
+    return self._match_generic_type(obj, origin)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 1167, in _match_generic_type
+    return self._union_schema(obj)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 1327, in _union_schema
+    choices.append(self.generate_schema(arg))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 726, in generate_schema
+    schema = self._generate_schema_from_get_schema_method(obj, obj)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py", line 919, in _generate_schema_from_get_schema_method
+    schema = get_schema(
+             ^^^^^^^^^^^
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/networks.py", line 989, in __get_pydantic_core_schema__
+    import_email_validator()
+  File "/Users/alejandrogrijalva/Documents/GitHub/9abril/cortex-automotriz/.venv/lib/python3.12/site-packages/pydantic/networks.py", line 951, in import_email_validator
+    raise ImportError("email-validator is not installed, run `pip install 'pydantic[email]'`") from e
+ImportError: email-validator is not installed, run `pip install 'pydantic[email]'`
+INFO:     Started server process [17108]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+ERROR:    Error loading ASGI app. Could not import module "backend.main".
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [17108]

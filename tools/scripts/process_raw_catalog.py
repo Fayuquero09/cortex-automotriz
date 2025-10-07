@@ -70,7 +70,7 @@ def main():
         out.replace(out.with_suffix(out.suffix + ".bak"))
     df.to_csv(out, index=False)
     print(f"Escribí: {out} ({len(df):,} filas)")
-    print("Listo. Puedes ejecutar scripts/enrich_catalog.py para generar data/enriched/current.csv")
+    print("Listo. Puedes ejecutar tools/scripts/enrich_catalog.py para generar resources/datasets/data/enriched/current.csv")
 
 
 if __name__ == "__main__":

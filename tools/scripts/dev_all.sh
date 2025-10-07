@@ -27,14 +27,17 @@ open_url() {
   fi
   # Fallback con AppleScript si hiciera falta
   if command -v osascript >/dev/null 2>&1; then
-    osascript -e 'tell application "System Events" to open location "'$url'"' >/dev/null 2>&1 || true
+    osascript -e 'tell application "System Events" to open location '"$url"'' >/dev/null 2>&1 || true
   fi
 }
 
 # Detecta raíz del repo (carpeta superior a este script)
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$ROOT_DIR/.run-logs"
 mkdir -p "$LOG_DIR"
+
+# Asegura que Python encuentre los paquetes de apps/
+export PYTHONPATH="$ROOT_DIR/apps:${PYTHONPATH:-}"
 
 # Puertos y URLs por defecto
 BACK_HOST="0.0.0.0"
@@ -63,7 +66,7 @@ echo "[dev] Iniciando backend en ${BACK_HOST}:${BACK_PORT}…"
 (
   cd "$ROOT_DIR"
   nohup "$UVICORN_CMD" backend.main:app \
-    --reload --host "$BACK_HOST" --port "$BACK_PORT" \
+    --host "$BACK_HOST" --port "$BACK_PORT" \
     >> "$LOG_DIR/backend.log" 2>&1 & echo $! > "$LOG_DIR/backend.pid"
 ) 
 sleep 1
@@ -81,7 +84,7 @@ fi
 # Arranca frontend (Next.js) en puerto 3010 por defecto
 echo "[dev] Iniciando frontend (Next.js) en puerto ${FRONT_PORT}…"
 (
-  cd "$ROOT_DIR/cortex_frontend"
+  cd "$ROOT_DIR/apps/web"
   # Instala dependencias si faltan (rápida verificación)
   if [ ! -d node_modules ]; then
     echo "[dev] node_modules no existe; ejecutando npm install (puede tardar)…"
@@ -101,10 +104,14 @@ FRONT_PID=$(cat "$LOG_DIR/frontend.pid" 2>/dev/null || true)
 echo "[dev] Frontend PID: ${FRONT_PID:-desconocido} (logs en .run-logs/frontend.log)"
 
 # Abre el navegador apuntando al UI
-OPEN_URL="http://localhost:${FRONT_PORT}/ui"
-echo "[dev] Abriendo navegador en ${OPEN_URL}…"
-open_url "$OPEN_URL"
-echo "[dev] Si no se abrió automáticamente, abre manualmente: $OPEN_URL"
+if [ "${OPEN_BROWSER:-0}" = "1" ]; then
+  OPEN_URL="http://localhost:${FRONT_PORT}/ui"
+  echo "[dev] Abriendo navegador en ${OPEN_URL}…"
+  open_url "$OPEN_URL"
+  echo "[dev] Si no se abrió automáticamente, abre manualmente: $OPEN_URL"
+else
+  echo "[dev] Navegador deshabilitado (exporta OPEN_BROWSER=1 para abrir automáticamente)."
+fi
 
 echo "[dev] Todo listo. Para detener:"
 echo "      kill \$(cat $LOG_DIR/backend.pid 2>/dev/null) \$(cat $LOG_DIR/frontend.pid 2>/dev/null) || true"

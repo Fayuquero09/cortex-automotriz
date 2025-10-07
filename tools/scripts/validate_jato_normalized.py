@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
-Quick validator for Strapi/data/autoradar/normalized.jato.json
-
-Checks canonical structure and validates a target row (default: Ford Territory Ambiente 2026)
-for the issues discussed: flags, fuel coherence, and equip_score.
+Validate normalized JATO data files and constraints.
 
 Usage:
-  python3 scripts/validate_jato_normalized.py [make] [model] [trim] [year]
+  python3 tools/scripts/validate_jato_normalized.py [make] [model] [trim] [year]
 """
 from __future__ import annotations
 
