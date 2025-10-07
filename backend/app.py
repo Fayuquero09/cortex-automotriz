@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# Comentario de prueba en backend/app.py
-# Segundo comentario de prueba
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,12 +10,11 @@ import os
 import sys
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, Request
-
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-
 from fastapi.middleware.cors import CORSMiddleware
 
+# Ensure project root on path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

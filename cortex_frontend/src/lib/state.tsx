@@ -15,6 +15,14 @@ export type FiltersState = {
 
 export type OwnState = { make: string; model: string; year: number | ''; version: string };
 
+export type UserRole = 'oem' | 'operation-group' | 'self-service';
+
+export type UserInfo = {
+  email: string;
+  role: UserRole;
+  name?: string;
+};
+
 export type AppState = {
   own: OwnState;
   setOwn: (v: OwnState | ((prev: OwnState) => OwnState)) => void;
@@ -29,6 +37,11 @@ export type AppState = {
     competitors: Array<Record<string, any>>;
   };
   setComparison: (payload: { base: Record<string, any> | null; competitors: Array<Record<string, any>> }) => void;
+  userRole: UserRole | null;
+  setUserRole: (role: UserRole | null) => void;
+  userInfo: UserInfo | null;
+  setUserInfo: (userInfo: UserInfo | null) => void;
+  logout: () => void;
 };
 
 const defaultFilters: FiltersState = {
@@ -51,6 +64,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [autoGenSeq, setAutoGenSeq] = React.useState<number>(0);
   const [autoGenerate, setAutoGenerate] = React.useState<boolean>(false);
   const [comparison, _setComparison] = React.useState<{ base: Record<string, any> | null; competitors: Array<Record<string, any>> }>({ base: null, competitors: [] });
+  const [userRole, _setUserRole] = React.useState<UserRole | null>(null);
+  const [userInfo, _setUserInfo] = React.useState<UserInfo | null>(null);
   const previewHandledRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -61,6 +76,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try { localStorage.removeItem("CORTEX_OWN"); } catch {}
       const ag = localStorage.getItem("CORTEX_AUTO_GEN");
       if (ag != null) setAutoGenerate(ag === '1');
+      const role = localStorage.getItem("CORTEX_USER_ROLE") as UserRole | null;
+      if (role && ['oem', 'operation-group', 'self-service'].includes(role)) {
+        _setUserRole(role);
+      }
+      
+      const savedUserInfo = localStorage.getItem("CORTEX_USER_INFO");
+      if (savedUserInfo) {
+        try {
+          const userInfo = JSON.parse(savedUserInfo) as UserInfo;
+          if (userInfo.email && userInfo.role) {
+            _setUserInfo(userInfo);
+            _setUserRole(userInfo.role);
+          }
+        } catch (error) {
+          console.error('Error loading user info:', error);
+        }
+      }
     } catch {}
 
     try {
@@ -156,6 +188,45 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     _setComparison(payload);
   }, []);
 
+  const setUserRole = (role: UserRole | null) => {
+    _setUserRole(role);
+    try {
+      if (role) {
+        localStorage.setItem("CORTEX_USER_ROLE", role);
+      } else {
+        localStorage.removeItem("CORTEX_USER_ROLE");
+      }
+    } catch (error) {
+      console.error('Error saving role to localStorage:', error);
+    }
+  };
+
+  const setUserInfo = (userInfo: UserInfo | null) => {
+    _setUserInfo(userInfo);
+    try {
+      if (userInfo) {
+        localStorage.setItem("CORTEX_USER_INFO", JSON.stringify(userInfo));
+        _setUserRole(userInfo.role);
+      } else {
+        localStorage.removeItem("CORTEX_USER_INFO");
+        _setUserRole(null);
+      }
+    } catch (error) {
+      console.error('Error saving user info to localStorage:', error);
+    }
+  };
+
+  const logout = () => {
+    _setUserInfo(null);
+    _setUserRole(null);
+    try {
+      localStorage.removeItem("CORTEX_USER_INFO");
+      localStorage.removeItem("CORTEX_USER_ROLE");
+    } catch (error) {
+      console.error('Error clearing user data:', error);
+    }
+  };
+
   return (
     <Ctx.Provider value={{
       own,
@@ -171,6 +242,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       },
       comparison,
       setComparison,
+      userRole,
+      setUserRole,
+      userInfo,
+      setUserInfo,
+      logout,
     }}>
       {children}
     </Ctx.Provider>
